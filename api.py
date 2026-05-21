@@ -427,13 +427,11 @@ async def stripe_payment_intent(
         )
         await db.close()
         return {"client_secret": pi.client_secret}
-    except stripe.StripeError as e:
-        await db.close()
-        raise HTTPException(400, str(e.user_message or e))
     except Exception as e:
         await db.close()
-        log.exception("payment-intent error")
-        raise HTTPException(500, "Payment setup failed")
+        log.exception("payment-intent error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Payment error: {msg}")
 
 
 @app.post("/api/stripe/subscription/create")
@@ -472,13 +470,11 @@ async def stripe_create_subscription(
         client_secret = subscription.latest_invoice.payment_intent.client_secret
         await db.close()
         return {"client_secret": client_secret, "subscription_id": subscription.id}
-    except stripe.StripeError as e:
-        await db.close()
-        raise HTTPException(400, str(e.user_message or e))
     except Exception as e:
         await db.close()
-        log.exception("subscription/create error")
-        raise HTTPException(500, "Subscription setup failed")
+        log.exception("subscription/create error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Subscription error: {msg}")
 
 
 @app.get("/api/stripe/subscription")
