@@ -1,28 +1,20 @@
-# Render Blueprint — https://render.com/docs/blueprint-spec
-# Deploy with: connect your GitHub repo → New Blueprint Instance
-
 services:
   - type: web
     name: lottoomax
     env: python
-    plan: starter          # $7/mo — needed for persistent disk
+    plan: starter
     buildCommand: bash build.sh
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
-
-    # Persistent disk keeps the SQLite file across deploys
     disk:
       name: lotto-data
       mountPath: /data
-      sizeGB: 1            # ~$0.25/mo
-
+      sizeGB: 1
     envVars:
       - key: BOT_TOKEN
-        sync: false        # set this as a secret in Render dashboard
+        sync: false
       - key: TRUSTEE_TELEGRAM_ID
-        sync: false        # set this as a secret in Render dashboard
+        sync: false
       - key: CURRENCY
-        value: USD
+        value: CAD
       - key: DB_PATH
         value: /data/lotto.db
-      # RENDER_EXTERNAL_URL is injected automatically by Render
-      # MINI_APP_URL is derived from it at startup — no need to set it manually
