@@ -16,18 +16,19 @@ async function req(method, path, body) {
 }
 
 export const api = {
-  me:           ()       => req('GET',  '/api/me'),
-  deposit:      (amount) => req('POST', '/api/deposit',    { amount }),
-  round:        ()       => req('GET',  '/api/round'),
-  participate:  (amount) => req('POST', '/api/participate', { amount }),
-  transactions: ()       => req('GET',  '/api/transactions'),
+  me:           ()            => req('GET',  '/api/me'),
+  deposit:      (amount)      => req('POST', '/api/deposit',    { amount }),
+  round:        ()            => req('GET',  '/api/round'),
+  participate:  (amount)      => req('POST', '/api/participate', { amount }),
+  transactions: ()            => req('GET',  '/api/transactions'),
   admin: {
-    newRound:  () => req('POST', '/api/admin/round/new'),
-    closeRound:() => req('POST', '/api/admin/round/close'),
-    draw:      () => req('POST', '/api/admin/round/draw'),
-    round:     () => req('GET',  '/api/admin/round'),
-    deposits:  () => req('GET',  '/api/admin/deposits'),
-    resolve: (id, action) => req('POST', `/api/admin/deposits/${id}`, { action }),
-    members:   () => req('GET',  '/api/admin/members'),
+    newRound:  (drawDate)  => req('POST', '/api/admin/round/new',
+                                  drawDate ? { draw_date: drawDate } : {}),
+    closeRound:()          => req('POST', '/api/admin/round/close'),
+    draw:      ()          => req('POST', '/api/admin/round/draw'),
+    round:     ()          => req('GET',  '/api/admin/round'),
+    deposits:  ()          => req('GET',  '/api/admin/deposits'),
+    resolve: (id, action)  => req('POST', `/api/admin/deposits/${id}`, { action }),
+    members:   ()          => req('GET',  '/api/admin/members'),
   },
 }
