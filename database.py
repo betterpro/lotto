@@ -1,13 +1,5 @@
 """
 SQLite database layer — all I/O is async via aiosqlite.
-
-Tables
-------
-users           - registered members
-rounds          - weekly lottery rounds
-participations  - each member's stake in a round
-transactions    - credit ledger
-deposit_requests - pending deposits
 """
 
 import aiosqlite
@@ -17,13 +9,14 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS users (
-    telegram_id   INTEGER PRIMARY KEY,
-    username      TEXT,
-    full_name     TEXT    NOT NULL,
-    credit        REAL    NOT NULL DEFAULT 0,
-    is_trustee    INTEGER NOT NULL DEFAULT 0,
-    invited_by    INTEGER REFERENCES users(telegram_id),
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    telegram_id        INTEGER PRIMARY KEY,
+    username           TEXT,
+    full_name          TEXT    NOT NULL,
+    credit             REAL    NOT NULL DEFAULT 0,
+    is_trustee         INTEGER NOT NULL DEFAULT 0,
+    invited_by         INTEGER REFERENCES users(telegram_id),
+    stripe_customer_id TEXT,
+    created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -65,6 +58,16 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     resolved_at   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS stripe_subscriptions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
+    stripe_sub_id TEXT    NOT NULL UNIQUE,
+    amount        REAL    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'active',
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT
+);
 """
 
 
@@ -72,12 +75,15 @@ async def get_db() -> aiosqlite.Connection:
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.executescript(SCHEMA)
-    # Migration: add draw_date to rounds for existing installs
-    try:
-        await db.execute("ALTER TABLE rounds ADD COLUMN draw_date TEXT")
-        await db.commit()
-    except Exception:
-        pass
+    for col_sql in [
+        "ALTER TABLE rounds ADD COLUMN draw_date TEXT",
+        "ALTER TABLE users  ADD COLUMN stripe_customer_id TEXT",
+    ]:
+        try:
+            await db.execute(col_sql)
+            await db.commit()
+        except Exception:
+            pass
     return db
 
 
@@ -113,15 +119,12 @@ async def get_round(db, round_id):
         return await c.fetchone()
 
 async def create_round(db, draw_date=None):
-    async with db.execute(
-        "INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,)
-    ) as c:
+    async with db.execute("INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,)) as c:
         await db.commit()
         return c.lastrowid
 
 async def close_round(db, round_id):
-    await db.execute(
-        "UPDATE rounds SET status='closed', closed_at=datetime('now') WHERE id=?", (round_id,))
+    await db.execute("UPDATE rounds SET status='closed', closed_at=datetime('now') WHERE id=?", (round_id,))
     await db.commit()
 
 async def set_round_winner(db, round_id, winner_id, ticket_ref):
@@ -138,21 +141,17 @@ async def recent_rounds(db, limit=10):
 # ── Participations ────────────────────────────────────────────────────────────
 
 async def get_participation(db, round_id, user_id):
-    async with db.execute(
-        "SELECT * FROM participations WHERE round_id=? AND user_id=?", (round_id, user_id)
-    ) as c:
+    async with db.execute("SELECT * FROM participations WHERE round_id=? AND user_id=?", (round_id, user_id)) as c:
         return await c.fetchone()
 
 async def upsert_participation(db, round_id, user_id, additional):
     existing = await get_participation(db, round_id, user_id)
     if existing:
-        await db.execute(
-            "UPDATE participations SET amount=amount+? WHERE round_id=? AND user_id=?",
-            (additional, round_id, user_id))
+        await db.execute("UPDATE participations SET amount=amount+? WHERE round_id=? AND user_id=?",
+                         (additional, round_id, user_id))
     else:
-        await db.execute(
-            "INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
-            (round_id, user_id, additional))
+        await db.execute("INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
+                         (round_id, user_id, additional))
     await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (additional, round_id))
     await db.commit()
 
@@ -176,25 +175,20 @@ async def user_participations(db, user_id, limit=10):
 # ── Transactions ──────────────────────────────────────────────────────────────
 
 async def add_transaction(db, user_id, tx_type, amount, note=None):
-    await db.execute(
-        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (user_id, tx_type, amount, note))
+    await db.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+                     (user_id, tx_type, amount, note))
     await db.commit()
 
 async def user_transactions(db, user_id, limit=15):
-    async with db.execute(
-        "SELECT * FROM transactions WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
-        (user_id, limit)
-    ) as c:
+    async with db.execute("SELECT * FROM transactions WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                          (user_id, limit)) as c:
         return await c.fetchall()
 
 
 # ── Deposit requests ──────────────────────────────────────────────────────────
 
 async def create_deposit_request(db, user_id, amount):
-    async with db.execute(
-        "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)", (user_id, amount)
-    ) as c:
+    async with db.execute("INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)", (user_id, amount)) as c:
         await db.commit()
         return c.lastrowid
 
