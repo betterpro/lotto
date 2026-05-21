@@ -416,16 +416,24 @@ async def stripe_payment_intent(
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    customer_id = await _get_or_create_customer(user, db)
-    pi = stripe.PaymentIntent.create(
-        amount=int(amount * 100),
-        currency=config.CURRENCY.lower(),
-        customer=customer_id,
-        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
-        metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
-    )
-    await db.close()
-    return {"client_secret": pi.client_secret}
+    try:
+        customer_id = await _get_or_create_customer(user, db)
+        pi = stripe.PaymentIntent.create(
+            amount=int(amount * 100),
+            currency=config.CURRENCY.lower(),
+            customer=customer_id,
+            automatic_payment_methods={"enabled": True},
+            metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+        )
+        await db.close()
+        return {"client_secret": pi.client_secret}
+    except stripe.StripeError as e:
+        await db.close()
+        raise HTTPException(400, str(e.user_message or e))
+    except Exception as e:
+        await db.close()
+        log.exception("payment-intent error")
+        raise HTTPException(500, "Payment setup failed")
 
 
 @app.post("/api/stripe/subscription/create")
@@ -445,24 +453,32 @@ async def stripe_create_subscription(
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    customer_id = await _get_or_create_customer(user, db)
-    price = stripe.Price.create(
-        unit_amount=int(amount * 100),
-        currency=config.CURRENCY.lower(),
-        recurring={"interval": "month"},
-        product_data={"name": "Lottoomax Monthly Deposit"},
-    )
-    subscription = stripe.Subscription.create(
-        customer=customer_id,
-        items=[{"price": price.id}],
-        payment_behavior="default_incomplete",
-        payment_settings={"save_default_payment_method": "on_subscription"},
-        expand=["latest_invoice.payment_intent"],
-        metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
-    )
-    client_secret = subscription.latest_invoice.payment_intent.client_secret
-    await db.close()
-    return {"client_secret": client_secret, "subscription_id": subscription.id}
+    try:
+        customer_id = await _get_or_create_customer(user, db)
+        price = stripe.Price.create(
+            unit_amount=int(amount * 100),
+            currency=config.CURRENCY.lower(),
+            recurring={"interval": "month"},
+            product_data={"name": "Lottoomax Monthly Deposit"},
+        )
+        subscription = stripe.Subscription.create(
+            customer=customer_id,
+            items=[{"price": price.id}],
+            payment_behavior="default_incomplete",
+            payment_settings={"save_default_payment_method": "on_subscription"},
+            expand=["latest_invoice.payment_intent"],
+            metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+        )
+        client_secret = subscription.latest_invoice.payment_intent.client_secret
+        await db.close()
+        return {"client_secret": client_secret, "subscription_id": subscription.id}
+    except stripe.StripeError as e:
+        await db.close()
+        raise HTTPException(400, str(e.user_message or e))
+    except Exception as e:
+        await db.close()
+        log.exception("subscription/create error")
+        raise HTTPException(500, "Subscription setup failed")
 
 
 @app.get("/api/stripe/subscription")
