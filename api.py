@@ -98,10 +98,10 @@ async def _get_or_create_customer(user: dict, db) -> str:
         return user["stripe_customer_id"]
     customer = stripe.Customer.create(
         metadata={"telegram_id": str(user["telegram_id"])},
-        name=user.get("first_name") or user.get("username") or f"user_{user['telegram_id']}",
+        name=user.get("full_name") or user.get("username") or f"user_{user['telegram_id']}",
     )
     await db.execute(
-        "UPDATE users SET stripe_customer_id=? WHERE id=?", (customer.id, user["id"])
+        "UPDATE users SET stripe_customer_id=? WHERE telegram_id=?", (customer.id, user["telegram_id"])
     )
     await db.commit()
     return customer.id
@@ -153,7 +153,9 @@ async def telegram_webhook(request: Request):
 async def api_me(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     await db.close()
-    return {**user, "stripe_enabled": bool(config.STRIPE_SECRET_KEY)}
+    u = dict(user)
+    return {**u, "balance": u["credit"], "first_name": u["full_name"],
+            "stripe_enabled": bool(config.STRIPE_SECRET_KEY)}
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +176,8 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     round_dict = dict(round_)
     round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
     cur = await db.execute(
-        "SELECT p.*, u.username, u.first_name FROM participations p "
-        "JOIN users u ON u.id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
+        "SELECT p.*, u.username, u.full_name FROM participations p "
+        "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
         (round_dict["id"],),
     )
     parts = [dict(r) for r in await cur.fetchall()]
@@ -185,7 +187,7 @@ async def api_round(x_init_data: str | None = Header(default=None)):
         p["won"] = (round_dict.get("winner_id") == p["user_id"])
     winner = None
     if round_dict.get("winner_id"):
-        cur = await db.execute("SELECT * FROM users WHERE id=?", (round_dict["winner_id"],))
+        cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (round_dict["winner_id"],))
         w = await cur.fetchone()
         if w:
             winner = dict(w)
@@ -210,19 +212,19 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
         raise HTTPException(400, "No open round")
     if display_status(dict(round_)["status"], dict(round_).get("draw_date")) != "live":
         raise HTTPException(400, "Round is not accepting entries right now")
-    if user["balance"] < amount:
+    if user["credit"] < amount:
         raise HTTPException(400, "Insufficient balance")
     try:
         await db.execute(
             "INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
-            (round_["id"], user["id"], amount),
+            (round_["id"], user["telegram_id"], amount),
         )
     except Exception:
         raise HTTPException(400, "Already participating in this round")
-    await db.execute("UPDATE users SET balance=balance-? WHERE id=?", (amount, user["id"]))
+    await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (amount, user["telegram_id"]))
     await db.execute(
         "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (user["id"], "participate", -amount, f"Round #{round_['id']}"),
+        (user["telegram_id"], "participate", -amount, f"Round #{round_['id']}"),
     )
     await db.commit()
     await db.close()
@@ -237,7 +239,7 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
 async def api_transactions(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     cur = await db.execute(
-        "SELECT * FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["id"],)
+        "SELECT * FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["telegram_id"],)
     )
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
@@ -257,7 +259,7 @@ async def api_deposit(request: Request, x_init_data: str | None = Header(default
         raise HTTPException(400, "Amount must be positive")
     await db.execute(
         "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (user["id"], "deposit_request", amount, "pending approval"),
+        (user["telegram_id"], "deposit_request", amount, "pending approval"),
     )
     await db.commit()
     await db.close()
@@ -279,8 +281,8 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
     round_dict = dict(round_)
     round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
     cur = await db.execute(
-        "SELECT p.*, u.username, u.first_name FROM participations p "
-        "JOIN users u ON u.id=p.user_id WHERE p.round_id=?",
+        "SELECT p.*, u.username, u.full_name FROM participations p "
+        "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=?",
         (round_dict["id"],),
     )
     parts = [dict(r) for r in await cur.fetchall()]
@@ -332,9 +334,9 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
     winner_id = random.choice(pool)
     total = sum(p["amount"] for p in parts)
     await db.execute(
-        "UPDATE rounds SET status='done', winner_id=? WHERE id=?", (winner_id, round_["id"])
+        "UPDATE rounds SET status='drawn', winner_id=? WHERE id=?", (winner_id, round_["id"])
     )
-    await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (total, winner_id))
+    await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (total, winner_id))
     await db.execute(
         "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
         (winner_id, "win", total, f"Won round #{round_['id']}"),
@@ -348,8 +350,8 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
 async def admin_deposits(x_init_data: str | None = Header(default=None)):
     user, db = await _require_trustee(x_init_data)
     cur = await db.execute(
-        "SELECT t.*, u.username, u.first_name FROM transactions t "
-        "JOIN users u ON u.id=t.user_id WHERE t.type='deposit_request' ORDER BY t.id DESC"
+        "SELECT t.*, u.username, u.full_name FROM transactions t "
+        "JOIN users u ON u.telegram_id=t.user_id WHERE t.type='deposit_request' ORDER BY t.id DESC"
     )
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
@@ -370,7 +372,7 @@ async def admin_resolve_deposit(
     if tx["type"] != "deposit_request":
         raise HTTPException(400, "Not a deposit request")
     if action == "approve":
-        await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (tx["amount"], tx["user_id"]))
+        await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (tx["amount"], tx["user_id"]))
         await db.execute(
             "UPDATE transactions SET type='deposit', note='approved' WHERE id=?", (tx_id,)
         )
@@ -423,7 +425,7 @@ async def stripe_payment_intent(
             currency=config.CURRENCY.lower(),
             customer=customer_id,
             automatic_payment_methods={"enabled": True},
-            metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+            metadata={"user_id": str(user["telegram_id"]), "telegram_id": str(user["telegram_id"])},
         )
         await db.close()
         return {"client_secret": pi.client_secret}
@@ -465,7 +467,7 @@ async def stripe_create_subscription(
             payment_behavior="default_incomplete",
             payment_settings={"save_default_payment_method": "on_subscription"},
             expand=["latest_invoice.payment_intent"],
-            metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+            metadata={"user_id": str(user["telegram_id"]), "telegram_id": str(user["telegram_id"])},
         )
         client_secret = subscription.latest_invoice.payment_intent.client_secret
         await db.close()
@@ -587,7 +589,7 @@ async def stripe_webhook(request: Request):
         user_id = int(pi.get("metadata", {}).get("user_id", 0))
         if user_id:
             amount = pi["amount_received"] / 100
-            await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (amount, user_id))
+            await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, user_id))
             await db.execute(
                 "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
                 (user_id, "deposit", amount, "Stripe one-time payment"),
@@ -626,7 +628,7 @@ async def stripe_webhook(request: Request):
             amount = invoice.get("amount_paid", 0) / 100
             if amount > 0:
                 await db.execute(
-                    "UPDATE users SET balance=balance+? WHERE id=?", (amount, user_id)
+                    "UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, user_id)
                 )
                 await db.execute(
                     "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
