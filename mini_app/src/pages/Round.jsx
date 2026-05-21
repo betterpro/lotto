@@ -58,7 +58,7 @@ function DoneView({ round, currency }) {
           border: `1.5px solid ${my_won ? '#a5d6a7' : '#ef9a9a'}`,
         }}>
           <div style={{ fontWeight: 600, fontSize: 16 }}>
-            {my_won ? '🏆 You won!' : '😔 You didn't win this time'}
+            {my_won ? '🏆 You won!' : "😔 You didn't win this time"}
           </div>
           <div className="hint mt4">
             Your stake: {my_stake.toFixed(2)} {currency} · {my_pct}% chance
