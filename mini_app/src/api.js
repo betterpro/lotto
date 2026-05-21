@@ -21,6 +21,12 @@ export const api = {
   round:        ()            => req('GET',  '/api/round'),
   participate:  (amount)      => req('POST', '/api/participate', { amount }),
   transactions: ()            => req('GET',  '/api/transactions'),
+  stripe: {
+    checkout:    (amount, type) => req('POST', '/api/stripe/checkout', { amount, type }),
+    subscription:()             => req('GET',  '/api/stripe/subscription'),
+    updateSub:   (amount)       => req('POST', '/api/stripe/subscription/update', { amount }),
+    cancelSub:   ()             => req('POST', '/api/stripe/subscription/cancel'),
+  },
   admin: {
     newRound:  (drawDate)  => req('POST', '/api/admin/round/new',
                                   drawDate ? { draw_date: drawDate } : {}),
