@@ -445,7 +445,7 @@ async def stripe_create_subscription(
     user, db = await _auth(x_init_data)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
-        (user["id"],),
+        (user["telegram_id"],),
     )
     if await cur.fetchone():
         raise HTTPException(400, "Already have an active subscription")
@@ -486,7 +486,7 @@ async def stripe_get_subscription(x_init_data: str | None = Header(default=None)
     user, db = await _auth(x_init_data)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
-        (user["id"],),
+        (user["telegram_id"],),
     )
     sub_row = await cur.fetchone()
     await db.close()
@@ -518,7 +518,7 @@ async def stripe_update_subscription(
         raise HTTPException(400, "Amount must be positive")
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
-        (user["id"],),
+        (user["telegram_id"],),
     )
     sub_row = await cur.fetchone()
     if sub_row is None:
@@ -552,7 +552,7 @@ async def stripe_cancel_subscription(x_init_data: str | None = Header(default=No
     user, db = await _auth(x_init_data)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
-        (user["id"],),
+        (user["telegram_id"],),
     )
     sub_row = await cur.fetchone()
     if sub_row is None:
