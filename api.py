@@ -1,714 +1,681 @@
 """
-FastAPI: Mini App API + Telegram webhook + Stripe payments.
+FastAPI application — serves the REST API, the React Mini App static files,
+the Telegram bot webhook, and Stripe payment endpoints.
 """
 
-from __future__ import annotations
-
-import hashlib, hmac, json, logging, os, random
+import hashlib
+import hmac
+import json
+import logging
+import os
+import random
 from contextlib import asynccontextmanager
-from datetime import date as _date, datetime
-from pathlib import Path
+from datetime import date, datetime
 from urllib.parse import parse_qsl
 
-import aiosqlite
-import stripe as _stripe
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
+import stripe
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 from telegram import Update
-from telegram.ext import Application, ApplicationBuilder, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application
 
-load_dotenv()
+import config
+from bot import build_application
+from database import get_db
+
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-BOT_TOKEN             = os.getenv("BOT_TOKEN", "")
-TRUSTEE_ID            = int(os.getenv("TRUSTEE_TELEGRAM_ID", "0"))
-DB_PATH               = os.getenv("DB_PATH", "lotto.db")
-CURRENCY              = os.getenv("CURRENCY", "CAD")
-_render_url           = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
-WEBHOOK_URL           = os.getenv("WEBHOOK_URL", _render_url)
-STRIPE_SECRET_KEY     = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STATIC_DIR            = Path(__file__).parent / "mini_app" / "dist"
-
-if STRIPE_SECRET_KEY:
-    _stripe.api_key = STRIPE_SECRET_KEY
-
-_ptb: Application | None = None
+if config.STRIPE_SECRET_KEY:
+    stripe.api_key = config.STRIPE_SECRET_KEY
 
 
-# ── Display status ────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-def display_status(status: str, draw_date_str) -> str:
-    if status == "drawn":
+def display_status(status: str, draw_date_str: str | None) -> str:
+    if status != "open":
         return "done"
-    if status == "closed":
-        return "closing"
     if not draw_date_str:
         return "live"
     try:
-        days = (_date.fromisoformat(draw_date_str) - _date.today()).days
-        return "live" if days > 1 else "closing" if days >= 0 else "done"
-    except Exception:
+        draw = date.fromisoformat(draw_date_str)
+    except ValueError:
         return "live"
+    today = date.today()
+    if today >= draw or (draw - today).days == 1:
+        return "closing"
+    return "live"
 
 
-# ── Bot setup ─────────────────────────────────────────────────────────────────
+def _validate_init_data(init_data: str) -> dict | None:
+    params = dict(parse_qsl(init_data, keep_blank_values=True))
+    received_hash = params.pop("hash", None)
+    if not received_hash:
+        return None
+    data_check = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
+    secret = hmac.new(b"WebAppData", config.BOT_TOKEN.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, received_hash):
+        return None
+    return params
 
-def _setup_ptb() -> Application:
-    import database as _db
-    from handlers.start   import cmd_start, cmd_menu
-    from handlers.credit  import (show_balance, show_transactions,
-                                   handle_deposit_decision, build_deposit_conversation)
-    from handlers.lottery import (show_round, show_my_tickets, show_history,
-                                   show_invite, build_participate_conversation)
-    from handlers.admin   import (cmd_newround, cmd_closeround, cmd_roundinfo,
-                                   cmd_deposits, cmd_members, build_draw_conversation)
-    from bot import callback_router
 
-    ptb = ApplicationBuilder().token(BOT_TOKEN).updater(None).build()
-    ptb.add_handler(build_deposit_conversation())
-    ptb.add_handler(build_participate_conversation())
-    ptb.add_handler(build_draw_conversation())
-    for cmd, fn in [("start", cmd_start), ("menu", cmd_menu), ("balance", show_balance),
-                    ("round", show_round), ("tickets", show_my_tickets), ("history", show_history),
-                    ("invite", show_invite), ("transactions", show_transactions),
-                    ("newround", cmd_newround), ("closeround", cmd_closeround),
-                    ("roundinfo", cmd_roundinfo), ("deposits", cmd_deposits), ("members", cmd_members)]:
-        ptb.add_handler(CommandHandler(cmd, fn))
-    ptb.add_handler(CallbackQueryHandler(callback_router))
-    return ptb
+async def _get_user(init_data: str, db):
+    params = _validate_init_data(init_data)
+    if params is None:
+        raise HTTPException(401, "Invalid initData")
+    user_json = params.get("user")
+    if not user_json:
+        raise HTTPException(401, "No user in initData")
+    tg = json.loads(user_json)
+    row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
+    user = await row.fetchone()
+    if user is None:
+        raise HTTPException(403, "User not registered. Send /start to the bot first.")
+    return dict(user)
+
+
+async def _auth(x_init_data: str | None):
+    if not x_init_data:
+        raise HTTPException(401, "Missing X-Init-Data header")
+    db = await get_db()
+    user = await _get_user(x_init_data, db)
+    return user, db
+
+
+async def _require_trustee(x_init_data):
+    user, db = await _auth(x_init_data)
+    if not user["is_trustee"]:
+        raise HTTPException(403, "Trustee only")
+    return user, db
+
+
+async def _get_or_create_customer(user: dict, db) -> str:
+    if user.get("stripe_customer_id"):
+        return user["stripe_customer_id"]
+    customer = stripe.Customer.create(
+        metadata={"telegram_id": str(user["telegram_id"])},
+        name=user.get("first_name") or user.get("username") or f"user_{user['telegram_id']}",
+    )
+    await db.execute(
+        "UPDATE users SET stripe_customer_id=? WHERE id=?", (customer.id, user["id"])
+    )
+    await db.commit()
+    return customer.id
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+
+_ptb_app: Application | None = None
 
 
 @asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
-    global _ptb
-    if BOT_TOKEN:
-        import database as _db
-        _ptb = _setup_ptb()
-        _ptb.bot_data["db"] = await _db.get_db()
-        await _ptb.initialize()
-        await _ptb.start()
-        if WEBHOOK_URL and not os.getenv("MINI_APP_URL"):
-            os.environ["MINI_APP_URL"] = WEBHOOK_URL
-        if WEBHOOK_URL:
-            await _ptb.bot.set_webhook(url=f"{WEBHOOK_URL}/telegram-webhook",
-                                        allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+async def lifespan(app: FastAPI):
+    global _ptb_app
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if render_url and not config.MINI_APP_URL:
+        os.environ["MINI_APP_URL"] = render_url
+        config.MINI_APP_URL = render_url
+    _ptb_app = build_application()
+    await _ptb_app.initialize()
+    await _ptb_app.start()
+    log.info("PTB started (webhook mode)")
     yield
-    if _ptb:
-        if WEBHOOK_URL:
-            await _ptb.bot.delete_webhook()
-        await _ptb.stop()
-        await _ptb.shutdown()
+    await _ptb_app.stop()
+    await _ptb_app.shutdown()
 
 
-app = FastAPI(title="Lottoomax API", docs_url="/api/docs", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(lifespan=lifespan)
 
 
-# ── Telegram webhook ──────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Telegram webhook
+# ---------------------------------------------------------------------------
 
 @app.post("/telegram-webhook")
 async def telegram_webhook(request: Request):
-    if _ptb is None:
-        raise HTTPException(503, "Bot not initialised")
-    await _ptb.process_update(Update.de_json(await request.json(), _ptb.bot))
+    data = await request.json()
+    update = Update.de_json(data, _ptb_app.bot)
+    await _ptb_app.process_update(update)
     return {"ok": True}
 
 
-# ── DB / Auth ─────────────────────────────────────────────────────────────────
-
-async def open_db() -> aiosqlite.Connection:
-    conn = await aiosqlite.connect(DB_PATH)
-    conn.row_factory = aiosqlite.Row
-    return conn
-
-def _parse_init_data(raw: str) -> dict:
-    pairs    = dict(parse_qsl(raw, keep_blank_values=True))
-    received = pairs.pop("hash", "")
-    check    = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
-    secret   = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    computed = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(computed, received):
-        raise HTTPException(401, "Invalid Telegram initData")
-    return json.loads(pairs["user"])
-
-async def current_user(x_init_data: str = Header(..., alias="X-Init-Data")) -> dict:
-    return _parse_init_data(x_init_data)
-
-async def trustee_only(user: dict = Depends(current_user)) -> dict:
-    if user["id"] != TRUSTEE_ID:
-        raise HTTPException(403, "Trustee only")
-    return user
-
-
-# ── /api/me ───────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/me
+# ---------------------------------------------------------------------------
 
 @app.get("/api/me")
-async def me(user: dict = Depends(current_user)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM users WHERE telegram_id=?", (user["id"],)) as c:
-            row = await c.fetchone()
-        if not row:
-            raise HTTPException(404, "Not registered — open @Lottoomax_bot first")
-        return {"id": row["telegram_id"], "full_name": row["full_name"],
-                "username": row["username"], "credit": row["credit"],
-                "is_trustee": bool(row["is_trustee"]),
-                "stripe_enabled": bool(STRIPE_SECRET_KEY)}
-    finally:
-        await conn.close()
+async def api_me(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    await db.close()
+    return {**user, "stripe_enabled": bool(config.STRIPE_SECRET_KEY)}
 
 
-# ── /api/deposit (manual request) ────────────────────────────────────────────
-
-class DepositIn(BaseModel):
-    amount: float
-
-@app.post("/api/deposit")
-async def request_deposit(body: DepositIn, user: dict = Depends(current_user)):
-    if body.amount <= 0:
-        raise HTTPException(400, "Amount must be positive")
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT 1 FROM users WHERE telegram_id=?", (user["id"],)) as c:
-            if not await c.fetchone():
-                raise HTTPException(404, "Not registered")
-        async with conn.execute(
-            "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)", (user["id"], body.amount)
-        ) as c:
-            req_id = c.lastrowid
-        await conn.commit()
-        return {"id": req_id, "status": "pending", "amount": body.amount}
-    finally:
-        await conn.close()
-
-
-# ── /api/round ────────────────────────────────────────────────────────────────
-
-async def _build_round_payload(conn, row, user_id):
-    rid, pool, status = row["id"], row["pool"], row["status"]
-    dd = row["draw_date"] if row["draw_date"] else None
-    ds = display_status(status, dd)
-
-    async with conn.execute(
-        """SELECT p.user_id, p.amount, u.full_name
-           FROM participations p JOIN users u ON u.telegram_id=p.user_id
-           WHERE p.round_id=? ORDER BY p.amount DESC""", (rid,)
-    ) as c:
-        parts = await c.fetchall()
-
-    winner_name = None
-    if row["winner_id"]:
-        async with conn.execute("SELECT full_name FROM users WHERE telegram_id=?", (row["winner_id"],)) as c:
-            w = await c.fetchone()
-            winner_name = w["full_name"] if w else "Unknown"
-
-    async with conn.execute("SELECT amount FROM participations WHERE round_id=? AND user_id=?", (rid, user_id)) as c:
-        own = await c.fetchone()
-
-    my_stake = own["amount"] if own else None
-    return {
-        "id": rid, "status": status, "display_status": ds, "pool": pool,
-        "draw_date": dd, "drawn_at": row["drawn_at"],
-        "winner_id": row["winner_id"], "winner_name": winner_name,
-        "participants": [{"user_id": p["user_id"], "full_name": p["full_name"],
-                          "amount": p["amount"],
-                          "pct": round(p["amount"] / pool * 100, 1) if pool else 0,
-                          "won": p["user_id"] == row["winner_id"]} for p in parts],
-        "my_stake": my_stake,
-        "my_pct": round(my_stake / pool * 100, 1) if (my_stake and pool) else None,
-        "my_won": row["winner_id"] == user_id if row["winner_id"] else None,
-    }
+# ---------------------------------------------------------------------------
+# /api/round
+# ---------------------------------------------------------------------------
 
 @app.get("/api/round")
-async def get_round(user: dict = Depends(current_user)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1") as c:
-            row = await c.fetchone()
-        if not row:
-            async with conn.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1") as c:
-                row = await c.fetchone()
-        if not row:
-            return {"round": None}
-        return {"round": await _build_round_payload(conn, row, user["id"])}
-    finally:
-        await conn.close()
+async def api_round(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if round_ is None:
+        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+        round_ = await cur.fetchone()
+    if round_ is None:
+        await db.close()
+        return {"round": None}
+    round_dict = dict(round_)
+    round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
+    cur = await db.execute(
+        "SELECT p.*, u.username, u.first_name FROM participations p "
+        "JOIN users u ON u.id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
+        (round_dict["id"],),
+    )
+    parts = [dict(r) for r in await cur.fetchall()]
+    total = sum(p["amount"] for p in parts)
+    for p in parts:
+        p["pct"] = round(p["amount"] / total * 100, 1) if total else 0
+        p["won"] = (round_dict.get("winner_id") == p["user_id"])
+    winner = None
+    if round_dict.get("winner_id"):
+        cur = await db.execute("SELECT * FROM users WHERE id=?", (round_dict["winner_id"],))
+        w = await cur.fetchone()
+        if w:
+            winner = dict(w)
+    await db.close()
+    return {"round": round_dict, "participants": parts, "total": total, "winner": winner}
 
-class StakeIn(BaseModel):
-    amount: float
+
+# ---------------------------------------------------------------------------
+# /api/participate
+# ---------------------------------------------------------------------------
 
 @app.post("/api/participate")
-async def participate(body: StakeIn, user: dict = Depends(current_user)):
-    if body.amount <= 0:
+async def api_participate(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    conn = await open_db()
+    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if round_ is None:
+        raise HTTPException(400, "No open round")
+    if display_status(dict(round_)["status"], dict(round_).get("draw_date")) != "live":
+        raise HTTPException(400, "Round is not accepting entries right now")
+    if user["balance"] < amount:
+        raise HTTPException(400, "Insufficient balance")
     try:
-        async with conn.execute("SELECT credit FROM users WHERE telegram_id=?", (user["id"],)) as c:
-            row = await c.fetchone()
-        if not row:
-            raise HTTPException(404, "Not registered")
-        if row["credit"] < body.amount:
-            raise HTTPException(400, f"Insufficient balance ({row['credit']:.2f} {CURRENCY})")
-        async with conn.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1") as c:
-            round_ = await c.fetchone()
-        if not round_:
-            raise HTTPException(400, "No open round")
-        if display_status(round_["status"], round_["draw_date"]) != "live":
-            raise HTTPException(400, "Participation is closed — the draw is imminent")
-        rid = round_["id"]
-        async with conn.execute("SELECT id FROM participations WHERE round_id=? AND user_id=?", (rid, user["id"])) as c:
-            existing = await c.fetchone()
-        if existing:
-            await conn.execute("UPDATE participations SET amount=amount+? WHERE round_id=? AND user_id=?",
-                               (body.amount, rid, user["id"]))
-        else:
-            await conn.execute("INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
-                               (rid, user["id"], body.amount))
-        await conn.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (body.amount, rid))
-        await conn.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (body.amount, user["id"]))
-        await conn.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                           (user["id"], "participate", body.amount, f"Round #{rid} stake"))
-        await conn.commit()
-        async with conn.execute("SELECT pool FROM rounds WHERE id=?", (rid,)) as c:
-            updated = await c.fetchone()
-        async with conn.execute("SELECT amount FROM participations WHERE round_id=? AND user_id=?", (rid, user["id"])) as c:
-            own = await c.fetchone()
-        new_pool, stake = updated["pool"], own["amount"]
-        return {"pool": new_pool, "my_stake": stake,
-                "my_pct": round(stake / new_pool * 100, 1) if new_pool else 0}
-    finally:
-        await conn.close()
+        await db.execute(
+            "INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
+            (round_["id"], user["id"], amount),
+        )
+    except Exception:
+        raise HTTPException(400, "Already participating in this round")
+    await db.execute("UPDATE users SET balance=balance-? WHERE id=?", (amount, user["id"]))
+    await db.execute(
+        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+        (user["id"], "participate", -amount, f"Round #{round_['id']}"),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
 
 
-# ── /api/transactions ─────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/transactions
+# ---------------------------------------------------------------------------
 
 @app.get("/api/transactions")
-async def transactions(user: dict = Depends(current_user)):
-    conn = await open_db()
-    try:
-        async with conn.execute(
-            "SELECT * FROM transactions WHERE user_id=? ORDER BY created_at DESC LIMIT 40", (user["id"],)
-        ) as c:
-            rows = await c.fetchall()
-        return {"transactions": [{"id": r["id"], "type": r["type"], "amount": r["amount"],
-                                   "note": r["note"], "created_at": r["created_at"]} for r in rows]}
-    finally:
-        await conn.close()
+async def api_transactions(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        "SELECT * FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["id"],)
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"transactions": rows}
 
 
-# ── Admin ─────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/deposit  (manual / admin-approved)
+# ---------------------------------------------------------------------------
 
-class NewRoundIn(BaseModel):
-    draw_date: str | None = None
+@app.post("/api/deposit")
+async def api_deposit(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    await db.execute(
+        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+        (user["id"], "deposit_request", amount, "pending approval"),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "message": "Deposit request submitted for approval"}
 
-@app.post("/api/admin/round/new")
-async def admin_new_round(body: NewRoundIn = NewRoundIn(), _: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT id FROM rounds WHERE status='open' LIMIT 1") as c:
-            if await c.fetchone():
-                raise HTTPException(400, "A round is already open")
-        async with conn.execute("INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (body.draw_date,)) as c:
-            rid = c.lastrowid
-        await conn.commit()
-        return {"round_id": rid}
-    finally:
-        await conn.close()
 
-@app.post("/api/admin/round/close")
-async def admin_close_round(_: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT id FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1") as c:
-            row = await c.fetchone()
-        if not row:
-            raise HTTPException(400, "No open round to close")
-        await conn.execute("UPDATE rounds SET status='closed', closed_at=datetime('now') WHERE id=?", (row["id"],))
-        await conn.commit()
-        return {"round_id": row["id"], "status": "closed"}
-    finally:
-        await conn.close()
-
-@app.post("/api/admin/round/draw")
-async def admin_draw(_: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM rounds WHERE status='closed' ORDER BY id DESC LIMIT 1") as c:
-            round_ = await c.fetchone()
-        if not round_:
-            raise HTTPException(400, "No closed round to draw")
-        rid, pool = round_["id"], round_["pool"]
-        async with conn.execute(
-            "SELECT p.user_id, p.amount, u.full_name FROM participations p "
-            "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=?", (rid,)
-        ) as c:
-            parts = await c.fetchall()
-        if not parts:
-            raise HTTPException(400, "No participants")
-        winner_id = random.choices([p["user_id"] for p in parts], weights=[p["amount"] for p in parts], k=1)[0]
-        winner = next(p for p in parts if p["user_id"] == winner_id)
-        pct = round(winner["amount"] / pool * 100, 1) if pool else 0
-        await conn.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (pool, winner_id))
-        await conn.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                           (winner_id, "win", pool, f"Round #{rid} prize"))
-        await conn.execute("UPDATE rounds SET status='drawn', winner_id=?, drawn_at=datetime('now') WHERE id=?",
-                           (winner_id, rid))
-        await conn.commit()
-        return {"round_id": rid, "winner_id": winner_id,
-                "winner_name": winner["full_name"], "pool": pool, "winner_pct": pct}
-    finally:
-        await conn.close()
+# ---------------------------------------------------------------------------
+# Admin endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/api/admin/round")
-async def admin_round_info(_u: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1") as c:
-            row = await c.fetchone()
-        if not row:
-            return {"round": None}
-        rid, pool = row["id"], row["pool"]
-        async with conn.execute(
-            "SELECT p.user_id, p.amount, u.full_name FROM participations p "
-            "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC", (rid,)
-        ) as c:
-            parts = await c.fetchall()
-        return {"round": {"id": rid, "status": row["status"],
-                          "display_status": display_status(row["status"], row["draw_date"]),
-                          "pool": pool, "draw_date": row["draw_date"],
-                          "opened_at": row["opened_at"], "closed_at": row["closed_at"],
-                          "drawn_at": row["drawn_at"], "winner_id": row["winner_id"],
-                          "participants": [{"user_id": p["user_id"], "full_name": p["full_name"],
-                                            "amount": p["amount"],
-                                            "pct": round(p["amount"] / pool * 100, 1) if pool else 0,
-                                            "won": p["user_id"] == row["winner_id"]} for p in parts]}}
-    finally:
-        await conn.close()
+async def admin_round(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if round_ is None:
+        await db.close()
+        return {"round": None}
+    round_dict = dict(round_)
+    round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
+    cur = await db.execute(
+        "SELECT p.*, u.username, u.first_name FROM participations p "
+        "JOIN users u ON u.id=p.user_id WHERE p.round_id=?",
+        (round_dict["id"],),
+    )
+    parts = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"round": round_dict, "participants": parts}
+
+
+@app.post("/api/admin/round/new")
+async def admin_new_round(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    body = await request.json()
+    draw_date = body.get("draw_date") or None
+    await db.execute("INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,))
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+@app.post("/api/admin/round/close")
+async def admin_close_round(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if round_ is None:
+        raise HTTPException(400, "No open round")
+    await db.execute(
+        "UPDATE rounds SET status='closed', closed_at=datetime('now') WHERE id=?",
+        (round_["id"],),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+@app.post("/api/admin/round/draw")
+async def admin_draw(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute("SELECT * FROM rounds WHERE status='closed' ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if round_ is None:
+        raise HTTPException(400, "No closed round to draw from")
+    cur = await db.execute("SELECT * FROM participations WHERE round_id=?", (round_["id"],))
+    parts = await cur.fetchall()
+    if not parts:
+        raise HTTPException(400, "No participants in this round")
+    pool = []
+    for p in parts:
+        pool.extend([p["user_id"]] * int(p["amount"] * 100))
+    winner_id = random.choice(pool)
+    total = sum(p["amount"] for p in parts)
+    await db.execute(
+        "UPDATE rounds SET status='done', winner_id=? WHERE id=?", (winner_id, round_["id"])
+    )
+    await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (total, winner_id))
+    await db.execute(
+        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+        (winner_id, "win", total, f"Won round #{round_['id']}"),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "winner_id": winner_id}
+
 
 @app.get("/api/admin/deposits")
-async def admin_deposits(_: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute(
-            "SELECT dr.*, u.full_name, u.username FROM deposit_requests dr "
-            "JOIN users u ON u.telegram_id=dr.user_id WHERE dr.status='pending' ORDER BY dr.created_at"
-        ) as c:
-            rows = await c.fetchall()
-        return {"deposits": [{"id": r["id"], "user_id": r["user_id"], "full_name": r["full_name"],
-                               "username": r["username"], "amount": r["amount"],
-                               "created_at": r["created_at"]} for r in rows]}
-    finally:
-        await conn.close()
+async def admin_deposits(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute(
+        "SELECT t.*, u.username, u.first_name FROM transactions t "
+        "JOIN users u ON u.id=t.user_id WHERE t.type='deposit_request' ORDER BY t.id DESC"
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"deposits": rows}
 
-class ResolveIn(BaseModel):
-    action: str
-    note: str | None = None
 
-@app.post("/api/admin/deposits/{req_id}")
-async def admin_resolve(req_id: int, body: ResolveIn, _: dict = Depends(trustee_only)):
-    if body.action not in ("approve", "reject"):
+@app.post("/api/admin/deposits/{tx_id}")
+async def admin_resolve_deposit(
+    tx_id: int, request: Request, x_init_data: str | None = Header(default=None)
+):
+    user, db = await _require_trustee(x_init_data)
+    body = await request.json()
+    action = body.get("action")
+    cur = await db.execute("SELECT * FROM transactions WHERE id=?", (tx_id,))
+    tx = await cur.fetchone()
+    if tx is None:
+        raise HTTPException(404, "Transaction not found")
+    if tx["type"] != "deposit_request":
+        raise HTTPException(400, "Not a deposit request")
+    if action == "approve":
+        await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (tx["amount"], tx["user_id"]))
+        await db.execute(
+            "UPDATE transactions SET type='deposit', note='approved' WHERE id=?", (tx_id,)
+        )
+    elif action == "reject":
+        await db.execute(
+            "UPDATE transactions SET type='deposit_rejected', note='rejected' WHERE id=?", (tx_id,)
+        )
+    else:
         raise HTTPException(400, "action must be approve or reject")
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM deposit_requests WHERE id=?", (req_id,)) as c:
-            req = await c.fetchone()
-        if not req:
-            raise HTTPException(404, "Not found")
-        if req["status"] != "pending":
-            raise HTTPException(400, "Already resolved")
-        status = "approved" if body.action == "approve" else "rejected"
-        await conn.execute(
-            "UPDATE deposit_requests SET status=?, trustee_note=?, resolved_at=datetime('now') WHERE id=?",
-            (status, body.note, req_id))
-        if status == "approved":
-            await conn.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (req["amount"], req["user_id"]))
-            await conn.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                               (req["user_id"], "deposit", req["amount"], f"Deposit #{req_id} approved"))
-        await conn.commit()
-        return {"status": status}
-    finally:
-        await conn.close()
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
 
 @app.get("/api/admin/members")
-async def admin_members(_: dict = Depends(trustee_only)):
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM users ORDER BY created_at") as c:
-            rows = await c.fetchall()
-        return {"members": [{"telegram_id": r["telegram_id"], "full_name": r["full_name"],
-                              "username": r["username"], "credit": r["credit"],
-                              "is_trustee": bool(r["is_trustee"]), "created_at": r["created_at"]}
-                             for r in rows]}
-    finally:
-        await conn.close()
+async def admin_members(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute("SELECT * FROM users ORDER BY id")
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"members": rows}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STRIPE
-# ═══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Stripe — inline Elements (no redirect)
+# ---------------------------------------------------------------------------
 
-async def _get_or_create_customer(conn, telegram_id: int, full_name: str) -> str:
-    async with conn.execute("SELECT stripe_customer_id FROM users WHERE telegram_id=?", (telegram_id,)) as c:
-        row = await c.fetchone()
-    cid = row["stripe_customer_id"] if row else None
-    if not cid:
-        customer = _stripe.Customer.create(name=full_name, metadata={"telegram_id": str(telegram_id)})
-        cid = customer.id
-        await conn.execute("UPDATE users SET stripe_customer_id=? WHERE telegram_id=?", (cid, telegram_id))
-        await conn.commit()
-    return cid
+@app.get("/api/stripe/config")
+async def stripe_config():
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    return {"publishable_key": config.STRIPE_PUBLISHABLE_KEY}
 
 
-class CheckoutIn(BaseModel):
-    amount: float
-    type: str   # "one_time" | "subscription"
+@app.post("/api/stripe/payment-intent")
+async def stripe_payment_intent(
+    request: Request, x_init_data: str | None = Header(default=None)
+):
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    customer_id = await _get_or_create_customer(user, db)
+    pi = stripe.PaymentIntent.create(
+        amount=int(amount * 100),
+        currency=config.CURRENCY.lower(),
+        customer=customer_id,
+        automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+        metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+    )
+    await db.close()
+    return {"client_secret": pi.client_secret}
 
 
-@app.post("/api/stripe/checkout")
-async def stripe_checkout(body: CheckoutIn, user: dict = Depends(current_user)):
-    if not STRIPE_SECRET_KEY:
-        raise HTTPException(503, "Stripe not configured")
-    if body.amount < 1:
-        raise HTTPException(400, "Minimum amount is 1 CAD")
-    if body.type not in ("one_time", "subscription"):
-        raise HTTPException(400, "type must be one_time or subscription")
-
-    conn = await open_db()
-    try:
-        async with conn.execute("SELECT * FROM users WHERE telegram_id=?", (user["id"],)) as c:
-            u = await c.fetchone()
-        if not u:
-            raise HTTPException(404, "Not registered")
-
-        cid      = await _get_or_create_customer(conn, user["id"], u["full_name"])
-        base     = (WEBHOOK_URL or "http://localhost:8000").rstrip("/")
-        unit_amt = int(round(body.amount * 100))
-
-        if body.type == "one_time":
-            session = _stripe.checkout.Session.create(
-                customer=cid,
-                mode="payment",
-                line_items=[{"price_data": {"currency": "cad", "unit_amount": unit_amt,
-                              "product_data": {"name": "Lottoomax Deposit"}}, "quantity": 1}],
-                success_url=f"{base}/payment-success?session_id={{CHECKOUT_SESSION_ID}}",
-                cancel_url=f"{base}/payment-cancel",
-                metadata={"telegram_id": str(user["id"]), "type": "one_time"},
-            )
-        else:
-            # Block if active subscription already exists
-            async with conn.execute(
-                "SELECT id FROM stripe_subscriptions WHERE user_id=? AND status='active'", (user["id"],)
-            ) as c:
-                if await c.fetchone():
-                    raise HTTPException(400, "You already have an active subscription — update the amount instead.")
-
-            session = _stripe.checkout.Session.create(
-                customer=cid,
-                mode="subscription",
-                line_items=[{"price_data": {"currency": "cad", "unit_amount": unit_amt,
-                              "recurring": {"interval": "month"},
-                              "product_data": {"name": "Lottoomax Monthly Deposit"}}, "quantity": 1}],
-                success_url=f"{base}/payment-success?session_id={{CHECKOUT_SESSION_ID}}",
-                cancel_url=f"{base}/payment-cancel",
-                metadata={"telegram_id": str(user["id"]), "type": "subscription"},
-            )
-
-        return {"checkout_url": session.url}
-    finally:
-        await conn.close()
+@app.post("/api/stripe/subscription/create")
+async def stripe_create_subscription(
+    request: Request, x_init_data: str | None = Header(default=None)
+):
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
+        (user["id"],),
+    )
+    if await cur.fetchone():
+        raise HTTPException(400, "Already have an active subscription")
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    customer_id = await _get_or_create_customer(user, db)
+    price = stripe.Price.create(
+        unit_amount=int(amount * 100),
+        currency=config.CURRENCY.lower(),
+        recurring={"interval": "month"},
+        product_data={"name": "Lottoomax Monthly Deposit"},
+    )
+    subscription = stripe.Subscription.create(
+        customer=customer_id,
+        items=[{"price": price.id}],
+        payment_behavior="default_incomplete",
+        payment_settings={"save_default_payment_method": "on_subscription"},
+        expand=["latest_invoice.payment_intent"],
+        metadata={"user_id": str(user["id"]), "telegram_id": str(user["telegram_id"])},
+    )
+    client_secret = subscription.latest_invoice.payment_intent.client_secret
+    await db.close()
+    return {"client_secret": client_secret, "subscription_id": subscription.id}
 
 
 @app.get("/api/stripe/subscription")
-async def get_stripe_subscription(user: dict = Depends(current_user)):
-    conn = await open_db()
+async def stripe_get_subscription(x_init_data: str | None = Header(default=None)):
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
+        (user["id"],),
+    )
+    sub_row = await cur.fetchone()
+    await db.close()
+    if sub_row is None:
+        return {"subscription": None}
+    sub_dict = dict(sub_row)
     try:
-        async with conn.execute(
-            "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status IN ('active','cancelling') "
-            "ORDER BY id DESC LIMIT 1", (user["id"],)
-        ) as c:
-            row = await c.fetchone()
-        if not row:
-            return {"subscription": None}
-        next_billing = None
-        try:
-            sub = _stripe.Subscription.retrieve(row["stripe_sub_id"])
-            next_billing = datetime.utcfromtimestamp(sub["current_period_end"]).strftime("%Y-%m-%d")
-        except Exception:
-            pass
-        return {"subscription": {"id": row["stripe_sub_id"], "amount": row["amount"],
-                                  "status": row["status"], "next_billing": next_billing}}
-    finally:
-        await conn.close()
+        stripe_sub = stripe.Subscription.retrieve(sub_dict["stripe_sub_id"])
+        sub_dict["next_billing"] = datetime.fromtimestamp(
+            stripe_sub["current_period_end"]
+        ).date().isoformat()
+        sub_dict["cancel_at_period_end"] = stripe_sub.get("cancel_at_period_end", False)
+    except Exception:
+        sub_dict["next_billing"] = None
+        sub_dict["cancel_at_period_end"] = False
+    return {"subscription": sub_dict}
 
-
-class UpdateSubIn(BaseModel):
-    amount: float
 
 @app.post("/api/stripe/subscription/update")
-async def update_stripe_subscription(body: UpdateSubIn, user: dict = Depends(current_user)):
-    if body.amount < 1:
-        raise HTTPException(400, "Minimum amount is 1 CAD")
-    conn = await open_db()
-    try:
-        async with conn.execute(
-            "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (user["id"],)
-        ) as c:
-            row = await c.fetchone()
-        if not row:
-            raise HTTPException(404, "No active subscription")
-
-        sub    = _stripe.Subscription.retrieve(row["stripe_sub_id"])
-        item   = sub["items"]["data"][0]
-        prod   = item["price"]["product"]
-        price  = _stripe.Price.create(unit_amount=int(round(body.amount * 100)),
-                                       currency="cad", recurring={"interval": "month"}, product=prod)
-        _stripe.Subscription.modify(row["stripe_sub_id"],
-                                     items=[{"id": item["id"], "price": price.id}],
-                                     proration_behavior="none")
-        await conn.execute("UPDATE stripe_subscriptions SET amount=?, updated_at=datetime('now') WHERE stripe_sub_id=?",
-                           (body.amount, row["stripe_sub_id"]))
-        await conn.commit()
-        return {"amount": body.amount}
-    finally:
-        await conn.close()
+async def stripe_update_subscription(
+    request: Request, x_init_data: str | None = Header(default=None)
+):
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    new_amount = float(body.get("amount", 0))
+    if new_amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    cur = await db.execute(
+        "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
+        (user["id"],),
+    )
+    sub_row = await cur.fetchone()
+    if sub_row is None:
+        raise HTTPException(404, "No active subscription")
+    stripe_sub = stripe.Subscription.retrieve(sub_row["stripe_sub_id"])
+    product_id = stripe_sub["items"]["data"][0]["price"]["product"]
+    new_price = stripe.Price.create(
+        unit_amount=int(new_amount * 100),
+        currency=config.CURRENCY.lower(),
+        recurring={"interval": "month"},
+        product=product_id,
+    )
+    stripe.Subscription.modify(
+        sub_row["stripe_sub_id"],
+        items=[{"id": stripe_sub["items"]["data"][0]["id"], "price": new_price.id}],
+        proration_behavior="none",
+    )
+    await db.execute(
+        "UPDATE stripe_subscriptions SET amount=?, updated_at=datetime('now') WHERE id=?",
+        (new_amount, sub_row["id"]),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
 
 
 @app.post("/api/stripe/subscription/cancel")
-async def cancel_stripe_subscription(user: dict = Depends(current_user)):
-    conn = await open_db()
-    try:
-        async with conn.execute(
-            "SELECT stripe_sub_id FROM stripe_subscriptions WHERE user_id=? AND status='active' ORDER BY id DESC LIMIT 1",
-            (user["id"],)
-        ) as c:
-            row = await c.fetchone()
-        if not row:
-            raise HTTPException(404, "No active subscription")
-        _stripe.Subscription.modify(row["stripe_sub_id"], cancel_at_period_end=True)
-        await conn.execute("UPDATE stripe_subscriptions SET status='cancelling', updated_at=datetime('now') WHERE stripe_sub_id=?",
-                           (row["stripe_sub_id"],))
-        await conn.commit()
-        return {"status": "cancelling"}
-    finally:
-        await conn.close()
+async def stripe_cancel_subscription(x_init_data: str | None = Header(default=None)):
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
+        (user["id"],),
+    )
+    sub_row = await cur.fetchone()
+    if sub_row is None:
+        raise HTTPException(404, "No active subscription")
+    stripe.Subscription.modify(sub_row["stripe_sub_id"], cancel_at_period_end=True)
+    await db.execute(
+        "UPDATE stripe_subscriptions SET status='canceling', updated_at=datetime('now') WHERE id=?",
+        (sub_row["id"],),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
 
 
 @app.post("/api/stripe/webhook")
 async def stripe_webhook(request: Request):
-    if not STRIPE_WEBHOOK_SECRET:
-        raise HTTPException(503, "Webhook secret not set")
+    if not config.STRIPE_SECRET_KEY:
+        raise HTTPException(400, "Stripe not configured")
     payload = await request.body()
-    sig     = request.headers.get("stripe-signature", "")
+    sig = request.headers.get("stripe-signature", "")
     try:
-        event = _stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
-    except Exception as e:
-        raise HTTPException(400, str(e))
+        event = stripe.Webhook.construct_event(payload, sig, config.STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(400, "Invalid Stripe signature")
 
-    conn = await open_db()
-    try:
-        etype = event["type"]
-        obj   = event["data"]["object"]
+    db = await get_db()
 
-        if etype == "checkout.session.completed":
-            telegram_id = int(obj["metadata"].get("telegram_id", 0))
-            pay_type    = obj["metadata"].get("type", "")
-            if not telegram_id:
-                return {"ok": True}
+    if event["type"] == "payment_intent.succeeded":
+        pi = event["data"]["object"]
+        if pi.get("invoice"):
+            # Part of a subscription invoice — handled by invoice.payment_succeeded
+            await db.close()
+            return {"ok": True}
+        user_id = int(pi.get("metadata", {}).get("user_id", 0))
+        if user_id:
+            amount = pi["amount_received"] / 100
+            await db.execute("UPDATE users SET balance=balance+? WHERE id=?", (amount, user_id))
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+                (user_id, "deposit", amount, "Stripe one-time payment"),
+            )
+            await db.commit()
 
-            if pay_type == "one_time" and obj["mode"] == "payment":
-                amount = (obj.get("amount_total") or 0) / 100
-                if amount > 0:
-                    await conn.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, telegram_id))
-                    await conn.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                                       (telegram_id, "deposit", amount, "Stripe one-time payment"))
-                    await conn.commit()
-
-            elif pay_type == "subscription" and obj["mode"] == "subscription":
-                stripe_sub_id = obj.get("subscription")
-                if stripe_sub_id:
-                    sub    = _stripe.Subscription.retrieve(stripe_sub_id)
-                    amount = sub["items"]["data"][0]["price"]["unit_amount"] / 100
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO stripe_subscriptions (user_id, stripe_sub_id, amount) VALUES (?,?,?)",
-                        (telegram_id, stripe_sub_id, amount))
-                    await conn.commit()
-
-        elif etype == "invoice.payment_succeeded":
-            sub_id = obj.get("subscription")
-            if not sub_id:
-                return {"ok": True}   # one-time invoice, already handled above
-            customer_id = obj.get("customer")
-            async with conn.execute("SELECT telegram_id FROM users WHERE stripe_customer_id=?", (customer_id,)) as c:
-                u = await c.fetchone()
-            if not u:
-                return {"ok": True}
-            amount = (obj.get("amount_paid") or 0) / 100
+    elif event["type"] == "invoice.payment_succeeded":
+        invoice = event["data"]["object"]
+        sub_id = invoice.get("subscription")
+        if not sub_id:
+            await db.close()
+            return {"ok": True}
+        cur = await db.execute(
+            "SELECT * FROM stripe_subscriptions WHERE stripe_sub_id=? AND status='active'",
+            (sub_id,),
+        )
+        sub_row = await cur.fetchone()
+        user_id = None
+        if sub_row is None:
+            # First payment — store the subscription record
+            try:
+                stripe_sub = stripe.Subscription.retrieve(sub_id)
+                user_id = int(stripe_sub.metadata.get("user_id", 0))
+                if user_id:
+                    amt_cents = stripe_sub["items"]["data"][0]["price"]["unit_amount"]
+                    await db.execute(
+                        "INSERT OR IGNORE INTO stripe_subscriptions "
+                        "(user_id, stripe_sub_id, amount, status) VALUES (?,?,?,'active')",
+                        (user_id, sub_id, amt_cents / 100),
+                    )
+            except Exception as exc:
+                log.error("Failed to store subscription: %s", exc)
+        else:
+            user_id = sub_row["user_id"]
+        if user_id:
+            amount = invoice.get("amount_paid", 0) / 100
             if amount > 0:
-                await conn.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, u["telegram_id"]))
-                await conn.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                                   (u["telegram_id"], "deposit", amount, "Stripe monthly subscription"))
-                await conn.commit()
+                await db.execute(
+                    "UPDATE users SET balance=balance+? WHERE id=?", (amount, user_id)
+                )
+                await db.execute(
+                    "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+                    (user_id, "deposit", amount, "Stripe subscription billing"),
+                )
+                await db.commit()
 
-        elif etype == "customer.subscription.deleted":
-            await conn.execute("UPDATE stripe_subscriptions SET status='cancelled', updated_at=datetime('now') WHERE stripe_sub_id=?",
-                               (obj["id"],))
-            await conn.commit()
+    elif event["type"] == "customer.subscription.deleted":
+        sub_id = event["data"]["object"]["id"]
+        await db.execute(
+            "UPDATE stripe_subscriptions SET status='canceled', updated_at=datetime('now') "
+            "WHERE stripe_sub_id=?",
+            (sub_id,),
+        )
+        await db.commit()
 
-        return {"ok": True}
-    finally:
-        await conn.close()
+    await db.close()
+    return {"ok": True}
 
 
-# ── Payment result pages ──────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Payment result page (fallback for 3DS redirect)
+# ---------------------------------------------------------------------------
 
-@app.get("/payment-success")
+_CLOSE_PAGE = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{title}</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {{ font-family: sans-serif; display:flex; align-items:center; justify-content:center;
+           height:100vh; margin:0; background:#17212b; color:#f5f5f5;
+           flex-direction:column; gap:12px; }}
+  </style>
+</head>
+<body>
+  <h2>{icon}</h2>
+  <p>{msg}</p>
+  <script>
+    setTimeout(() => {{
+      if (window.Telegram && window.Telegram.WebApp) window.Telegram.WebApp.close();
+      else window.close();
+    }}, 2000);
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/payment-success", response_class=HTMLResponse)
 async def payment_success():
-    return HTMLResponse("""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Payment Successful</title>
-<style>
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-       text-align:center;padding:64px 24px;background:#f9f9f9;color:#1a1a1a;}
-  .icon{font-size:72px;margin-bottom:16px;}
-  h1{color:#2e7d32;font-size:24px;margin-bottom:8px;}
-  p{color:#666;font-size:16px;line-height:1.5;}
-  .note{margin-top:24px;font-size:13px;color:#999;}
-</style></head>
-<body>
-  <div class="icon">&#x2705;</div>
-  <h1>Payment Successful!</h1>
-  <p>Your balance has been credited.<br>Return to Telegram to continue.</p>
-  <p class="note">This tab will close automatically&#x2026;</p>
-  <script>setTimeout(()=>{try{window.close()}catch(e){}},3500)</script>
-</body></html>""")
+    return _CLOSE_PAGE.format(title="Success", icon="\u2705", msg="Payment successful! Closing\u2026")
 
-@app.get("/payment-cancel")
+
+@app.get("/payment-cancel", response_class=HTMLResponse)
 async def payment_cancel():
-    return HTMLResponse("""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Payment Cancelled</title>
-<style>
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-       text-align:center;padding:64px 24px;background:#f9f9f9;color:#1a1a1a;}
-  .icon{font-size:72px;margin-bottom:16px;}
-  h1{color:#c62828;font-size:24px;margin-bottom:8px;}
-  p{color:#666;font-size:16px;line-height:1.5;}
-</style></head>
-<body>
-  <div class="icon">&#x274C;</div>
-  <h1>Payment Cancelled</h1>
-  <p>No charge was made.<br>Return to Telegram to try again.</p>
-  <script>setTimeout(()=>{try{window.close()}catch(e){}},3000)</script>
-</body></html>""")
+    return _CLOSE_PAGE.format(title="Cancelled", icon="\u274c", msg="Payment cancelled. Closing\u2026")
 
 
-# ── Static files ──────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Static files — must be last
+# ---------------------------------------------------------------------------
 
-if STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+app.mount("/", StaticFiles(directory="mini_app/dist", html=True), name="static")
