@@ -1,28 +1,141 @@
-"""FastAPI REST API for the Lottoomax Telegram Mini App."""
+"""
+FastAPI app: serves the Mini App REST API and receives Telegram webhook updates.
+
+On Render, RENDER_EXTERNAL_URL is injected automatically.
+The lifespan hook registers the Telegram webhook at startup and removes it at shutdown.
+"""
 
 from __future__ import annotations
-import hashlib, hmac, json, os, random
+
+import hashlib, hmac, json, logging, os, random
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qsl
 
 import aiosqlite
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from telegram import Update
+from telegram.ext import (
+    Application, ApplicationBuilder,
+    CallbackQueryHandler, CommandHandler,
+)
 
 load_dotenv()
 
-BOT_TOKEN  = os.getenv("BOT_TOKEN", "")
-TRUSTEE_ID = int(os.getenv("TRUSTEE_TELEGRAM_ID", "0"))
-DB_PATH    = os.getenv("DB_PATH", "lotto.db")
-CURRENCY   = os.getenv("CURRENCY", "USD")
-STATIC_DIR = Path(__file__).parent / "mini_app" / "dist"
+log = logging.getLogger(__name__)
 
-app = FastAPI(title="Lottoomax API", docs_url="/api/docs")
+BOT_TOKEN   = os.getenv("BOT_TOKEN", "")
+TRUSTEE_ID  = int(os.getenv("TRUSTEE_TELEGRAM_ID", "0"))
+DB_PATH     = os.getenv("DB_PATH", "lotto.db")
+CURRENCY    = os.getenv("CURRENCY", "USD")
+# Render injects RENDER_EXTERNAL_URL automatically (e.g. https://lottoomax.onrender.com)
+_render_url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", _render_url)   # fallback for local testing
+STATIC_DIR  = Path(__file__).parent / "mini_app" / "dist"
+
+_ptb: Application | None = None   # set in lifespan
+
+
+# ── Bot startup / shutdown ─────────────────────────────────────────────────
+
+def _setup_ptb() -> Application:
+    """Build PTB Application with all handlers registered."""
+    import database as _db
+    from handlers.start   import cmd_start, cmd_menu
+    from handlers.credit  import (show_balance, show_transactions,
+                                   handle_deposit_decision, build_deposit_conversation)
+    from handlers.lottery import (show_round, show_my_tickets, show_history,
+                                   show_invite, build_participate_conversation)
+    from handlers.admin   import (cmd_newround, cmd_closeround, cmd_roundinfo,
+                                   cmd_deposits, cmd_members, build_draw_conversation)
+    from bot import callback_router
+
+    ptb = ApplicationBuilder().token(BOT_TOKEN).updater(None).build()
+
+    ptb.add_handler(build_deposit_conversation())
+    ptb.add_handler(build_participate_conversation())
+    ptb.add_handler(build_draw_conversation())
+
+    ptb.add_handler(CommandHandler("start",        cmd_start))
+    ptb.add_handler(CommandHandler("menu",         cmd_menu))
+    ptb.add_handler(CommandHandler("balance",      show_balance))
+    ptb.add_handler(CommandHandler("round",        show_round))
+    ptb.add_handler(CommandHandler("tickets",      show_my_tickets))
+    ptb.add_handler(CommandHandler("history",      show_history))
+    ptb.add_handler(CommandHandler("invite",       show_invite))
+    ptb.add_handler(CommandHandler("transactions", show_transactions))
+    ptb.add_handler(CommandHandler("newround",     cmd_newround))
+    ptb.add_handler(CommandHandler("closeround",   cmd_closeround))
+    ptb.add_handler(CommandHandler("roundinfo",    cmd_roundinfo))
+    ptb.add_handler(CommandHandler("deposits",     cmd_deposits))
+    ptb.add_handler(CommandHandler("members",      cmd_members))
+    ptb.add_handler(CallbackQueryHandler(callback_router))
+
+    return ptb
+
+
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    global _ptb
+
+    # ── start bot ──────────────────────────────────────────────
+    if BOT_TOKEN:
+        import database as _db
+        _ptb = _setup_ptb()
+        _ptb.bot_data["db"] = await _db.get_db()
+        await _ptb.initialize()
+        await _ptb.start()
+
+        # Expose the Mini App URL via env so keyboards.py picks it up
+        if WEBHOOK_URL and not os.getenv("MINI_APP_URL"):
+            os.environ["MINI_APP_URL"] = WEBHOOK_URL
+
+        if WEBHOOK_URL:
+            await _ptb.bot.set_webhook(
+                url=f"{WEBHOOK_URL}/telegram-webhook",
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+            )
+            log.info("Webhook registered: %s/telegram-webhook", WEBHOOK_URL)
+        else:
+            log.warning("WEBHOOK_URL not set — Telegram updates will not be received. "
+                        "Run bot.py separately for local polling.")
+    else:
+        log.warning("BOT_TOKEN not set — bot disabled.")
+
+    yield   # ← FastAPI serves requests here
+
+    # ── stop bot ───────────────────────────────────────────────
+    if _ptb:
+        if WEBHOOK_URL:
+            await _ptb.bot.delete_webhook()
+        await _ptb.stop()
+        await _ptb.shutdown()
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="Lottoomax API", docs_url="/api/docs", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+# ── Telegram webhook endpoint ─────────────────────────────────────────────────
+
+@app.post("/telegram-webhook")
+async def telegram_webhook(request: Request):
+    if _ptb is None:
+        raise HTTPException(503, "Bot not initialised")
+    data   = await request.json()
+    update = Update.de_json(data, _ptb.bot)
+    await _ptb.process_update(update)
+    return {"ok": True}
+
+
+# ── DB helper ─────────────────────────────────────────────────────────────────
 
 async def open_db() -> aiosqlite.Connection:
     conn = await aiosqlite.connect(DB_PATH)
@@ -30,12 +143,14 @@ async def open_db() -> aiosqlite.Connection:
     return conn
 
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
 def _parse_init_data(raw: str) -> dict:
-    pairs = dict(parse_qsl(raw, keep_blank_values=True))
+    pairs    = dict(parse_qsl(raw, keep_blank_values=True))
     received = pairs.pop("hash", "")
-    check_str = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    check    = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
     secret   = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
-    computed = hmac.new(secret, check_str.encode(), hashlib.sha256).hexdigest()
+    computed = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(computed, received):
         raise HTTPException(401, "Invalid Telegram initData")
     return json.loads(pairs["user"])
@@ -51,7 +166,8 @@ async def trustee_only(user: dict = Depends(current_user)) -> dict:
     return user
 
 
-# ── /api/me ───────────────────────────────────────────────────
+# ── /api/me ───────────────────────────────────────────────────────────────────
+
 @app.get("/api/me")
 async def me(user: dict = Depends(current_user)):
     conn = await open_db()
@@ -67,7 +183,8 @@ async def me(user: dict = Depends(current_user)):
         await conn.close()
 
 
-# ── /api/deposit ──────────────────────────────────────────────
+# ── /api/deposit ──────────────────────────────────────────────────────────────
+
 class DepositIn(BaseModel):
     amount: float
 
@@ -90,7 +207,8 @@ async def request_deposit(body: DepositIn, user: dict = Depends(current_user)):
         await conn.close()
 
 
-# ── /api/round ────────────────────────────────────────────────
+# ── /api/round ────────────────────────────────────────────────────────────────
+
 @app.get("/api/round")
 async def get_round(user: dict = Depends(current_user)):
     conn = await open_db()
@@ -179,7 +297,8 @@ async def participate(body: StakeIn, user: dict = Depends(current_user)):
         await conn.close()
 
 
-# ── /api/transactions ─────────────────────────────────────────
+# ── /api/transactions ─────────────────────────────────────────────────────────
+
 @app.get("/api/transactions")
 async def transactions(user: dict = Depends(current_user)):
     conn = await open_db()
@@ -196,7 +315,8 @@ async def transactions(user: dict = Depends(current_user)):
         await conn.close()
 
 
-# ── Admin ─────────────────────────────────────────────────────
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+
 @app.post("/api/admin/round/new")
 async def admin_new_round(_: dict = Depends(trustee_only)):
     conn = await open_db()
@@ -350,6 +470,8 @@ async def admin_members(_: dict = Depends(trustee_only)):
     finally:
         await conn.close()
 
+
+# ── Serve built React app ─────────────────────────────────────────────────────
 
 if STATIC_DIR.exists():
     app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
