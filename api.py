@@ -173,26 +173,34 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     if round_ is None:
         await db.close()
         return {"round": None}
-    round_dict = dict(round_)
-    round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
+    rd = dict(round_)
+    rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
     cur = await db.execute(
         "SELECT p.*, u.username, u.full_name FROM participations p "
         "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
-        (round_dict["id"],),
+        (rd["id"],),
     )
     parts = [dict(r) for r in await cur.fetchall()]
-    total = sum(p["amount"] for p in parts)
+    pool = rd.get("pool") or sum(p["amount"] for p in parts)
     for p in parts:
-        p["pct"] = round(p["amount"] / total * 100, 1) if total else 0
-        p["won"] = (round_dict.get("winner_id") == p["user_id"])
-    winner = None
-    if round_dict.get("winner_id"):
-        cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (round_dict["winner_id"],))
+        p["pct"] = round(p["amount"] / pool * 100, 1) if pool else 0
+        p["won"] = (rd.get("winner_id") == p["user_id"])
+    my = next((p for p in parts if p["user_id"] == user["telegram_id"]), None)
+    rd["participants"] = parts
+    rd["pool"] = pool
+    rd["my_stake"] = my["amount"] if my else None
+    rd["my_pct"]   = my["pct"]    if my else None
+    rd["my_won"]   = my["won"]    if my else None
+    if rd.get("winner_id"):
+        cur = await db.execute(
+            "SELECT full_name, username FROM users WHERE telegram_id=?", (rd["winner_id"],)
+        )
         w = await cur.fetchone()
-        if w:
-            winner = dict(w)
+        rd["winner_name"] = (w["full_name"] or w["username"]) if w else None
+    else:
+        rd["winner_name"] = None
     await db.close()
-    return {"round": round_dict, "participants": parts, "total": total, "winner": winner}
+    return {"round": rd}
 
 
 # ---------------------------------------------------------------------------
@@ -214,21 +222,40 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
         raise HTTPException(400, "Round is not accepting entries right now")
     if user["credit"] < amount:
         raise HTTPException(400, "Insufficient balance")
-    try:
+    # Upsert: allow adding more stake to same round
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
+        (round_["id"], user["telegram_id"])
+    )
+    existing = await cur.fetchone()
+    if existing:
+        await db.execute(
+            "UPDATE participations SET amount=amount+? WHERE round_id=? AND user_id=?",
+            (amount, round_["id"], user["telegram_id"])
+        )
+    else:
         await db.execute(
             "INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
-            (round_["id"], user["telegram_id"], amount),
+            (round_["id"], user["telegram_id"], amount)
         )
-    except Exception:
-        raise HTTPException(400, "Already participating in this round")
+    await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (amount, round_["id"]))
     await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (amount, user["telegram_id"]))
     await db.execute(
         "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
         (user["telegram_id"], "participate", -amount, f"Round #{round_['id']}"),
     )
     await db.commit()
+    cur = await db.execute("SELECT pool FROM rounds WHERE id=?", (round_["id"],))
+    row = await cur.fetchone()
+    pool = row["pool"] if row else amount
+    cur = await db.execute(
+        "SELECT amount FROM participations WHERE round_id=? AND user_id=?",
+        (round_["id"], user["telegram_id"])
+    )
+    my = await cur.fetchone()
+    my_pct = round((my["amount"] / pool) * 100, 1) if my and pool else 0
     await db.close()
-    return {"ok": True}
+    return {"ok": True, "my_pct": my_pct}
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +285,8 @@ async def api_deposit(request: Request, x_init_data: str | None = Header(default
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     await db.execute(
-        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (user["telegram_id"], "deposit_request", amount, "pending approval"),
+        "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)",
+        (user["telegram_id"], amount),
     )
     await db.commit()
     await db.close()
@@ -278,16 +305,22 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
     if round_ is None:
         await db.close()
         return {"round": None}
-    round_dict = dict(round_)
-    round_dict["display_status"] = display_status(round_dict["status"], round_dict.get("draw_date"))
+    rd = dict(round_)
+    rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
     cur = await db.execute(
         "SELECT p.*, u.username, u.full_name FROM participations p "
-        "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=?",
-        (round_dict["id"],),
+        "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
+        (rd["id"],),
     )
     parts = [dict(r) for r in await cur.fetchall()]
+    pool = rd.get("pool") or sum(p["amount"] for p in parts)
+    for p in parts:
+        p["pct"] = round(p["amount"] / pool * 100, 1) if pool else 0
+        p["won"] = (rd.get("winner_id") == p["user_id"])
+    rd["participants"] = parts
+    rd["pool"] = pool
     await db.close()
-    return {"round": round_dict, "participants": parts}
+    return {"round": rd}
 
 
 @app.post("/api/admin/round/new")
@@ -295,10 +328,13 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     user, db = await _require_trustee(x_init_data)
     body = await request.json()
     draw_date = body.get("draw_date") or None
-    await db.execute("INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,))
+    async with db.execute(
+        "INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,)
+    ) as cur:
+        round_id = cur.lastrowid
     await db.commit()
     await db.close()
-    return {"ok": True}
+    return {"ok": True, "round_id": round_id}
 
 
 @app.post("/api/admin/round/close")
@@ -314,7 +350,7 @@ async def admin_close_round(x_init_data: str | None = Header(default=None)):
     )
     await db.commit()
     await db.close()
-    return {"ok": True}
+    return {"ok": True, "round_id": round_["id"]}
 
 
 @app.post("/api/admin/round/draw")
@@ -328,57 +364,76 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
     parts = await cur.fetchall()
     if not parts:
         raise HTTPException(400, "No participants in this round")
-    pool = []
+    pool_val = round_["pool"] or sum(p["amount"] for p in parts)
+    weighted = []
     for p in parts:
-        pool.extend([p["user_id"]] * int(p["amount"] * 100))
-    winner_id = random.choice(pool)
-    total = sum(p["amount"] for p in parts)
-    await db.execute(
-        "UPDATE rounds SET status='drawn', winner_id=? WHERE id=?", (winner_id, round_["id"])
+        weighted.extend([p["user_id"]] * max(1, int(p["amount"] * 100)))
+    winner_id = random.choice(weighted)
+    cur = await db.execute(
+        "SELECT full_name, username FROM users WHERE telegram_id=?", (winner_id,)
     )
-    await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (total, winner_id))
+    w = await cur.fetchone()
+    winner_name = (w["full_name"] or w["username"]) if w else str(winner_id)
+    winner_part = next((p for p in parts if p["user_id"] == winner_id), None)
+    winner_pct  = round(winner_part["amount"] / pool_val * 100, 1) if winner_part and pool_val else 0
+    ticket_ref  = f"TKT-{round_['id']:04d}-{winner_id}"
+    await db.execute(
+        "UPDATE rounds SET status='drawn', winner_id=?, ticket_ref=?, drawn_at=datetime('now') WHERE id=?",
+        (winner_id, ticket_ref, round_["id"])
+    )
+    await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (pool_val, winner_id))
     await db.execute(
         "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (winner_id, "win", total, f"Won round #{round_['id']}"),
+        (winner_id, "win", pool_val, f"Won round #{round_['id']}"),
     )
     await db.commit()
     await db.close()
-    return {"ok": True, "winner_id": winner_id}
+    return {"ok": True, "winner_name": winner_name, "pool": pool_val,
+            "winner_pct": winner_pct, "round_id": round_["id"]}
 
 
 @app.get("/api/admin/deposits")
 async def admin_deposits(x_init_data: str | None = Header(default=None)):
     user, db = await _require_trustee(x_init_data)
     cur = await db.execute(
-        "SELECT t.*, u.username, u.full_name FROM transactions t "
-        "JOIN users u ON u.telegram_id=t.user_id WHERE t.type='deposit_request' ORDER BY t.id DESC"
+        "SELECT dr.*, u.full_name, u.username FROM deposit_requests dr "
+        "JOIN users u ON u.telegram_id=dr.user_id "
+        "WHERE dr.status='pending' ORDER BY dr.created_at"
     )
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
     return {"deposits": rows}
 
 
-@app.post("/api/admin/deposits/{tx_id}")
+@app.post("/api/admin/deposits/{req_id}")
 async def admin_resolve_deposit(
-    tx_id: int, request: Request, x_init_data: str | None = Header(default=None)
+    req_id: int, request: Request, x_init_data: str | None = Header(default=None)
 ):
     user, db = await _require_trustee(x_init_data)
     body = await request.json()
     action = body.get("action")
-    cur = await db.execute("SELECT * FROM transactions WHERE id=?", (tx_id,))
-    tx = await cur.fetchone()
-    if tx is None:
-        raise HTTPException(404, "Transaction not found")
-    if tx["type"] != "deposit_request":
-        raise HTTPException(400, "Not a deposit request")
+    cur = await db.execute("SELECT * FROM deposit_requests WHERE id=?", (req_id,))
+    dep = await cur.fetchone()
+    if dep is None:
+        raise HTTPException(404, "Deposit request not found")
+    if dep["status"] != "pending":
+        raise HTTPException(400, "Already resolved")
     if action == "approve":
-        await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (tx["amount"], tx["user_id"]))
         await db.execute(
-            "UPDATE transactions SET type='deposit', note='approved' WHERE id=?", (tx_id,)
+            "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
+        )
+        await db.execute(
+            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+            (dep["user_id"], "deposit", dep["amount"], f"Approved deposit #{req_id}"),
+        )
+        await db.execute(
+            "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now') WHERE id=?",
+            (req_id,)
         )
     elif action == "reject":
         await db.execute(
-            "UPDATE transactions SET type='deposit_rejected', note='rejected' WHERE id=?", (tx_id,)
+            "UPDATE deposit_requests SET status='rejected', resolved_at=datetime('now') WHERE id=?",
+            (req_id,)
         )
     else:
         raise HTTPException(400, "action must be approve or reject")
@@ -390,7 +445,7 @@ async def admin_resolve_deposit(
 @app.get("/api/admin/members")
 async def admin_members(x_init_data: str | None = Header(default=None)):
     user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM users ORDER BY id")
+    cur = await db.execute("SELECT * FROM users ORDER BY created_at")
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
     return {"members": rows}
