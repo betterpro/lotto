@@ -1,10 +1,18 @@
 """Reusable inline keyboard builders."""
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import os
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+
+def _app_row():
+    url = os.getenv("MINI_APP_URL", "")
+    if not url:
+        return []
+    return [[InlineKeyboardButton("🎰 Open App", web_app=WebAppInfo(url=url))]]
 
 
 def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton("💰 Balance", callback_data="menu_balance"),
             InlineKeyboardButton("🎟 Participate", callback_data="menu_participate"),
@@ -17,14 +25,13 @@ def main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("➕ Deposit", callback_data="menu_deposit"),
             InlineKeyboardButton("🔁 Transactions", callback_data="menu_transactions"),
         ],
-        [
-            InlineKeyboardButton("🔗 Invite Friend", callback_data="menu_invite"),
-        ],
-    ])
+        [InlineKeyboardButton("🔗 Invite Friend", callback_data="menu_invite")],
+    ]
+    return InlineKeyboardMarkup(rows + _app_row())
 
 
 def admin_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
+    rows = [
         [
             InlineKeyboardButton("🆕 New Round", callback_data="admin_newround"),
             InlineKeyboardButton("🔒 Close Round", callback_data="admin_closeround"),
@@ -37,28 +44,25 @@ def admin_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton("💵 Pending Deposits", callback_data="admin_deposits"),
             InlineKeyboardButton("👥 Members", callback_data="admin_members"),
         ],
-    ])
+    ]
+    return InlineKeyboardMarkup(rows + _app_row())
 
 
 def deposit_approval(req_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Approve", callback_data=f"dep_approve_{req_id}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"dep_reject_{req_id}"),
-        ]
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"dep_approve_{req_id}"),
+        InlineKeyboardButton("❌ Reject",  callback_data=f"dep_reject_{req_id}"),
+    ]])
 
 
 def confirm_action(action: str, data: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{action}_{data}"),
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
-        ]
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{action}_{data}"),
+        InlineKeyboardButton("❌ Cancel",  callback_data="cancel"),
+    ]])
 
 
 def back_button(target: str = "start") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("« Back", callback_data=f"back_{target}")]
-    ])
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("« Back", callback_data=f"back_{target}")
+    ]])
