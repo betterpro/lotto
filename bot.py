@@ -185,5 +185,40 @@ def main():
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
+def build_application() -> Application:
+    """Build and return the PTB Application (without starting it).
+    Used by api.py to run the bot in webhook mode alongside FastAPI."""
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .post_init(post_init)
+        .updater(None)
+        .build()
+    )
+
+    app.add_handler(build_deposit_conversation())
+    app.add_handler(build_participate_conversation())
+    app.add_handler(build_draw_conversation())
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("balance", show_balance))
+    app.add_handler(CommandHandler("round", show_round))
+    app.add_handler(CommandHandler("tickets", show_my_tickets))
+    app.add_handler(CommandHandler("history", show_history))
+    app.add_handler(CommandHandler("invite", show_invite))
+    app.add_handler(CommandHandler("transactions", show_transactions))
+    app.add_handler(CommandHandler("newround", cmd_newround))
+    app.add_handler(CommandHandler("closeround", cmd_closeround))
+    app.add_handler(CommandHandler("roundinfo", cmd_roundinfo))
+    app.add_handler(CommandHandler("deposits", cmd_deposits))
+    app.add_handler(CommandHandler("members", cmd_members))
+
+    app.add_handler(CallbackQueryHandler(callback_router))
+    app.add_error_handler(error_handler)
+
+    return app
+
+
 if __name__ == "__main__":
     main()
