@@ -167,14 +167,14 @@ export default function Home({ user, onUserUpdate }) {
 
       <div className="card" onClick={() => api.me().then(onUserUpdate)} style={{ cursor: 'pointer' }}>
         <div className="hint">Balance</div>
-        <div style={{ fontSize: 32, fontWeight: 700 }}>{(user.balance ?? 0).toFixed(2)} {currency}</div>
+        <div style={{ fontSize: 32, fontWeight: 700 }}>{(user.credit ?? 0).toFixed(2)} {currency}</div>
         <div className="hint mt4">Tap to refresh</div>
       </div>
 
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontWeight: 600 }}>
-            {user.first_name || user.username || `User ${user.telegram_id}`}
+            {user.full_name || user.username || `User ${user.telegram_id}`}
           </span>
           {user.is_trustee && <span className="badge bg-blue">Admin</span>}
         </div>
