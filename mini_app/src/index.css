@@ -69,6 +69,7 @@ body {
 .bg-green  { background: #e8f5e9; color: #2e7d32; }
 .bg-yellow { background: #fff8e1; color: #e65100; }
 .bg-blue   { background: #e3f2fd; color: #1565c0; }
+.bg-red    { background: #fce4ec; color: #c62828; }
 .bg-gray   { background: var(--bg2); color: var(--hint); }
 
 /* Colors */
