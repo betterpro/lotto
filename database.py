@@ -110,6 +110,10 @@ async def get_db() -> aiosqlite.Connection:
         "ALTER TABLE participations ADD COLUMN prize REAL DEFAULT 0",
         "ALTER TABLE rounds ADD COLUMN ticket_image TEXT",
         "ALTER TABLE users  ADD COLUMN photo_url TEXT",
+        "ALTER TABLE rounds ADD COLUMN lottery_type TEXT DEFAULT 'lotto_max'",
+        "ALTER TABLE users  ADD COLUMN email TEXT",
+        "ALTER TABLE deposit_requests ADD COLUMN payment_method TEXT DEFAULT 'etransfer'",
+        "ALTER TABLE deposit_requests ADD COLUMN ref_code TEXT",
     ]:
         try:
             await db.execute(col_sql)

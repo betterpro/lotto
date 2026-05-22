@@ -61,22 +61,34 @@ function SummaryRow({ k, v, mono }) {
   )
 }
 
+const LOTTERY_TYPES = [
+  { id: 'lotto_max', name: 'Lotto Max', price: 6, tag: '6/49 + Max' },
+  { id: '649',       name: '6/49',      price: 3, tag: '3$/share'   },
+]
+
 // ── New Round Sheet ────────────────────────────────────────────────────────
 function NewRoundSheet({ onClose, onCreated, showToast }) {
+  const [lotteryType, setLotteryType] = useState('lotto_max')
   const [date,     setDate]     = useState('')
   const [jackpot,  setJackpot]  = useState('70000000')
   const [target,   setTarget]   = useState('25')
-  const [price,    setPrice]    = useState('5')
+  const [price,    setPrice]    = useState('6')
   const [busy,     setBusy]     = useState(false)
+
+  function selectType(lt) {
+    setLotteryType(lt.id)
+    setPrice(String(lt.price))
+  }
 
   async function submit() {
     setBusy(true)
     try {
       const res = await api.admin.newRound({
+        lottery_type:    lotteryType,
         jackpot:         Number(jackpot) || 0,
         draw_date:       date || undefined,
-        tickets_target: Number(target)  || 25,
-        price_per_share: Number(price)  || 5,
+        tickets_target:  Number(target)  || 25,
+        price_per_share: Number(price)   || 6,
       })
       showToast(`Round #${res.round_id} opened!`, 'success')
       onCreated()
@@ -95,6 +107,24 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
         </div>
         <div className="body">
           <div className="col" style={{ gap: 12, marginBottom: 16 }}>
+            <FieldLabel label="Lottery type">
+              <div style={{ display: 'flex', gap: 8 }}>
+                {LOTTERY_TYPES.map(lt => (
+                  <button key={lt.id} onClick={() => selectType(lt)} style={{
+                    flex: 1, padding: '10px 8px', borderRadius: 10, cursor: 'pointer',
+                    border: `.5px solid ${lotteryType === lt.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                    background: lotteryType === lt.id ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
+                    color: lotteryType === lt.id ? 'var(--tg)' : 'var(--tx-1)',
+                    fontWeight: 700, fontSize: 14, fontFamily: 'inherit',
+                  }}>
+                    {lt.name}
+                    <div style={{ fontSize: 10, fontWeight: 400, color: lotteryType === lt.id ? 'var(--tg)' : 'var(--tx-3)', marginTop: 2 }}>
+                      ${lt.price}/share
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </FieldLabel>
             <FieldLabel label="Estimated jackpot (CAD)">
               <input className="input mono" type="number" value={jackpot}
                 onChange={e => setJackpot(e.target.value)} placeholder="70000000" />
@@ -106,7 +136,7 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               </FieldLabel>
               <FieldLabel label="Price / share ($)" flex>
                 <input className="input mono" type="number" value={price}
-                  onChange={e => setPrice(e.target.value)} placeholder="5" />
+                  onChange={e => setPrice(e.target.value)} placeholder="6" />
               </FieldLabel>
             </div>
             <FieldLabel label="Draw date (optional)">
@@ -371,6 +401,7 @@ export default function Admin() {
   const [tab,      setTab]      = useState('round')
   const [round,    setRound]    = useState(undefined)
   const [deposits, setDeposits] = useState(null)
+  const [imapOk,   setImapOk]  = useState(false)
   const [members,  setMembers]  = useState(null)
   const [busy,     setBusy]     = useState({})
   const [showNew,  setShowNew]  = useState(false)
@@ -379,7 +410,7 @@ export default function Admin() {
   const [showToast, toastNode]  = useToast()
 
   const loadRound    = useCallback(() => api.admin.round().then(d => setRound(d.round)).catch(() => setRound(null)), [])
-  const loadDeposits = useCallback(() => api.admin.deposits().then(d => setDeposits(d.deposits)).catch(() => setDeposits([])), [])
+  const loadDeposits = useCallback(() => api.admin.deposits().then(d => { setDeposits(d.deposits); setImapOk(!!d.imap_configured) }).catch(() => setDeposits([])), [])
   const loadMembers  = useCallback(() => api.admin.members().then(d => setMembers(d.members)).catch(() => setMembers([])), [])
 
   useEffect(() => { loadRound(); loadDeposits(); loadMembers() }, [])
@@ -607,6 +638,24 @@ export default function Admin() {
       {/* ── Deposits tab ── */}
       {tab === 'deposits' && (
         <div style={{ padding: '12px 16px 24px' }}>
+          {imapOk && (
+            <button className="btn btn-block" style={{ marginBottom: 12,
+              background: 'rgba(46,166,255,.12)', color: 'var(--tg)' }}
+              disabled={busy.imap}
+              onClick={async () => {
+                setB('imap', true)
+                try {
+                  const r = await api.admin.checkEtransfer()
+                  showToast(r.approved > 0
+                    ? `✅ Auto-approved ${r.approved} e-transfer(s)!`
+                    : `Checked ${r.checked} email(s) — nothing new.`, 'success')
+                  await loadDeposits()
+                } catch (err) { showToast(err.message, 'error') }
+                finally { setB('imap', false) }
+              }}>
+              {busy.imap ? 'Checking…' : '📧 Check e-transfers'}
+            </button>
+          )}
           {!deposits ? (
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 40 }}>
               <div className="spinner" />
@@ -631,13 +680,20 @@ export default function Admin() {
                   <div className="col gap-4">
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{d.full_name}</span>
                     {d.username && <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>@{d.username}</span>}
+                    {d.ref_code && (
+                      <span style={{ fontSize: 11, color: 'var(--tg)', fontFamily: 'var(--mono)', fontWeight: 600 }}>
+                        {d.ref_code}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="col" style={{ textAlign: 'right', gap: 2 }}>
                   <span className="mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--money)' }}>
                     {fmtCAD(d.amount)}
                   </span>
-                  <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>{d.created_at?.slice(0, 10)}</span>
+                  <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>
+                    {d.payment_method === 'etransfer' ? '🏦 e-Transfer' : '💳 card'} · {d.created_at?.slice(0, 10)}
+                  </span>
                 </div>
               </div>
               <div className="row gap-8">

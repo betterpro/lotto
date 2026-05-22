@@ -3,13 +3,17 @@ FastAPI application — serves the REST API, the React Mini App static files,
 the Telegram bot webhook, and Stripe payment endpoints.
 """
 
+import asyncio
 import base64
+import email as _email_lib
 import hashlib
 import hmac
+import imaplib
 import json
 import logging
 import os
 import random
+import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from urllib.parse import parse_qsl
@@ -183,6 +187,90 @@ async def _auto_join_round(db, round_id: int, price_per_share: float):
             f"🎟 <b>Auto-joined Round #{round_id}</b>\n"
             f"{shares} share{'s' if shares > 1 else ''} · <b>${amount:.2f}</b> deducted\n"
             f"Remaining balance: ${bal:.2f}")
+
+
+# ---------------------------------------------------------------------------
+# E-transfer / IMAP helpers
+# ---------------------------------------------------------------------------
+
+def _email_text(msg) -> str:
+    if msg.is_multipart():
+        parts = []
+        for part in msg.walk():
+            if part.get_content_type() in ("text/plain", "text/html"):
+                try:
+                    parts.append(part.get_payload(decode=True).decode("utf-8", errors="ignore"))
+                except Exception:
+                    pass
+        return " ".join(parts)
+    try:
+        return msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _imap_find_lotto_refs() -> list[int]:
+    """Synchronous IMAP scan. Returns deposit IDs referenced in Interac e-transfer emails."""
+    if not all([config.IMAP_HOST, config.IMAP_USER, config.IMAP_PASS]):
+        return []
+    found: list[int] = []
+    try:
+        mail = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT)
+        mail.login(config.IMAP_USER, config.IMAP_PASS)
+        mail.select("INBOX")
+        for term in ['SUBJECT "Interac"', 'SUBJECT "interac"', 'SUBJECT "e-Transfer"', 'SUBJECT "etransfer"']:
+            _, msg_ids = mail.search(None, term)
+            if not msg_ids[0]:
+                continue
+            for mid in msg_ids[0].split()[-100:]:
+                _, data = mail.fetch(mid, "(RFC822)")
+                if not data[0]:
+                    continue
+                msg = _email_lib.message_from_bytes(data[0][1])
+                text = _email_text(msg) + " " + (msg.get("Subject") or "")
+                for m in re.finditer(r"LOTTO-(\d+)", text, re.IGNORECASE):
+                    dep_id = int(m.group(1))
+                    if dep_id not in found:
+                        found.append(dep_id)
+        mail.close()
+        mail.logout()
+    except Exception as exc:
+        log.warning("IMAP check error: %s", exc)
+    return found
+
+
+async def _check_etransfer_emails(db) -> dict:
+    """Check IMAP and auto-approve pending e-transfer deposit requests whose ref code was found."""
+    dep_ids = await asyncio.to_thread(_imap_find_lotto_refs)
+    approved = 0
+    for dep_id in dep_ids:
+        cur = await db.execute(
+            "SELECT * FROM deposit_requests WHERE id=? AND status='pending' AND payment_method='etransfer'",
+            (dep_id,),
+        )
+        dep = await cur.fetchone()
+        if not dep:
+            continue
+        await db.execute(
+            "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
+        )
+        await db.execute(
+            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+            (dep["user_id"], "deposit", dep["amount"], f"E-transfer LOTTO-{dep_id}"),
+        )
+        await db.execute(
+            "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now'), "
+            "trustee_note='Auto-approved via IMAP' WHERE id=?",
+            (dep_id,),
+        )
+        await db.commit()
+        await _notify(
+            dep["user_id"],
+            f"✅ <b>E-transfer received — ${dep['amount']:.2f}</b>\n"
+            f"Your account has been credited. Reference: LOTTO-{dep_id}",
+        )
+        approved += 1
+    return {"checked": len(dep_ids), "approved": approved}
 
 
 async def _auth(x_init_data: str | None):
@@ -521,6 +609,44 @@ async def put_settings(request: Request, x_init_data: str | None = Header(defaul
 
 
 # ---------------------------------------------------------------------------
+# E-transfer endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/etransfer/info")
+async def etransfer_info(x_init_data: str | None = Header(default=None)):
+    await _auth(x_init_data)
+    return {
+        "enabled": bool(config.ADMIN_ETRANSFER_EMAIL),
+        "email": config.ADMIN_ETRANSFER_EMAIL,
+    }
+
+
+@app.post("/api/etransfer/deposit")
+async def etransfer_deposit(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    amount = float(body.get("amount", 0))
+    if amount <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    async with db.execute(
+        "INSERT INTO deposit_requests (user_id, amount, payment_method) VALUES (?,?,'etransfer')",
+        (user["telegram_id"], amount),
+    ) as cur:
+        dep_id = cur.lastrowid
+    ref_code = f"LOTTO-{dep_id}"
+    await db.execute("UPDATE deposit_requests SET ref_code=? WHERE id=?", (ref_code, dep_id))
+    await db.commit()
+    await db.close()
+    return {
+        "ok": True,
+        "deposit_id": dep_id,
+        "ref_code": ref_code,
+        "amount": amount,
+        "admin_email": config.ADMIN_ETRANSFER_EMAIL,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
@@ -562,9 +688,10 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     tickets_target = body.get("tickets_target") or 25
     price_per_share = body.get("price_per_share") or 5.0
     draw_date = body.get("draw_date") or None
+    lottery_type = body.get("lottery_type") or "lotto_max"
     async with db.execute(
-        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share) VALUES ('open', ?, ?, ?, ?)",
-        (draw_date, jackpot, tickets_target, price_per_share)
+        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type) VALUES ('open', ?, ?, ?, ?, ?)",
+        (draw_date, jackpot, tickets_target, price_per_share, lottery_type)
     ) as cur:
         round_id = cur.lastrowid
     await db.commit()
@@ -892,7 +1019,7 @@ async def admin_deposits(x_init_data: str | None = Header(default=None)):
     )
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
-    return {"deposits": rows}
+    return {"deposits": rows, "imap_configured": bool(config.IMAP_HOST)}
 
 
 @app.post("/api/admin/deposits/{req_id}")
@@ -941,6 +1068,18 @@ async def admin_members(x_init_data: str | None = Header(default=None)):
     return {"members": rows}
 
 
+@app.post("/api/admin/etransfer/check")
+async def admin_check_etransfer(x_init_data: str | None = Header(default=None)):
+    """Manually trigger IMAP check to auto-approve matched e-transfer deposits."""
+    user, db = await _require_trustee(x_init_data)
+    if not config.IMAP_HOST:
+        await db.close()
+        raise HTTPException(400, "IMAP not configured (set IMAP_HOST, IMAP_USER, IMAP_PASS)")
+    result = await _check_etransfer_emails(db)
+    await db.close()
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Stripe — inline Elements (no redirect)
 # ---------------------------------------------------------------------------
@@ -963,17 +1102,22 @@ async def stripe_payment_intent(
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
+    charge_amount = round(amount * 1.05, 2)  # 5% processing fee
     try:
         customer_id = await _get_or_create_customer(user, db)
         pi = stripe.PaymentIntent.create(
-            amount=int(amount * 100),
+            amount=int(charge_amount * 100),
             currency=config.CURRENCY.lower(),
             customer=customer_id,
             automatic_payment_methods={"enabled": True},
-            metadata={"user_id": str(user["telegram_id"]), "telegram_id": str(user["telegram_id"])},
+            metadata={
+                "user_id": str(user["telegram_id"]),
+                "telegram_id": str(user["telegram_id"]),
+                "deposit_amount": str(amount),
+            },
         )
         await db.close()
-        return {"client_secret": pi.client_secret}
+        return {"client_secret": pi.client_secret, "charge_amount": charge_amount, "deposit_amount": amount}
     except Exception as e:
         await db.close()
         log.exception("payment-intent error: %s", e)
@@ -998,10 +1142,11 @@ async def stripe_create_subscription(
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
+    charge_amount = round(amount * 1.05, 2)  # 5% processing fee
     try:
         customer_id = await _get_or_create_customer(user, db)
         price = stripe.Price.create(
-            unit_amount=int(amount * 100),
+            unit_amount=int(charge_amount * 100),
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
             product_data={"name": "LOTTOO Monthly Deposit"},
@@ -1012,11 +1157,15 @@ async def stripe_create_subscription(
             payment_behavior="default_incomplete",
             payment_settings={"save_default_payment_method": "on_subscription"},
             expand=["latest_invoice.payment_intent"],
-            metadata={"user_id": str(user["telegram_id"]), "telegram_id": str(user["telegram_id"])},
+            metadata={
+                "user_id": str(user["telegram_id"]),
+                "telegram_id": str(user["telegram_id"]),
+                "deposit_amount": str(amount),
+            },
         )
         client_secret = subscription.latest_invoice.payment_intent.client_secret
         await db.close()
-        return {"client_secret": client_secret, "subscription_id": subscription.id}
+        return {"client_secret": client_secret, "subscription_id": subscription.id, "charge_amount": charge_amount, "deposit_amount": amount}
     except Exception as e:
         await db.close()
         log.exception("subscription/create error: %s", e)
@@ -1133,7 +1282,9 @@ async def stripe_webhook(request: Request):
             return {"ok": True}
         user_id = int(pi.get("metadata", {}).get("user_id", 0))
         if user_id:
-            amount = pi["amount_received"] / 100
+            # Credit deposit_amount (original, pre-fee); fall back to amount_received for legacy PIs
+            deposit_amount = float(pi.get("metadata", {}).get("deposit_amount") or 0)
+            amount = deposit_amount if deposit_amount else pi["amount_received"] / 100
             await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, user_id))
             await db.execute(
                 "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
@@ -1153,24 +1304,29 @@ async def stripe_webhook(request: Request):
         )
         sub_row = await cur.fetchone()
         user_id = None
+        deposit_amount = 0.0
         if sub_row is None:
             # First payment — store the subscription record
             try:
                 stripe_sub = stripe.Subscription.retrieve(sub_id)
                 user_id = int(stripe_sub.metadata.get("user_id", 0))
+                deposit_amount = float(stripe_sub.metadata.get("deposit_amount") or 0)
                 if user_id:
-                    amt_cents = stripe_sub["items"]["data"][0]["price"]["unit_amount"]
+                    stored_amount = deposit_amount or (
+                        stripe_sub["items"]["data"][0]["price"]["unit_amount"] / 100 / 1.05
+                    )
                     await db.execute(
                         "INSERT OR IGNORE INTO stripe_subscriptions "
                         "(user_id, stripe_sub_id, amount, status) VALUES (?,?,?,'active')",
-                        (user_id, sub_id, amt_cents / 100),
+                        (user_id, sub_id, stored_amount),
                     )
             except Exception as exc:
                 log.error("Failed to store subscription: %s", exc)
         else:
             user_id = sub_row["user_id"]
+            deposit_amount = sub_row["amount"]  # already stored as original pre-fee amount
         if user_id:
-            amount = invoice.get("amount_paid", 0) / 100
+            amount = deposit_amount if deposit_amount else invoice.get("amount_paid", 0) / 100
             if amount > 0:
                 await db.execute(
                     "UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, user_id)

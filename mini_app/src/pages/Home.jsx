@@ -56,28 +56,130 @@ function PaymentForm({ onSuccess, onError }) {
 }
 
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
+const PRESETS = [9, 18, 27, 36]
+
 function TopUpSheet({ open, onClose, onSuccess }) {
-  const [tab, setTab] = useState('once')
-  const [amount, setAmount] = useState(50)
-  const [stripePromise, setStripePromise] = useState(null)
-  const [clientSecret, setClientSecret] = useState(null)
-  const presets = [20, 50, 100, 200]
+  const [tab, setTab]           = useState('once')
+  const [amount, setAmount]     = useState(18)
+  const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
+  const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
+  const [stripePromise, setSP]  = useState(null)
+  const [clientSecret, setCS]   = useState(null)
+  const [etxInfo, setEtxInfo]   = useState(null)     // { ref_code, admin_email, amount }
 
   useEffect(() => {
-    if (!open) { setClientSecret(null); return }
-    api.stripe.config().then(cfg => setStripePromise(loadStripe(cfg.publishable_key))).catch(() => {})
+    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); return }
+    api.stripe.config().then(cfg => setSP(loadStripe(cfg.publishable_key))).catch(() => {})
   }, [open])
 
-  async function pay() {
-    try {
-      const r = tab === 'once'
-        ? await api.stripe.createPaymentIntent(amount)
-        : await api.stripe.createSubscription(amount)
-      setClientSecret(r.client_secret)
-    } catch (e) { alert(e.message) }
+  function resetMethod() { setCS(null); setStep('select') }
+
+  const fee        = method === 'card' ? +(amount * 0.05).toFixed(2) : 0
+  const chargeAmt  = +(amount + fee).toFixed(2)
+  const coversEach = Math.floor(amount / 9)
+
+  async function proceed() {
+    if (method === 'card') {
+      try {
+        const r = tab === 'once'
+          ? await api.stripe.createPaymentIntent(amount)
+          : await api.stripe.createSubscription(amount)
+        setCS(r.client_secret)
+        setStep('card')
+      } catch (e) { alert(e.message) }
+    } else {
+      try {
+        const r = await api.etransfer.deposit(amount)
+        setEtxInfo(r)
+        setStep('sent')
+      } catch (e) { alert(e.message) }
+    }
+  }
+
+  function copy(text) {
+    navigator.clipboard?.writeText(text).catch(() => {})
   }
 
   if (!open) return null
+
+  // ── E-transfer instructions ──
+  if (step === 'sent' && etxInfo) return (
+    <div className="sheet-overlay" onClick={onClose}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
+        <div className="handle" />
+        <div className="sheet-head">
+          <span className="sheet-title">E-Transfer Details</span>
+          <button className="sheet-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="body">
+          <div style={{ textAlign: 'center', fontSize: 36, marginBottom: 8 }}>🏦</div>
+          <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--tx-2)', marginBottom: 18 }}>
+            Send <strong style={{ color: '#fff' }}>${amount.toFixed(2)} CAD</strong> via Interac e-Transfer
+          </p>
+          <div className="card" style={{ marginBottom: 10 }}>
+            <div className="row between" style={{ marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Send to</span>
+              <button onClick={() => copy(etxInfo.admin_email)}
+                style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+                Copy
+              </button>
+            </div>
+            <span className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
+          </div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="row between" style={{ marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Reference / Message</span>
+              <button onClick={() => copy(etxInfo.ref_code)}
+                style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+                Copy
+              </button>
+            </div>
+            <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: 'var(--tg)', letterSpacing: '.5px' }}>
+              {etxInfo.ref_code}
+            </span>
+          </div>
+          <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
+            borderRadius: 10, padding: '12px 14px', marginBottom: 20, fontSize: 12,
+            color: 'var(--money)', lineHeight: 1.6 }}>
+            ✓ Your account will be credited automatically once we detect your transfer. Usually within minutes.
+          </div>
+          <button className="btn btn-primary btn-block" onClick={() => { onSuccess(amount, 'etransfer'); onClose() }}>
+            Done — I've sent it
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+
+  // ── Stripe card form ──
+  if (step === 'card' && clientSecret && stripePromise) return (
+    <div className="sheet-overlay" onClick={onClose}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
+        <div className="handle" />
+        <div className="sheet-head">
+          <button onClick={resetMethod}
+            style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 18, cursor: 'pointer', padding: '0 8px 0 0' }}>
+            ←
+          </button>
+          <span className="sheet-title">Pay ${chargeAmt.toFixed(2)} by card</span>
+          <button className="sheet-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="body">
+          <Elements stripe={stripePromise} options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
+            <PaymentForm
+              onSuccess={() => { setCS(null); onSuccess(amount, tab); onClose() }}
+              onError={msg => alert(msg)}
+            />
+          </Elements>
+          <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+            🔒 Secured by Stripe · ${amount.toFixed(2)} credit + ${fee.toFixed(2)} fee (5%)
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  // ── Main selection screen ──
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -87,9 +189,10 @@ function TopUpSheet({ open, onClose, onSuccess }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
+          {/* One-time / Monthly tabs */}
           <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 16 }}>
             {[['once','One-time'],['monthly','Monthly']].map(([k,l]) => (
-              <button key={k} onClick={() => { setTab(k); setClientSecret(null) }} style={{
+              <button key={k} onClick={() => { setTab(k); setCS(null) }} style={{
                 flex: 1, padding: '9px 0', borderRadius: 7, border: 0, cursor: 'pointer',
                 background: tab === k ? 'var(--surface-2)' : 'transparent',
                 color: tab === k ? '#fff' : 'var(--tx-2)',
@@ -97,39 +200,60 @@ function TopUpSheet({ open, onClose, onSuccess }) {
               }}>{l}</button>
             ))}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 16 }}>
-            {presets.map(p => (
-              <button key={p} onClick={() => { setAmount(p); setClientSecret(null) }} style={{
+
+          {/* Amount presets */}
+          <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Amount</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 8 }}>
+            {PRESETS.map(p => (
+              <button key={p} onClick={() => setAmount(p)} style={{
                 padding: '14px 0', borderRadius: 12, cursor: 'pointer',
                 border: `.5px solid ${amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
                 background: amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
                 color: amount === p ? 'var(--tg)' : '#fff',
-                fontWeight: 700, fontSize: 16, fontFamily: 'var(--mono)',
+                fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
               }}>${p}</button>
             ))}
           </div>
-          {clientSecret && stripePromise ? (
-            <Elements stripe={stripePromise} options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
-              <PaymentForm
-                onSuccess={() => { setClientSecret(null); onSuccess(amount, tab); onClose() }}
-                onError={msg => alert(msg)}
-              />
-            </Elements>
-          ) : (
-            <>
-              {tab === 'monthly' && (
-                <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 12, lineHeight: 1.5 }}>
-                  Authorize LOTTOO to charge ${amount} CAD on the 4th of each month until cancelled.
-                </p>
-              )}
-              <button className="btn btn-primary btn-block" onClick={pay}>
-                {tab === 'once' ? `Add $${amount} credit` : `Subscribe · $${amount}/mo`}
-              </button>
-            </>
-          )}
-          <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            🔒 Secured by Stripe · No card data stored on LOTTOO
+          <div style={{ fontSize: 11, color: 'var(--tx-3)', marginBottom: 16, textAlign: 'center', lineHeight: 1.5 }}>
+            ${amount} = {coversEach}× Lotto Max ($6) + {coversEach}× 6/49 ($3) per draw
           </div>
+
+          {/* Payment method */}
+          <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Payment method</div>
+          {[
+            { id: 'card',      icon: '💳', name: 'Credit / Debit card', note: `+5% fee · charged $${chargeAmt.toFixed(2)}` },
+            { id: 'etransfer', icon: '🏦', name: 'Interac e-Transfer',  note: 'No fee · 0–24 h approval'                  },
+          ].map(m => (
+            <div key={m.id} onClick={() => setMethod(m.id)} style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+              borderRadius: 12, cursor: 'pointer', marginBottom: 8,
+              border: `.5px solid ${method === m.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
+              background: method === m.id ? 'rgba(46,166,255,.1)' : 'var(--bg-3)',
+            }}>
+              <span style={{ fontSize: 22, flexShrink: 0 }}>{m.icon}</span>
+              <div className="col grow gap-2" style={{ minWidth: 0 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</span>
+                <span style={{ fontSize: 11, color: method === m.id ? 'var(--tg)' : 'var(--tx-2)' }}>{m.note}</span>
+              </div>
+              <div style={{
+                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                border: `.5px solid ${method === m.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                background: method === m.id ? 'var(--tg)' : 'transparent',
+              }} />
+            </div>
+          ))}
+
+          {tab === 'monthly' && method === 'etransfer' && (
+            <p style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 4, marginBottom: 8, lineHeight: 1.5 }}>
+              Monthly e-transfers must be sent manually each billing cycle.
+            </p>
+          )}
+
+          <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}>
+            {method === 'card'
+              ? tab === 'once' ? `Pay $${chargeAmt.toFixed(2)} by card` : `Subscribe · $${chargeAmt.toFixed(2)}/mo`
+              : `Get e-transfer details`}
+          </button>
         </div>
       </div>
     </div>
