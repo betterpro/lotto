@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Node
+mini_app/node_modules/
+mini_app/package-lock.json
+
+# Build output
+mini_app/dist/
+
+# Database (local dev)
+*.db
+*.sqlite
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
