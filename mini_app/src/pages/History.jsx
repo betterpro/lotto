@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
-import { WalletIcon, TicketIcon, TrophyIcon, ArrowDownIcon } from '../components/Icon.jsx'
+import { WalletIcon, TicketIcon, TrophyIcon, ArrowDownIcon, BoltIcon } from '../components/Icon.jsx'
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -50,10 +50,23 @@ const FILTERS = [
 export default function History() {
   const [txs,    setTxs]    = useState(null)
   const [filter, setFilter] = useState('all')
+  const [sub,    setSub]    = useState(null)
 
   useEffect(() => {
     api.transactions().then(d => setTxs(d.transactions)).catch(() => setTxs([]))
+    api.stripe.subscription().then(r => setSub(r.subscription)).catch(() => {})
   }, [])
+
+  async function cancelSub() {
+    try {
+      if (sub?.cancel_at_period_end) {
+        alert('Contact support to reactivate your subscription.')
+      } else {
+        await api.stripe.cancelSub()
+        setSub(s => s ? { ...s, cancel_at_period_end: true } : s)
+      }
+    } catch (e) { alert(e.message) }
+  }
 
   if (txs === null) return (
     <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
@@ -148,6 +161,37 @@ export default function History() {
           </div>
         ))}
       </div>
+
+      {/* Subscription section */}
+      {sub && (
+        <>
+          <div className="section"><div className="label">Subscription</div></div>
+          <div style={{padding:'0 16px 16px'}}>
+            <div className="card" style={{borderColor:'rgba(78,208,122,.25)'}}>
+              <div className="row between">
+                <div className="row gap-12">
+                  <div style={{width:40,height:40,borderRadius:10,background:'rgba(78,208,122,.14)',color:'var(--money)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                    <BoltIcon width={20} height={20}/>
+                  </div>
+                  <div className="col">
+                    <span style={{fontWeight:600}}>${sub.amount}/month plan</span>
+                    <span style={{fontSize:12,color:'var(--tx-2)'}}>
+                      {sub.next_billing ? `Renews ${sub.next_billing}` : 'Active subscription'}
+                    </span>
+                  </div>
+                </div>
+                <span className="chip chip-money">ACTIVE</span>
+              </div>
+              <div className="row gap-8" style={{marginTop:12}}>
+                <button className="btn btn-sm btn-ghost" style={{flex:1}} onClick={cancelSub}>
+                  {sub.cancel_at_period_end ? 'Reactivate' : 'Cancel'}
+                </button>
+                <button className="btn btn-sm btn-ghost" style={{flex:1}}>Manage</button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

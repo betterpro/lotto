@@ -2,7 +2,7 @@ import { HomeIcon, TicketIcon, ClockIcon, ShieldIcon } from './Icon.jsx'
 
 const TABS = [
   { id: 'home',    Icon: HomeIcon,   label: 'Home'    },
-  { id: 'round',   Icon: TicketIcon, label: 'Rounds'  },
+  { id: 'rounds',  Icon: TicketIcon, label: 'Rounds'  },
   { id: 'history', Icon: ClockIcon,  label: 'Activity'},
   { id: 'admin',   Icon: ShieldIcon, label: 'Admin'   },
 ]

@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react'
 import { api } from './api.js'
 import BottomNav from './components/BottomNav.jsx'
-import Home    from './pages/Home.jsx'
-import Round   from './pages/Round.jsx'
-import History from './pages/History.jsx'
-import Admin   from './pages/Admin.jsx'
+import Home      from './pages/Home.jsx'
+import Rounds    from './pages/Rounds.jsx'
+import History   from './pages/History.jsx'
+import Admin     from './pages/Admin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 
-const ONB_KEY = 'lottochi_beneficiary'
+const ONB_KEY = 'lottoo_beneficiary'
 
 const TITLE = {
-  home:    { t: 'LottoChi', s: 'Group lotto · live'  },
-  round:   { t: 'Rounds',   s: 'All draws'           },
+  home:    { t: 'LOTTOO',   s: 'Group lotto · live'  },
+  rounds:  { t: 'Rounds',   s: 'All draws'           },
   history: { t: 'Activity', s: 'Your account'        },
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
@@ -46,7 +46,7 @@ export default function App() {
       <span style={{ fontSize: 48 }}>⚠️</span>
       <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
       <span style={{ fontSize: 13, color: 'var(--tx-2)', textAlign: 'center' }}>
-        Open @LottoChi_bot first, then come back.
+        Open the bot first, then come back.
       </span>
     </div>
   )
@@ -65,8 +65,8 @@ export default function App() {
     }} />
   )
 
-  const PAGES = { home: Home, round: Round, history: History, admin: Admin }
-  const Page  = PAGES[page]
+  const PAGES = { home: Home, rounds: Rounds, history: History, admin: Admin }
+  const Page  = PAGES[page] ?? Home
 
   return (
     <div className="app">

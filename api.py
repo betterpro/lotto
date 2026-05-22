@@ -35,19 +35,23 @@ if config.STRIPE_SECRET_KEY:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def display_status(status: str, draw_date_str: str | None) -> str:
-    if status != "open":
-        return "done"
+def display_status(status: str, draw_date_str=None) -> str:
+    if status == 'drawn':
+        return 'DRAWN'
+    if status in ('uploaded', 'closed'):
+        return 'UPLOADED'
+    if status != 'open':
+        return 'DRAWN'
     if not draw_date_str:
-        return "live"
+        return 'OPEN'
     try:
         draw = date.fromisoformat(draw_date_str)
     except ValueError:
-        return "live"
+        return 'OPEN'
     today = date.today()
-    if today >= draw or (draw - today).days == 1:
-        return "closing"
-    return "live"
+    if (draw - today).days <= 1:
+        return 'CLOSING'
+    return 'OPEN'
 
 
 def _validate_init_data(init_data: str) -> dict | None:
@@ -152,10 +156,23 @@ async def telegram_webhook(request: Request):
 @app.get("/api/me")
 async def api_me(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    # Compute lifetime won and spent from transactions
+    cur = await db.execute(
+        "SELECT type, amount FROM transactions WHERE user_id=?", (user["telegram_id"],)
+    )
+    txs = await cur.fetchall()
+    lifetime_won   = sum(t["amount"] for t in txs if t["type"] == "win")
+    lifetime_spent = sum(abs(t["amount"]) for t in txs if t["type"] == "participate")
     await db.close()
     u = dict(user)
-    return {**u, "balance": u["credit"], "first_name": u["full_name"],
-            "stripe_enabled": bool(config.STRIPE_SECRET_KEY)}
+    return {
+        **u,
+        "balance": u["credit"],
+        "first_name": u["full_name"],
+        "stripe_enabled": bool(config.STRIPE_SECRET_KEY),
+        "lifetime_won": lifetime_won,
+        "lifetime_spent": lifetime_spent,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +205,12 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     my = next((p for p in parts if p["user_id"] == user["telegram_id"]), None)
     rd["participants"] = parts
     rd["pool"] = pool
-    rd["my_stake"] = my["amount"] if my else None
-    rd["my_pct"]   = my["pct"]    if my else None
-    rd["my_won"]   = my["won"]    if my else None
+    rd["my_stake"]  = my["amount"] if my else None
+    rd["my_shares"] = round(my["amount"] / (rd.get("price_per_share") or 5)) if my else None
+    rd["my_prize"]  = my["prize"]  if my else None
+    rd["my_pct"]    = my["pct"]    if my else None
+    rd["my_won"]    = my["won"]    if my else None
+    rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
     if rd.get("winner_id"):
         cur = await db.execute(
             "SELECT full_name, username FROM users WHERE telegram_id=?", (rd["winner_id"],)
@@ -201,6 +221,32 @@ async def api_round(x_init_data: str | None = Header(default=None)):
         rd["winner_name"] = None
     await db.close()
     return {"round": rd}
+
+
+# ---------------------------------------------------------------------------
+# /api/rounds  (NEW)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/rounds")
+async def api_rounds(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute("""
+        SELECT r.*,
+          p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
+          (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count
+        FROM rounds r
+        LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
+        ORDER BY r.id DESC LIMIT 20
+    """, (user["telegram_id"],))
+    rounds = []
+    for row in await cur.fetchall():
+        rd = dict(row)
+        rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
+        rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+        rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
+        rounds.append(rd)
+    await db.close()
+    return {"rounds": rounds}
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +264,12 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No open round")
-    if display_status(dict(round_)["status"], dict(round_).get("draw_date")) != "live":
+    if display_status(dict(round_)["status"], dict(round_).get("draw_date")) not in ('OPEN', 'CLOSING'):
         raise HTTPException(400, "Round is not accepting entries right now")
     if user["credit"] < amount:
         raise HTTPException(400, "Insufficient balance")
+    price_per_share = dict(round_).get("price_per_share") or 5.0
+    shares = max(1, round(amount / price_per_share))
     # Upsert: allow adding more stake to same round
     cur = await db.execute(
         "SELECT * FROM participations WHERE round_id=? AND user_id=?",
@@ -229,14 +277,15 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     )
     existing = await cur.fetchone()
     if existing:
+        new_shares = (existing["shares"] or 0) + shares
         await db.execute(
-            "UPDATE participations SET amount=amount+? WHERE round_id=? AND user_id=?",
-            (amount, round_["id"], user["telegram_id"])
+            "UPDATE participations SET amount=amount+?, shares=? WHERE round_id=? AND user_id=?",
+            (amount, new_shares, round_["id"], user["telegram_id"])
         )
     else:
         await db.execute(
-            "INSERT INTO participations (round_id, user_id, amount) VALUES (?,?,?)",
-            (round_["id"], user["telegram_id"], amount)
+            "INSERT INTO participations (round_id, user_id, amount, shares) VALUES (?,?,?,?)",
+            (round_["id"], user["telegram_id"], amount, shares)
         )
     await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (amount, round_["id"]))
     await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (amount, user["telegram_id"]))
@@ -319,6 +368,7 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
         p["won"] = (rd.get("winner_id") == p["user_id"])
     rd["participants"] = parts
     rd["pool"] = pool
+    rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
     await db.close()
     return {"round": rd}
 
@@ -327,9 +377,13 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
 async def admin_new_round(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _require_trustee(x_init_data)
     body = await request.json()
+    jackpot = body.get("jackpot") or 0
+    tickets_target = body.get("tickets_target") or 25
+    price_per_share = body.get("price_per_share") or 5.0
     draw_date = body.get("draw_date") or None
     async with db.execute(
-        "INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,)
+        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share) VALUES ('open', ?, ?, ?, ?)",
+        (draw_date, jackpot, tickets_target, price_per_share)
     ) as cur:
         round_id = cur.lastrowid
     await db.commit()
@@ -353,10 +407,90 @@ async def admin_close_round(x_init_data: str | None = Header(default=None)):
     return {"ok": True, "round_id": round_["id"]}
 
 
+@app.post("/api/admin/round/upload-ticket")
+async def admin_upload_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+    """Admin uploads ticket numbers for a round (sets status to 'uploaded')."""
+    user, db = await _require_trustee(x_init_data)
+    body = await request.json()
+    round_id = body.get("round_id")
+    numbers = body.get("numbers", [])  # list of 7 ints
+
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    else:
+        cur = await db.execute("SELECT * FROM rounds WHERE status IN ('open','closed') ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if not round_:
+        raise HTTPException(400, "No suitable round found")
+
+    await db.execute(
+        "UPDATE rounds SET ticket_numbers=?, status='uploaded' WHERE id=?",
+        (json.dumps(numbers), round_["id"])
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "round_id": round_["id"]}
+
+
+@app.post("/api/admin/round/results")
+async def admin_enter_results(request: Request, x_init_data: str | None = Header(default=None)):
+    """Admin enters winning numbers and total prize; prizes distributed proportionally."""
+    user, db = await _require_trustee(x_init_data)
+    body = await request.json()
+    round_id = body.get("round_id")
+    winning_numbers = body.get("winning_numbers", [])
+    bonus_number = body.get("bonus_number")
+    total_prize = float(body.get("total_prize", 0))
+
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    else:
+        cur = await db.execute("SELECT * FROM rounds WHERE status='uploaded' ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if not round_:
+        raise HTTPException(400, "No uploaded round found")
+
+    # Get all participations
+    cur = await db.execute("SELECT * FROM participations WHERE round_id=?", (round_["id"],))
+    parts = await cur.fetchall()
+    pool = round_["pool"] or sum(p["amount"] for p in parts)
+
+    # Distribute prize proportionally
+    if total_prize > 0 and pool > 0:
+        for p in parts:
+            share = p["amount"] / pool
+            prize = round(share * total_prize, 2)
+            await db.execute(
+                "UPDATE participations SET prize=? WHERE round_id=? AND user_id=?",
+                (prize, round_["id"], p["user_id"])
+            )
+            if prize > 0:
+                await db.execute(
+                    "UPDATE users SET credit=credit+? WHERE telegram_id=?", (prize, p["user_id"])
+                )
+                await db.execute(
+                    "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+                    (p["user_id"], "win", prize, f"Prize Round #{round_['id']}")
+                )
+
+    await db.execute(
+        "UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?, drawn_at=datetime('now') WHERE id=?",
+        (json.dumps(winning_numbers), bonus_number, round_["id"])
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "total_prize": total_prize, "distributed": len(parts)}
+
+
 @app.post("/api/admin/round/draw")
 async def admin_draw(x_init_data: str | None = Header(default=None)):
+    """
+    LEGACY / DEPRECATED: Old random winner-takes-all draw.
+    New flow: use /api/admin/round/upload-ticket then /api/admin/round/results.
+    Kept for backward compatibility only — calls results with total_prize=0.
+    """
     user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM rounds WHERE status='closed' ORDER BY id DESC LIMIT 1")
+    cur = await db.execute("SELECT * FROM rounds WHERE status IN ('closed','uploaded') ORDER BY id DESC LIMIT 1")
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No closed round to draw from")
@@ -514,7 +648,7 @@ async def stripe_create_subscription(
             unit_amount=int(amount * 100),
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
-            product_data={"name": "LottoChi Monthly Deposit"},
+            product_data={"name": "LOTTOO Monthly Deposit"},
         )
         subscription = stripe.Subscription.create(
             customer=customer_id,
@@ -735,12 +869,12 @@ _CLOSE_PAGE = """<!DOCTYPE html>
 
 @app.get("/payment-success", response_class=HTMLResponse)
 async def payment_success():
-    return _CLOSE_PAGE.format(title="Success", icon="\u2705", msg="Payment successful! Closing\u2026")
+    return _CLOSE_PAGE.format(title="Success", icon="✅", msg="Payment successful! Closing…")
 
 
 @app.get("/payment-cancel", response_class=HTMLResponse)
 async def payment_cancel():
-    return _CLOSE_PAGE.format(title="Cancelled", icon="\u274c", msg="Payment cancelled. Closing\u2026")
+    return _CLOSE_PAGE.format(title="Cancelled", icon="❌", msg="Payment cancelled. Closing…")
 
 
 # ---------------------------------------------------------------------------

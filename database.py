@@ -20,15 +20,21 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    status        TEXT    NOT NULL DEFAULT 'open',
-    pool          REAL    NOT NULL DEFAULT 0,
-    draw_date     TEXT,
-    winner_id     INTEGER REFERENCES users(telegram_id),
-    ticket_ref    TEXT,
-    opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-    closed_at     TEXT,
-    drawn_at      TEXT
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    status           TEXT    NOT NULL DEFAULT 'open',
+    pool             REAL    NOT NULL DEFAULT 0,
+    draw_date        TEXT,
+    winner_id        INTEGER REFERENCES users(telegram_id),
+    ticket_ref       TEXT,
+    opened_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    closed_at        TEXT,
+    drawn_at         TEXT,
+    jackpot          INTEGER DEFAULT 0,
+    tickets_target   INTEGER DEFAULT 25,
+    price_per_share  REAL    DEFAULT 5,
+    winning_numbers  TEXT,
+    bonus_number     INTEGER,
+    ticket_numbers   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS participations (
@@ -36,6 +42,8 @@ CREATE TABLE IF NOT EXISTS participations (
     round_id      INTEGER NOT NULL REFERENCES rounds(id),
     user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
     amount        REAL    NOT NULL,
+    shares        INTEGER DEFAULT 1,
+    prize         REAL    DEFAULT 0,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE(round_id, user_id)
 );
@@ -78,6 +86,14 @@ async def get_db() -> aiosqlite.Connection:
     for col_sql in [
         "ALTER TABLE rounds ADD COLUMN draw_date TEXT",
         "ALTER TABLE users  ADD COLUMN stripe_customer_id TEXT",
+        "ALTER TABLE rounds ADD COLUMN jackpot INTEGER DEFAULT 0",
+        "ALTER TABLE rounds ADD COLUMN tickets_target INTEGER DEFAULT 25",
+        "ALTER TABLE rounds ADD COLUMN price_per_share REAL DEFAULT 5",
+        "ALTER TABLE rounds ADD COLUMN winning_numbers TEXT",
+        "ALTER TABLE rounds ADD COLUMN bonus_number INTEGER",
+        "ALTER TABLE rounds ADD COLUMN ticket_numbers TEXT",
+        "ALTER TABLE participations ADD COLUMN shares INTEGER DEFAULT 1",
+        "ALTER TABLE participations ADD COLUMN prize REAL DEFAULT 0",
     ]:
         try:
             await db.execute(col_sql)
@@ -135,6 +151,19 @@ async def set_round_winner(db, round_id, winner_id, ticket_ref):
 
 async def recent_rounds(db, limit=10):
     async with db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT ?", (limit,)) as c:
+        return await c.fetchall()
+
+async def all_rounds_with_participation(db, user_id, limit=20):
+    """Return all rounds joined with user participation data."""
+    async with db.execute(
+        """SELECT r.*,
+             p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
+             (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count
+           FROM rounds r
+           LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
+           ORDER BY r.id DESC LIMIT ?""",
+        (user_id, limit)
+    ) as c:
         return await c.fetchall()
 
 

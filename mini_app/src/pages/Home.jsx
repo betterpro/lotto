@@ -14,6 +14,20 @@ const STRIPE_APPEARANCE = {
   },
 }
 
+function fmtCAD(n, decimals = 2) {
+  return '$' + Number(n || 0).toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+function fmtBig(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(0) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(0) + 'K'
+  return String(n)
+}
+function getInitials(name) {
+  if (!name) return '?'
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+}
+
+// ─── Stripe payment form ────────────────────────────────────────────────────
 function PaymentForm({ onSuccess, onError }) {
   const stripe = useStripe(), elements = useElements()
   const [busy, setBusy] = useState(false)
@@ -41,6 +55,7 @@ function PaymentForm({ onSuccess, onError }) {
   )
 }
 
+// ─── Top-up sheet ───────────────────────────────────────────────────────────
 function TopUpSheet({ open, onClose, onSuccess }) {
   const [tab, setTab] = useState('once')
   const [amount, setAmount] = useState(50)
@@ -50,9 +65,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
 
   useEffect(() => {
     if (!open) { setClientSecret(null); return }
-    api.stripe.config()
-      .then(cfg => setStripePromise(loadStripe(cfg.publishable_key)))
-      .catch(() => {})
+    api.stripe.config().then(cfg => setStripePromise(loadStripe(cfg.publishable_key))).catch(() => {})
   }, [open])
 
   async function pay() {
@@ -84,7 +97,6 @@ function TopUpSheet({ open, onClose, onSuccess }) {
               }}>{l}</button>
             ))}
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 16 }}>
             {presets.map(p => (
               <button key={p} onClick={() => { setAmount(p); setClientSecret(null) }} style={{
@@ -96,10 +108,8 @@ function TopUpSheet({ open, onClose, onSuccess }) {
               }}>${p}</button>
             ))}
           </div>
-
           {clientSecret && stripePromise ? (
-            <Elements stripe={stripePromise}
-              options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
+            <Elements stripe={stripePromise} options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
               <PaymentForm
                 onSuccess={() => { setClientSecret(null); onSuccess(amount, tab); onClose() }}
                 onError={msg => alert(msg)}
@@ -109,7 +119,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
             <>
               {tab === 'monthly' && (
                 <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 12, lineHeight: 1.5 }}>
-                  Authorize LottoChi to charge ${amount} CAD on the 4th of each month until cancelled.
+                  Authorize LOTTOO to charge ${amount} CAD on the 4th of each month until cancelled.
                 </p>
               )}
               <button className="btn btn-primary btn-block" onClick={pay}>
@@ -117,9 +127,8 @@ function TopUpSheet({ open, onClose, onSuccess }) {
               </button>
             </>
           )}
-
           <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            🔒 Secured by Stripe · No card data stored on LottoChi
+            🔒 Secured by Stripe · No card data stored on LOTTOO
           </div>
         </div>
       </div>
@@ -127,8 +136,9 @@ function TopUpSheet({ open, onClose, onSuccess }) {
   )
 }
 
+// ─── Join sheet ──────────────────────────────────────────────────────────────
 function JoinSheet({ open, onClose, round, user, onJoined }) {
-  const PRICE = 5
+  const PRICE = round?.price_per_share || 5
   const [shares, setShares] = useState(1)
   const [busy, setBusy] = useState(false)
   const cost = shares * PRICE
@@ -147,7 +157,7 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
   if (!open || !round) return null
   const poolAfter = (round.pool || 0) + cost
   const myStakeAfter = (round.my_stake || 0) + cost
-  const sharePct = (myStakeAfter / poolAfter * 100).toFixed(1)
+  const sharePct = poolAfter > 0 ? (myStakeAfter / poolAfter * 100).toFixed(1) : '0.0'
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
@@ -159,7 +169,7 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
         </div>
         <div className="body">
           <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 12 }}>
-            Each share = $5 in the pool
+            Each share = {fmtCAD(PRICE, 0)} in the pool
           </p>
           <div className="stepper" style={{ marginBottom: 12 }}>
             <button className="stepper-btn" onClick={() => setShares(Math.max(1, shares - 1))}>−</button>
@@ -180,10 +190,10 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
           </div>
           <div className="card" style={{ marginBottom: 16 }}>
             {[
-              ['Cost',          `$${cost.toFixed(2)}`,   null],
-              ['Balance before',`$${(user?.credit??0).toFixed(2)}`, 'var(--tx-2)'],
-              ['Balance after', `$${after.toFixed(2)}`,  after < 0 ? 'var(--danger)' : 'var(--money)'],
-              ['Your pool share',`${sharePct}%`,          null],
+              ['Cost',           fmtCAD(cost),                null],
+              ['Balance before', fmtCAD(user?.credit ?? 0),  'var(--tx-2)'],
+              ['Balance after',  fmtCAD(after),               after < 0 ? 'var(--danger)' : 'var(--money)'],
+              ['Your pool share',`${sharePct}%`,               null],
             ].map(([k,v,c]) => (
               <div key={k} className="sum-row">
                 <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
@@ -192,9 +202,9 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
             ))}
           </div>
           {after < 0
-            ? <button className="btn btn-money btn-block">Top up to continue</button>
+            ? <button className="btn btn-money btn-block" onClick={() => { onClose() }}>Top up to continue</button>
             : <button className="btn btn-primary btn-block" disabled={busy} onClick={confirm}>
-                {busy ? 'Processing…' : `Confirm · $${cost.toFixed(2)}`}
+                {busy ? 'Processing…' : `Confirm · ${fmtCAD(cost)}`}
               </button>
           }
         </div>
@@ -203,13 +213,10 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
   )
 }
 
-function getInitials(name) {
-  if (!name) return '?'
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
-}
-
+// ─── Home screen ─────────────────────────────────────────────────────────────
 export default function Home({ user, onUserUpdate }) {
   const [round, setRound]   = useState(undefined)
+  const [lastDrawn, setLastDrawn] = useState(null)
   const [sub, setSub]       = useState(null)
   const [topUp, setTopUp]   = useState(false)
   const [join, setJoin]     = useState(false)
@@ -217,12 +224,23 @@ export default function Home({ user, onUserUpdate }) {
 
   useEffect(() => {
     api.round().then(d => setRound(d.round)).catch(() => setRound(null))
+    api.rounds().then(d => {
+      const drawn = (d.rounds || []).find(r => r.display_status === 'DRAWN')
+      setLastDrawn(drawn || null)
+    }).catch(() => {})
     api.stripe.subscription().then(r => setSub(r.subscription)).catch(() => {})
   }, [])
 
-  const isLive     = round?.display_status === 'live'
-  const myShares   = round?.my_stake ? Math.round(round.my_stake / 5) : 0
-  const totalShares= round?.pool     ? Math.round(round.pool / 5) : 0
+  const isLive    = round?.display_status === 'OPEN'
+  const isClosing = round?.display_status === 'CLOSING'
+  const myShares  = round?.my_stake ? Math.round(round.my_stake / (round.price_per_share || 5)) : 0
+  const poolTarget = (round?.tickets_target || 25) * (round?.price_per_share || 5)
+  const poolRaised = round?.pool || 0
+  const poolPct    = poolTarget > 0 ? Math.min(1, poolRaised / poolTarget) : 0
+  const jackpot    = round?.jackpot || 0
+  const winPot     = jackpot && poolRaised > 0 && round?.my_stake
+    ? Math.round((round.my_stake / poolRaised) * (jackpot / (round.tickets_target || 25)))
+    : null
 
   return (
     <div className="tab-content">
@@ -235,18 +253,15 @@ export default function Home({ user, onUserUpdate }) {
           <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Welcome back</span>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>
         </div>
-        <div className="chip chip-money" onClick={() => setTopUp(true)}
-          style={{ cursor: 'pointer', gap: 6 }}>
+        <div className="chip chip-money" onClick={() => setTopUp(true)} style={{ cursor: 'pointer', gap: 6 }}>
           <WalletIcon width={13} height={13} />
-          <span className="mono">${(user.credit ?? 0).toFixed(2)}</span>
+          <span className="mono">{fmtCAD(user.credit ?? 0)}</span>
         </div>
       </div>
 
       {/* Live round hero */}
       {round === undefined ? (
-        <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}>
-          <div className="spinner" />
-        </div>
+        <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
       ) : !round ? (
         <div style={{ padding: '8px 16px' }}>
           <div className="jackpot" style={{ textAlign: 'center', padding: '40px 18px' }}>
@@ -258,25 +273,43 @@ export default function Home({ user, onUserUpdate }) {
       ) : (
         <div style={{ padding: '8px 16px 4px' }}>
           <div className="jackpot">
+            {/* Status row */}
             <div className="row between" style={{ marginBottom: 14 }}>
               <div className="row gap-8">
                 <span className="status-dot live" />
                 <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
-                  {round.display_status === 'live' ? 'LIVE ROUND' : round.display_status === 'closing' ? 'CLOSING SOON' : 'LAST ROUND'}
+                  {isClosing ? 'CLOSING SOON' : 'LIVE ROUND'}
                 </span>
               </div>
               <span className="mono dim" style={{ fontSize: 12 }}>#{round.id}</span>
             </div>
 
-            <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
-              Current pool
-            </div>
-            <div className="pool-display">
-              <span className="cur">$</span>
-              <span className="amt">{(round.pool ?? 0).toFixed(0)}</span>
-              <span className="unit">CAD</span>
-            </div>
+            {/* Jackpot */}
+            {jackpot > 0 ? (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+                  Estimated jackpot
+                </div>
+                <div className="pool-display">
+                  <span className="cur">$</span>
+                  <span className="amt">{fmtBig(jackpot)}</span>
+                  <span className="unit">CAD</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+                  Current pool
+                </div>
+                <div className="pool-display">
+                  <span className="cur">$</span>
+                  <span className="amt">{fmtBig(poolRaised)}</span>
+                  <span className="unit">CAD</span>
+                </div>
+              </>
+            )}
 
+            {/* Countdown */}
             {round.draw_date && (
               <div style={{ margin: '18px 0 14px' }}>
                 <Countdown to={round.draw_date + (round.draw_date.includes('T') ? '' : 'T22:30:00')} />
@@ -287,6 +320,23 @@ export default function Home({ user, onUserUpdate }) {
               </div>
             )}
 
+            {/* Pool progress */}
+            {jackpot > 0 && (
+              <>
+                <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                    Pool · {round.tickets_target || 25} tickets target
+                  </span>
+                  <span className="mono" style={{ fontSize: 12 }}>
+                    <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
+                    <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
+                  </span>
+                </div>
+                <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
+              </>
+            )}
+
+            {/* Participants */}
             <div className="row between" style={{ marginTop: 14 }}>
               <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
                 {round.participants?.length ?? 0} participant{(round.participants?.length ?? 0) !== 1 ? 's' : ''}
@@ -298,11 +348,10 @@ export default function Home({ user, onUserUpdate }) {
               )}
             </div>
 
-            {isLive && (
-              <button className="btn btn-primary btn-block" style={{ marginTop: 16 }}
-                onClick={() => setJoin(true)}>
+            {(isLive || isClosing) && (
+              <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} onClick={() => setJoin(true)}>
                 <PlusIcon width={16} height={16} />
-                {round.my_stake ? 'Add more shares · $5 each' : 'Join · $5 per share'}
+                {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
               </button>
             )}
           </div>
@@ -320,16 +369,30 @@ export default function Home({ user, onUserUpdate }) {
                   <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Shares owned</span>
                   <div className="row gap-8" style={{ alignItems: 'baseline' }}>
                     <span className="mono" style={{ fontSize: 26, fontWeight: 700 }}>{myShares}</span>
-                    <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>/ {totalShares}</span>
+                    <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>
+                      / {round.participants?.length || '—'}
+                    </span>
                   </div>
-                  <span style={{ fontSize: 11, color: 'var(--money)' }}>= ${round.my_stake.toFixed(2)} invested</span>
+                  <span style={{ fontSize: 11, color: 'var(--money)' }}>
+                    = {fmtCAD(round.my_stake)} invested
+                  </span>
                 </div>
                 <div className="col gap-4" style={{ alignItems: 'flex-end' }}>
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Win chance</span>
-                  <span className="mono" style={{ fontSize: 26, fontWeight: 700, color: 'var(--gold)' }}>
-                    {round.my_pct}%
+                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                    {winPot ? 'Win potential' : 'Win chance'}
                   </span>
-                  <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>of pool</span>
+                  {winPot ? (
+                    <>
+                      <span className="mono" style={{ fontSize: 26, fontWeight: 700, color: 'var(--gold)' }}>
+                        ${fmtBig(winPot)}
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>if 1 ticket wins jackpot</span>
+                    </>
+                  ) : (
+                    <span className="mono" style={{ fontSize: 26, fontWeight: 700, color: 'var(--gold)' }}>
+                      {round.my_pct}%
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -342,7 +405,7 @@ export default function Home({ user, onUserUpdate }) {
       <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div className="stat">
           <span className="k">Wallet</span>
-          <span className="v">${(user.credit ?? 0).toFixed(2)}</span>
+          <span className="v">{fmtCAD(user.credit ?? 0)}</span>
           <span className="delta" style={{ color: 'var(--tg)', cursor: 'pointer' }}
             onClick={() => setTopUp(true)}>Tap to top up →</span>
         </div>
@@ -354,7 +417,7 @@ export default function Home({ user, onUserUpdate }) {
         {sub && (
           <div className="stat" style={{ gridColumn: 'span 2' }}>
             <span className="k">Monthly plan</span>
-            <span className="v" style={{ color: 'var(--money)' }}>${sub.amount}/mo</span>
+            <span className="v" style={{ color: 'var(--money)', fontSize: 18 }}>${sub.amount}/mo</span>
             {sub.next_billing && <span className="delta">Next charge: {sub.next_billing}</span>}
           </div>
         )}
@@ -362,11 +425,8 @@ export default function Home({ user, onUserUpdate }) {
 
       {/* Refer & earn */}
       <div className="section"><div className="label">Earn free credit</div></div>
-      <div className="stack" style={{ marginBottom: 12 }}>
-        <div className="card" style={{
-          background: 'linear-gradient(135deg, rgba(46,166,255,.08), rgba(78,208,122,.06))',
-          borderColor: 'rgba(46,166,255,.2)',
-        }}>
+      <div className="stack">
+        <div className="ref-card">
           <div className="row gap-12">
             <div style={{
               width: 44, height: 44, borderRadius: 12, flexShrink: 0,
@@ -384,10 +444,45 @@ export default function Home({ user, onUserUpdate }) {
           </div>
           <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 12 }}
             onClick={() => showToast('Share link copied to clipboard', 'success')}>
-            <ShareIcon width={14} height={14} /> Share my LottoChi link
+            <ShareIcon width={14} height={14} /> Share my LOTTOO link
           </button>
         </div>
       </div>
+
+      {/* Last drawn round result */}
+      {lastDrawn && (
+        <>
+          <div className="section">
+            <div className="row between">
+              <div className="label" style={{ marginBottom: 0 }}>Last round</div>
+            </div>
+          </div>
+          <div className="stack" style={{ marginBottom: 12 }}>
+            <div className="card">
+              <div className="row between" style={{ marginBottom: 8 }}>
+                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
+                  Round #{lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
+                </span>
+                <span className="status-pill drawn">DRAWN</span>
+              </div>
+              <div className="row between">
+                {lastDrawn.my_prize > 0 ? (
+                  <span className="chip chip-money">Won {fmtCAD(lastDrawn.my_prize)}</span>
+                ) : lastDrawn.my_stake ? (
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>No prize this round</span>
+                ) : (
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Did not join</span>
+                )}
+                {lastDrawn.jackpot > 0 && (
+                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                    ${fmtBig(lastDrawn.jackpot)} jackpot
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       <TopUpSheet open={topUp} onClose={() => setTopUp(false)}
         onSuccess={(amt, plan) => {
