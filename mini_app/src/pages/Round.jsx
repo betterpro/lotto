@@ -1,255 +1,206 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
-import Toast from '../components/Toast.jsx'
+import { useToast } from '../components/Toast.jsx'
+import { StatusPill } from '../components/StatusPill.jsx'
+import { TrophyIcon, TicketIcon } from '../components/Icon.jsx'
 
-// ── Date helpers ──────────────────────────────────────────────────────────────
-function fmtDate(s) {
-  if (!s) return ''
-  const [y, m, d] = s.split('-').map(Number)
-  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  return `${MON[m - 1]} ${d}, ${y}`
+function fmtCAD(n) {
+  return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
 function drawLabel(s) {
   if (!s) return null
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const draw  = new Date(s + 'T00:00:00')
+  const today = new Date(); today.setHours(0,0,0,0)
+  const draw  = new Date(s.includes('T') ? s : s + 'T00:00:00')
   const diff  = Math.round((draw - today) / 86400000)
-  if (diff === 0)  return 'Draw is today'
-  if (diff === 1)  return 'Draw is tomorrow'
-  if (diff > 1)   return `Draw in ${diff} days`
-  return `Drawn ${-diff} day${-diff !== 1 ? 's' : ''} ago`
+  if (diff === 0) return 'Draw today'
+  if (diff === 1) return 'Draw tomorrow'
+  if (diff > 1)  return `Draw in ${diff} days`
+  return `Drawn ${-diff}d ago`
 }
 
-// ── Status badge ─────────────────────────────────────────────────────────────
-const STATUS_CFG = {
-  live:    { cls: 'bg-green',  label: 'Live'         },
-  closing: { cls: 'bg-yellow', label: 'Closing Soon' },
-  done:    { cls: 'bg-red',    label: 'Done'         },
-}
-
-function StatusBadge({ ds }) {
-  const { cls, label } = STATUS_CFG[ds] ?? { cls: 'bg-gray', label: ds }
-  return <span className={`badge ${cls}`}>{label}</span>
-}
-
-// ── Done: results view ────────────────────────────────────────────────────────
-function DoneView({ round, currency }) {
-  const { pool, winner_name, participants, my_won, my_stake, my_pct, drawn_at } = round
-  return (
-    <>
-      {/* Winner card */}
-      <div className="card" style={{ border: '2px solid #f44336', textAlign: 'center', padding: '20px 16px' }}>
-        <div style={{ fontSize: 40, marginBottom: 8 }}>🏆</div>
-        <div style={{ fontWeight: 700, fontSize: 20 }}>{winner_name}</div>
-        <div style={{ fontWeight: 700, fontSize: 28, color: '#27ae60', margin: '6px 0' }}>
-          {pool.toFixed(2)} {currency}
-        </div>
-        <div className="hint">Prize pool won</div>
-        {drawn_at && <div className="hint" style={{ fontSize: 11, marginTop: 4 }}>
-          Drawn {drawn_at.slice(0, 10)}
-        </div>}
-      </div>
-
-      {/* My result */}
-      {my_stake != null && (
-        <div className="card" style={{
-          background: my_won ? '#e8f5e9' : '#fce4ec',
-          border: `1.5px solid ${my_won ? '#a5d6a7' : '#ef9a9a'}`,
-        }}>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>
-            {my_won ? '🏆 You won!' : "😔 You didn't win this time"}
-          </div>
-          <div className="hint mt4">
-            Your stake: {my_stake.toFixed(2)} {currency} · {my_pct}% chance
-          </div>
-          {my_won && (
-            <div style={{ fontWeight: 700, fontSize: 20, color: '#27ae60', marginTop: 6 }}>
-              +{pool.toFixed(2)} {currency} credited
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* All results */}
-      <div className="section-label">Results</div>
-      <div className="card">
-        {participants.map(p => (
-          <div key={p.user_id} className="list-row">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 20 }}>{p.won ? '✅' : '❌'}</span>
-              <div>
-                <div style={{ fontWeight: 500 }}>{p.full_name}</div>
-                <div className="hint" style={{ fontSize: 12 }}>
-                  {p.amount.toFixed(2)} {currency} · {p.pct}% chance
-                </div>
-              </div>
-            </div>
-            {p.won
-              ? <div style={{ fontWeight: 700, color: '#27ae60', fontSize: 15 }}>
-                  +{pool.toFixed(2)}
-                </div>
-              : <div className="hint">—</div>
-            }
-          </div>
-        ))}
-      </div>
-    </>
-  )
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
-export default function Round({ user, onUserUpdate }) {
-  const currency = 'CAD'
-  const [data,   setData]   = useState(undefined)
-  const [show,   setShow]   = useState(false)
-  const [amount, setAmount] = useState('')
-  const [busy,   setBusy]   = useState(false)
-  const [toast,  setToast]  = useState(null)
-
-  function showToast(msg, error = false) {
-    setToast({ msg, error }); setTimeout(() => setToast(null), 3500)
-  }
-
-  async function load() {
-    try { const d = await api.round(); setData(d.round) }
-    catch { setData(null) }
-  }
-  useEffect(() => { load() }, [])
-
-  async function submit(e) {
-    e.preventDefault()
-    const n = parseFloat(amount)
-    if (!n || n <= 0) return
-    setBusy(true)
-    try {
-      const res = await api.participate(n)
-      showToast(`Staked ${n.toFixed(2)} ${currency}! Your chance: ${res.my_pct}%`)
-      setAmount(''); setShow(false)
-      await load()
-      api.me().then(onUserUpdate).catch(() => {})
-    } catch (err) {
-      showToast(err.message, true)
-    } finally { setBusy(false) }
-  }
-
-  // Loading
-  if (data === undefined) return (
-    <div className="page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', paddingTop: 80 }}>
-      <div className="spinner" />
-    </div>
-  )
-
-  // No round ever
-  if (!data) return (
-    <div className="page">
-      <div className="empty-state">
-        <div className="icon">🎰</div>
-        <p>No active round</p>
-        <p className="hint">The trustee will open one soon!</p>
-      </div>
-    </div>
-  )
-
-  const { id, display_status: ds, pool, draw_date, participants, my_stake, my_pct } = data
-  const canParticipate = ds === 'live'
+function RoundDetail({ round, onClose }) {
+  const ds = round.display_status
+  const isDone = ds === 'done'
 
   return (
-    <div className="page">
-      {/* Header card */}
-      <div className="card">
-        <div className="row" style={{ marginBottom: 8 }}>
-          <div className="card-label" style={{ marginBottom: 0 }}>Round #{id}</div>
-          <StatusBadge ds={ds} />
+    <div className="sheet-overlay" onClick={onClose}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
+        <div className="handle" />
+        <div className="sheet-head">
+          <span className="sheet-title">Round #{round.id}</span>
+          <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
-        <div className="big-num">{pool.toFixed(2)}</div>
-        <div className="sub">
-          {currency} pool · {participants.length} participant{participants.length !== 1 ? 's' : ''}
-        </div>
-        {draw_date && (
-          <div className="hint mt8" style={{ fontSize: 13 }}>
-            📅 {drawLabel(draw_date)} ({fmtDate(draw_date)})
+        <div className="body">
+          <div className="row between" style={{ marginBottom: 16 }}>
+            <div className="col gap-4">
+              <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pool</span>
+              <span className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--gold)' }}>
+                {fmtCAD(round.pool)}
+              </span>
+            </div>
+            <StatusPill status={ds} />
           </div>
-        )}
-      </div>
 
-      {/* Done state */}
-      {ds === 'done' && <DoneView round={data} currency={currency} />}
-
-      {/* Live / Closing state */}
-      {ds !== 'done' && (
-        <>
-          {/* My stake */}
-          {my_stake != null && (
-            <div className="card">
-              <div className="card-label">Your Stake</div>
-              <div className="row">
-                <span style={{ fontWeight: 600, fontSize: 18 }}>{my_stake.toFixed(2)} {currency}</span>
-                <span className="badge bg-blue">{my_pct}% chance</span>
-              </div>
+          {isDone && round.winner_name && (
+            <div className="card" style={{ marginBottom: 12, textAlign: 'center', borderColor: 'rgba(245,199,59,.3)' }}>
+              <div style={{ fontSize: 32, marginBottom: 6 }}>🏆</div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{round.winner_name}</div>
+              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginTop: 4 }}>Winner · took the pool</div>
             </div>
           )}
 
-          {/* Participate / closing notice */}
-          {canParticipate
-            ? <button className="btn" onClick={() => setShow(true)}>
-                {my_stake != null ? 'Add More Stake' : '🎟 Participate'}
-              </button>
-            : <div className="card" style={{ background: '#fff8e1', border: '1.5px solid #ffe082', textAlign: 'center' }}>
-                <div style={{ fontWeight: 600, color: '#e65100' }}>⏳ Participation Closed</div>
-                <div className="hint mt4">The draw is imminent — no more entries.</div>
-              </div>
-          }
-
-          {/* Participants */}
-          {participants.length > 0 && (
+          {round.my_stake != null && (
             <>
-              <div className="section-label">Participants</div>
-              <div className="card">
-                {participants.map(p => (
-                  <div key={p.user_id} style={{ marginBottom: 14 }}>
-                    <div className="row">
-                      <span style={{ fontWeight: 500 }}>{p.full_name}</span>
-                      <span className="hint">{p.pct}%</span>
-                    </div>
-                    <div className="bar">
-                      <div className="bar-fill" style={{ width: `${p.pct}%` }} />
-                    </div>
-                    <div className="hint" style={{ fontSize: 11 }}>{p.amount.toFixed(2)} {currency}</div>
+              <div className="label" style={{ marginTop: 12 }}>Your stake</div>
+              <div className="card" style={{ marginBottom: 16 }}>
+                {[
+                  ['Invested',    fmtCAD(round.my_stake),    null],
+                  ['Win chance',  `${round.my_pct}%`,         null],
+                  isDone ? ['Result', round.my_won ? `🏆 Winner!` : 'No prize',
+                            round.my_won ? 'var(--money)' : 'var(--tx-3)'] : null,
+                ].filter(Boolean).map(([k, v, c]) => (
+                  <div key={k} className="sum-row">
+                    <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
+                    <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: c || '#fff' }}>{v}</span>
                   </div>
                 ))}
               </div>
             </>
           )}
-        </>
-      )}
 
-      {/* Participate modal */}
-      {show && (
-        <div className="overlay" onClick={() => setShow(false)}>
-          <div className="sheet" onClick={e => e.stopPropagation()}>
-            <div className="sheet-title">{my_stake != null ? 'Add Stake' : 'Participate'} — Round #{id}</div>
-            {draw_date && (
-              <div className="hint" style={{ marginBottom: 12 }}>
-                📅 {drawLabel(draw_date)} ({fmtDate(draw_date)})
+          <div className="label">All participants</div>
+          <div className="card">
+            {(round.participants || []).map(p => (
+              <div key={p.user_id} style={{ marginBottom: 12 }}>
+                <div className="row between">
+                  <span style={{ fontWeight: 500 }}>{p.won ? '🏆 ' : ''}{p.full_name}</span>
+                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>{p.pct}%</span>
+                </div>
+                <div className="bar" style={{ marginTop: 4 }}>
+                  <span style={{ width: `${p.pct}%` }} />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 2 }}>{fmtCAD(p.amount)}</div>
               </div>
-            )}
-            <p className="hint" style={{ marginBottom: 12 }}>
-              Balance: <strong>{user.credit.toFixed(2)} {currency}</strong>
-            </p>
-            <form onSubmit={submit}>
-              <input className="inp" type="number" min="0.01" max={user.credit} step="any"
-                placeholder={`Amount (${currency})`} value={amount}
-                onChange={e => setAmount(e.target.value)} autoFocus />
-              <button className="btn mb0" type="submit" disabled={busy || !amount}>
-                {busy ? 'Processing…' : 'Confirm Stake'}
-              </button>
-            </form>
+            ))}
           </div>
         </div>
-      )}
+      </div>
+    </div>
+  )
+}
 
-      {toast && <Toast msg={toast.msg} error={toast.error} />}
+export default function Round() {
+  const [data, setData]     = useState(undefined)
+  const [detail, setDetail] = useState(false)
+  const [showToast, toastNode] = useToast()
+
+  useEffect(() => {
+    api.round().then(d => setData(d.round)).catch(() => setData(null))
+  }, [])
+
+  if (data === undefined) return (
+    <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 80 }}>
+      <div className="spinner" />
+    </div>
+  )
+
+  if (!data) return (
+    <div className="empty">
+      <span style={{ fontSize: 48 }}>🎰</span>
+      <span className="e-title">No active round</span>
+      <span className="e-sub">The trustee will open one soon!</span>
+    </div>
+  )
+
+  const { id, display_status: ds, pool, draw_date, participants, my_stake, my_pct, my_won, winner_name } = data
+  const isDone   = ds === 'done'
+  const isLive   = ds === 'live'
+  const myShares = my_stake ? Math.round(my_stake / 5) : 0
+
+  return (
+    <div className="tab-content">
+      {toastNode}
+
+      {/* Summary card */}
+      <div style={{ padding: '10px 16px 6px' }}>
+        <div className="card" style={{ background: 'linear-gradient(135deg, #1f2c3a, #1a2531)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            {[
+              ['Pool',    fmtCAD(pool),             'CAD'],
+              ['Players', participants.length,       'participants'],
+              ['My stake',my_stake ? fmtCAD(my_stake) : '—',
+               myShares > 0 ? `${myShares} share${myShares !== 1 ? 's' : ''}` : 'not joined'],
+            ].map(([k, v, sub], i) => (
+              <div key={k} className="col gap-4" style={i ? { borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 } : {}}>
+                <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>{k}</span>
+                <span className="mono" style={{ fontSize: 18, fontWeight: 700, color: i === 2 && my_stake ? 'var(--money)' : undefined }}>{v}</span>
+                <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{sub}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Round card */}
+      <div style={{ padding: '6px 16px 16px' }}>
+        <div className="round-row" onClick={() => setDetail(true)}>
+          <div className="row between" style={{ marginBottom: 8 }}>
+            <div className="row gap-10">
+              <div style={{
+                width: 38, height: 38, borderRadius: 10, flexShrink: 0,
+                background: isDone && my_won ? 'rgba(245,199,59,.14)' : isLive ? 'rgba(78,208,122,.14)' : 'var(--bg-3)',
+                color: isDone && my_won ? 'var(--gold)' : isLive ? 'var(--money)' : 'var(--tx-2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {isDone && my_won ? <TrophyIcon width={20} height={20} /> : <TicketIcon width={20} height={20} />}
+              </div>
+              <div className="col">
+                <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{id}</span>
+                <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                  {draw_date ? drawLabel(draw_date) + ' · ' : ''}{fmtCAD(pool)} pool
+                </span>
+              </div>
+            </div>
+            <StatusPill status={ds} />
+          </div>
+
+          <div style={{ height: '.5px', background: 'var(--hairline)', margin: '6px 0 10px' }} />
+
+          <div className="row between">
+            <div className="row gap-12">
+              {my_stake != null && (
+                <div className="col">
+                  <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>STAKE</span>
+                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{fmtCAD(my_stake)}</span>
+                </div>
+              )}
+              {my_pct != null && (
+                <div className="col">
+                  <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>CHANCE</span>
+                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{my_pct}%</span>
+                </div>
+              )}
+            </div>
+            {isDone
+              ? my_won
+                ? <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--money)' }}>🏆 Won!</span>
+                : winner_name
+                  ? <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Won by {winner_name}</span>
+                  : <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Drawn</span>
+              : isLive && !my_stake
+                ? <span className="chip chip-tg">JOIN ›</span>
+                : null
+            }
+          </div>
+        </div>
+
+        <p style={{ fontSize: 12, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
+          Tap the round card for full details
+        </p>
+      </div>
+
+      {detail && <RoundDetail round={data} onClose={() => setDetail(false)} />}
     </div>
   )
 }
