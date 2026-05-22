@@ -18,3 +18,9 @@ services:
         value: CAD
       - key: DB_PATH
         value: /data/lotto.db
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
