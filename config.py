@@ -6,7 +6,7 @@ load_dotenv()
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]
 TRUSTEE_ID: int = int(os.environ["TRUSTEE_TELEGRAM_ID"])
 CURRENCY: str = os.getenv("CURRENCY", "CAD")
-DB_PATH: str = os.getenv("DB_PATH", "lotto.db")
+DATABASE_URL: str = os.environ["DATABASE_URL"]
 MINI_APP_URL: str = os.getenv("MINI_APP_URL", "")
 STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_PUBLISHABLE_KEY: str = os.getenv("STRIPE_PUBLISHABLE_KEY", "")

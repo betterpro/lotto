@@ -1,128 +1,131 @@
 """
-SQLite database layer — all I/O is async via aiosqlite.
+Async PostgreSQL layer via asyncpg with an aiosqlite-compatible interface.
+
+Drop-in replacement for the old aiosqlite layer: same get_db() signature,
+same helper functions, same ? placeholders and row dict semantics.
 """
+import re
+from decimal import Decimal
 
-import aiosqlite
-from config import DB_PATH
+import asyncpg
 
-SCHEMA = """
-PRAGMA journal_mode=WAL;
+from config import DATABASE_URL
 
-CREATE TABLE IF NOT EXISTS users (
-    telegram_id        INTEGER PRIMARY KEY,
-    username           TEXT,
-    full_name          TEXT    NOT NULL,
-    credit             REAL    NOT NULL DEFAULT 0,
-    is_trustee         INTEGER NOT NULL DEFAULT 0,
-    invited_by         INTEGER REFERENCES users(telegram_id),
-    stripe_customer_id TEXT,
-    photo_url          TEXT,
-    created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
-);
+# ── Pool singleton ────────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS user_settings (
-    user_id              INTEGER PRIMARY KEY REFERENCES users(telegram_id),
-    auto_participate     INTEGER NOT NULL DEFAULT 0,
-    shares_per_round     INTEGER NOT NULL DEFAULT 1,
-    max_rounds_per_month INTEGER NOT NULL DEFAULT 4,
-    preferred_day        INTEGER,
-    lottery_preference   TEXT    NOT NULL DEFAULT 'both',
-    notif_new_round      INTEGER NOT NULL DEFAULT 1,
-    notif_reminder       INTEGER NOT NULL DEFAULT 1,
-    notif_ticket         INTEGER NOT NULL DEFAULT 1,
-    notif_results        INTEGER NOT NULL DEFAULT 1,
-    updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
-);
+_pool: asyncpg.Pool | None = None
 
-CREATE TABLE IF NOT EXISTS rounds (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    status           TEXT    NOT NULL DEFAULT 'open',
-    pool             REAL    NOT NULL DEFAULT 0,
-    draw_date        TEXT,
-    winner_id        INTEGER REFERENCES users(telegram_id),
-    ticket_ref       TEXT,
-    opened_at        TEXT    NOT NULL DEFAULT (datetime('now')),
-    closed_at        TEXT,
-    drawn_at         TEXT,
-    jackpot          INTEGER DEFAULT 0,
-    tickets_target   INTEGER DEFAULT 25,
-    price_per_share  REAL    DEFAULT 5,
-    winning_numbers  TEXT,
-    bonus_number     INTEGER,
-    ticket_numbers   TEXT
-);
-
-CREATE TABLE IF NOT EXISTS participations (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    round_id      INTEGER NOT NULL REFERENCES rounds(id),
-    user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
-    amount        REAL    NOT NULL,
-    shares        INTEGER DEFAULT 1,
-    prize         REAL    DEFAULT 0,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(round_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
-    type          TEXT    NOT NULL,
-    amount        REAL    NOT NULL,
-    note          TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS deposit_requests (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
-    amount        REAL    NOT NULL,
-    status        TEXT    NOT NULL DEFAULT 'pending',
-    trustee_note  TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    resolved_at   TEXT
-);
-
-CREATE TABLE IF NOT EXISTS stripe_subscriptions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id       INTEGER NOT NULL REFERENCES users(telegram_id),
-    stripe_sub_id TEXT    NOT NULL UNIQUE,
-    amount        REAL    NOT NULL,
-    status        TEXT    NOT NULL DEFAULT 'active',
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT
-);
-"""
+async def _get_pool() -> asyncpg.Pool:
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
+    return _pool
 
 
-async def get_db() -> aiosqlite.Connection:
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    await db.executescript(SCHEMA)
-    for col_sql in [
-        "ALTER TABLE rounds ADD COLUMN draw_date TEXT",
-        "ALTER TABLE users  ADD COLUMN stripe_customer_id TEXT",
-        "ALTER TABLE rounds ADD COLUMN jackpot INTEGER DEFAULT 0",
-        "ALTER TABLE rounds ADD COLUMN tickets_target INTEGER DEFAULT 25",
-        "ALTER TABLE rounds ADD COLUMN price_per_share REAL DEFAULT 5",
-        "ALTER TABLE rounds ADD COLUMN winning_numbers TEXT",
-        "ALTER TABLE rounds ADD COLUMN bonus_number INTEGER",
-        "ALTER TABLE rounds ADD COLUMN ticket_numbers TEXT",
-        "ALTER TABLE participations ADD COLUMN shares INTEGER DEFAULT 1",
-        "ALTER TABLE participations ADD COLUMN prize REAL DEFAULT 0",
-        "ALTER TABLE rounds ADD COLUMN ticket_image TEXT",
-        "ALTER TABLE users  ADD COLUMN photo_url TEXT",
-        "ALTER TABLE rounds ADD COLUMN lottery_type TEXT DEFAULT 'lotto_max'",
-        "ALTER TABLE users  ADD COLUMN email TEXT",
-        "ALTER TABLE deposit_requests ADD COLUMN payment_method TEXT DEFAULT 'etransfer'",
-        "ALTER TABLE deposit_requests ADD COLUMN ref_code TEXT",
-        "ALTER TABLE user_settings ADD COLUMN lottery_preference TEXT DEFAULT 'both'",
-    ]:
-        try:
-            await db.execute(col_sql)
-            await db.commit()
-        except Exception:
-            pass
-    return db
+# ── Row dict helper ───────────────────────────────────────────────────────────
+
+def _to_dict(row) -> dict:
+    """asyncpg Record → plain dict; Decimal → float for monetary columns."""
+    d = dict(row)
+    for k, v in d.items():
+        if isinstance(v, Decimal):
+            d[k] = float(v)
+    return d
+
+
+# ── Cursor shim ───────────────────────────────────────────────────────────────
+
+class _Cursor:
+    __slots__ = ("_rows", "lastrowid")
+
+    def __init__(self, rows, lastrowid=None):
+        self._rows = [_to_dict(r) for r in rows] if rows else []
+        self.lastrowid = lastrowid
+
+    async def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    async def fetchall(self):
+        return self._rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+
+# ── SQL adapter ───────────────────────────────────────────────────────────────
+
+_NOW = "to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
+
+
+def _adapt(sql: str, params: tuple) -> tuple[str, tuple]:
+    """Translate SQLite-flavoured SQL → PostgreSQL."""
+    # datetime('now') → TEXT timestamp matching SQLite's output format
+    sql = re.sub(r"datetime\('now'\)", _NOW, sql, flags=re.IGNORECASE)
+    # INSERT OR IGNORE INTO → INSERT INTO … ON CONFLICT DO NOTHING
+    if re.search(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', sql, re.IGNORECASE):
+        sql = re.sub(r'\bINSERT\s+OR\s+IGNORE\s+INTO\b', 'INSERT INTO', sql, flags=re.IGNORECASE)
+        if 'RETURNING' in sql.upper():
+            sql = re.sub(r'\bRETURNING\b', 'ON CONFLICT DO NOTHING RETURNING',
+                         sql, count=1, flags=re.IGNORECASE)
+        else:
+            sql = sql.rstrip().rstrip(';') + ' ON CONFLICT DO NOTHING'
+    # ? → $1, $2, …
+    if '?' in sql:
+        idx = 0
+        def _repl(_m):
+            nonlocal idx
+            idx += 1
+            return f'${idx}'
+        sql = re.sub(r'\?', _repl, sql)
+    return sql, params
+
+
+# ── DB wrapper ────────────────────────────────────────────────────────────────
+
+class _DB:
+    """Wraps an asyncpg connection with an aiosqlite-compatible interface."""
+
+    def __init__(self, conn: asyncpg.Connection):
+        self._conn = conn
+
+    # aiosqlite sets row_factory; ignore it
+    @property
+    def row_factory(self): return None
+    @row_factory.setter
+    def row_factory(self, _): pass
+
+    async def execute(self, sql: str, params: tuple = ()) -> _Cursor:
+        pg_sql, pg_params = _adapt(sql, params)
+        upper = sql.strip().upper()
+        if upper.startswith('SELECT') or upper.startswith('WITH'):
+            rows = await self._conn.fetch(pg_sql, *pg_params)
+            return _Cursor(rows)
+        elif 'RETURNING' in upper:
+            rows = await self._conn.fetch(pg_sql, *pg_params)
+            lastrowid = rows[0][0] if rows else None
+            return _Cursor(rows, lastrowid)
+        else:
+            await self._conn.execute(pg_sql, *pg_params)
+            return _Cursor([])
+
+    async def executescript(self, sql: str):
+        await self._conn.execute(sql)
+
+    async def commit(self):
+        pass  # asyncpg auto-commits each statement outside a transaction block
+
+    async def close(self):
+        pool = await _get_pool()
+        await pool.release(self._conn)
+
+
+async def get_db() -> _DB:
+    pool = await _get_pool()
+    conn = await pool.acquire()
+    return _DB(conn)
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -157,7 +160,9 @@ async def get_round(db, round_id):
         return await c.fetchone()
 
 async def create_round(db, draw_date=None):
-    async with db.execute("INSERT INTO rounds (status, draw_date) VALUES ('open', ?)", (draw_date,)) as c:
+    async with db.execute(
+        "INSERT INTO rounds (status, draw_date) VALUES ('open', ?) RETURNING id", (draw_date,)
+    ) as c:
         await db.commit()
         return c.lastrowid
 
@@ -176,7 +181,6 @@ async def recent_rounds(db, limit=10):
         return await c.fetchall()
 
 async def all_rounds_with_participation(db, user_id, limit=20):
-    """Return all rounds joined with user participation data."""
     async with db.execute(
         """SELECT r.*,
              p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
@@ -239,7 +243,9 @@ async def user_transactions(db, user_id, limit=15):
 # ── Deposit requests ──────────────────────────────────────────────────────────
 
 async def create_deposit_request(db, user_id, amount):
-    async with db.execute("INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)", (user_id, amount)) as c:
+    async with db.execute(
+        "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?) RETURNING id", (user_id, amount)
+    ) as c:
         await db.commit()
         return c.lastrowid
 

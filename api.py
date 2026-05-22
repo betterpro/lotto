@@ -677,7 +677,7 @@ async def etransfer_deposit(request: Request, x_init_data: str | None = Header(d
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     async with db.execute(
-        "INSERT INTO deposit_requests (user_id, amount, payment_method) VALUES (?,?,'etransfer')",
+        "INSERT INTO deposit_requests (user_id, amount, payment_method) VALUES (?,?,'etransfer') RETURNING id",
         (user["telegram_id"], amount),
     ) as cur:
         dep_id = cur.lastrowid
@@ -738,7 +738,7 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     draw_date = body.get("draw_date") or None
     lottery_type = body.get("lottery_type") or "lotto_max"
     async with db.execute(
-        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type) VALUES ('open', ?, ?, ?, ?, ?)",
+        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type) VALUES ('open', ?, ?, ?, ?, ?) RETURNING id",
         (draw_date, jackpot, tickets_target, price_per_share, lottery_type)
     ) as cur:
         round_id = cur.lastrowid
