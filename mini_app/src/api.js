@@ -21,6 +21,10 @@ async function req(method, path, body) {
 
 export const api = {
   me:           ()             => req('GET',  '/api/me'),
+  settings:     {
+    get: ()      => req('GET', '/api/settings'),
+    put: (body)  => req('PUT', '/api/settings', body),
+  },
   deposit:      (amount)       => req('POST', '/api/deposit', { amount }),
   round:        ()             => req('GET',  '/api/round'),
   rounds:       ()             => req('GET',  '/api/rounds'),

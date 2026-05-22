@@ -16,7 +16,21 @@ CREATE TABLE IF NOT EXISTS users (
     is_trustee         INTEGER NOT NULL DEFAULT 0,
     invited_by         INTEGER REFERENCES users(telegram_id),
     stripe_customer_id TEXT,
+    photo_url          TEXT,
     created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id              INTEGER PRIMARY KEY REFERENCES users(telegram_id),
+    auto_participate     INTEGER NOT NULL DEFAULT 0,
+    shares_per_round     INTEGER NOT NULL DEFAULT 1,
+    max_rounds_per_month INTEGER NOT NULL DEFAULT 4,
+    preferred_day        INTEGER,
+    notif_new_round      INTEGER NOT NULL DEFAULT 1,
+    notif_reminder       INTEGER NOT NULL DEFAULT 1,
+    notif_ticket         INTEGER NOT NULL DEFAULT 1,
+    notif_results        INTEGER NOT NULL DEFAULT 1,
+    updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS rounds (
@@ -95,6 +109,7 @@ async def get_db() -> aiosqlite.Connection:
         "ALTER TABLE participations ADD COLUMN shares INTEGER DEFAULT 1",
         "ALTER TABLE participations ADD COLUMN prize REAL DEFAULT 0",
         "ALTER TABLE rounds ADD COLUMN ticket_image TEXT",
+        "ALTER TABLE users  ADD COLUMN photo_url TEXT",
     ]:
         try:
             await db.execute(col_sql)

@@ -81,7 +81,108 @@ async def _get_user(init_data: str, db):
     user = await row.fetchone()
     if user is None:
         raise HTTPException(403, "User not registered. Send /start to the bot first.")
-    return dict(user)
+    user = dict(user)
+    # Sync photo_url from Telegram initData if it changed
+    photo_url = tg.get("photo_url")
+    if photo_url and user.get("photo_url") != photo_url:
+        await db.execute("UPDATE users SET photo_url=? WHERE telegram_id=?", (photo_url, tg["id"]))
+        await db.commit()
+        user["photo_url"] = photo_url
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Notification helpers
+# ---------------------------------------------------------------------------
+
+async def _notify(telegram_id: int, text: str):
+    """Send a Telegram message. Silently swallows errors (user may have blocked bot)."""
+    if _ptb_app is None:
+        return
+    try:
+        await _ptb_app.bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+    except Exception as e:
+        log.debug("Notification to %s skipped: %s", telegram_id, e)
+
+
+async def _notify_all(db, text: str, setting_col: str | None = None):
+    """Notify all users, optionally filtering by a user_settings boolean column."""
+    if setting_col:
+        cur = await db.execute(f"""
+            SELECT u.telegram_id FROM users u
+            LEFT JOIN user_settings s ON s.user_id = u.telegram_id
+            WHERE COALESCE(s.{setting_col}, 1) = 1
+        """)
+    else:
+        cur = await db.execute("SELECT telegram_id FROM users")
+    for row in await cur.fetchall():
+        await _notify(row["telegram_id"], text)
+
+
+async def _auto_join_round(db, round_id: int, price_per_share: float):
+    """Auto-enter users who opted in, have balance, and haven't hit their monthly limit."""
+    from datetime import date as _date
+    month_start = _date.today().replace(day=1).isoformat()
+
+    cur = await db.execute("""
+        SELECT u.telegram_id, u.credit, u.full_name,
+               COALESCE(s.shares_per_round, 1)     AS shares,
+               COALESCE(s.max_rounds_per_month, 4)  AS max_mo,
+               s.preferred_day
+        FROM users u
+        JOIN user_settings s ON s.user_id = u.telegram_id
+        WHERE s.auto_participate = 1
+    """)
+    for u in await cur.fetchall():
+        shares = u["shares"]
+        amount = shares * price_per_share
+
+        # Preferred draw day check (0=Mon..6=Sun, None=any)
+        # (round draw date day-of-week will be checked when available)
+
+        # Monthly participation limit
+        cnt_cur = await db.execute("""
+            SELECT COUNT(*) AS cnt FROM participations p
+            JOIN rounds r ON r.id = p.round_id
+            WHERE p.user_id = ? AND r.opened_at >= ?
+        """, (u["telegram_id"], month_start))
+        cnt_row = await cnt_cur.fetchone()
+        if (cnt_row["cnt"] or 0) >= u["max_mo"]:
+            continue
+
+        # Balance check
+        if u["credit"] < amount:
+            await _notify(u["telegram_id"],
+                f"⚠️ <b>Auto-join skipped — Round #{round_id}</b>\n"
+                f"Balance ${u['credit']:.2f} is less than ${amount:.2f} needed.\n"
+                f"Top up your account to stay in the next draw! 🎟")
+            continue
+
+        # Already in this round?
+        dup = await db.execute(
+            "SELECT id FROM participations WHERE round_id=? AND user_id=?",
+            (round_id, u["telegram_id"])
+        )
+        if await dup.fetchone():
+            continue
+
+        await db.execute(
+            "INSERT INTO participations (round_id, user_id, amount, shares) VALUES (?,?,?,?)",
+            (round_id, u["telegram_id"], amount, shares)
+        )
+        await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (amount, round_id))
+        await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?",
+                         (amount, u["telegram_id"]))
+        await db.execute(
+            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+            (u["telegram_id"], "participate", -amount, f"Auto-join Round #{round_id}")
+        )
+        await db.commit()
+        bal = u["credit"] - amount
+        await _notify(u["telegram_id"],
+            f"🎟 <b>Auto-joined Round #{round_id}</b>\n"
+            f"{shares} share{'s' if shares > 1 else ''} · <b>${amount:.2f}</b> deducted\n"
+            f"Remaining balance: ${bal:.2f}")
 
 
 async def _auth(x_init_data: str | None):
@@ -171,6 +272,7 @@ async def api_me(x_init_data: str | None = Header(default=None)):
         **u,
         "balance": u["credit"],
         "first_name": u["full_name"],
+        "photo_url": u.get("photo_url"),
         "stripe_enabled": bool(config.STRIPE_SECRET_KEY),
         "lifetime_won": lifetime_won,
         "lifetime_spent": lifetime_spent,
@@ -349,6 +451,76 @@ async def api_deposit(request: Request, x_init_data: str | None = Header(default
 
 
 # ---------------------------------------------------------------------------
+# /api/settings
+# ---------------------------------------------------------------------------
+
+_SETTING_DEFAULTS = dict(
+    auto_participate=False, shares_per_round=1, max_rounds_per_month=4,
+    preferred_day=None,
+    notif_new_round=True, notif_reminder=True, notif_ticket=True, notif_results=True,
+)
+
+
+def _row_to_settings(row) -> dict:
+    if row is None:
+        return {**_SETTING_DEFAULTS}
+    return {
+        "auto_participate":     bool(row["auto_participate"]),
+        "shares_per_round":     row["shares_per_round"],
+        "max_rounds_per_month": row["max_rounds_per_month"],
+        "preferred_day":        row["preferred_day"],
+        "notif_new_round":      bool(row["notif_new_round"]),
+        "notif_reminder":       bool(row["notif_reminder"]),
+        "notif_ticket":         bool(row["notif_ticket"]),
+        "notif_results":        bool(row["notif_results"]),
+    }
+
+
+@app.get("/api/settings")
+async def get_settings(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute("SELECT * FROM user_settings WHERE user_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    await db.close()
+    return _row_to_settings(row)
+
+
+@app.put("/api/settings")
+async def put_settings(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    b = await request.json()
+    await db.execute("""
+        INSERT INTO user_settings
+            (user_id, auto_participate, shares_per_round, max_rounds_per_month,
+             preferred_day, notif_new_round, notif_reminder, notif_ticket, notif_results, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+        ON CONFLICT(user_id) DO UPDATE SET
+            auto_participate=excluded.auto_participate,
+            shares_per_round=excluded.shares_per_round,
+            max_rounds_per_month=excluded.max_rounds_per_month,
+            preferred_day=excluded.preferred_day,
+            notif_new_round=excluded.notif_new_round,
+            notif_reminder=excluded.notif_reminder,
+            notif_ticket=excluded.notif_ticket,
+            notif_results=excluded.notif_results,
+            updated_at=excluded.updated_at
+    """, (
+        user["telegram_id"],
+        int(bool(b.get("auto_participate", False))),
+        max(1, int(b.get("shares_per_round", 1))),
+        max(1, int(b.get("max_rounds_per_month", 4))),
+        b.get("preferred_day"),          # None / 1 / 4 (Mon=0, Tue=1, Fri=4)
+        int(bool(b.get("notif_new_round",  True))),
+        int(bool(b.get("notif_reminder",   True))),
+        int(bool(b.get("notif_ticket",     True))),
+        int(bool(b.get("notif_results",    True))),
+    ))
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
@@ -396,6 +568,20 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     ) as cur:
         round_id = cur.lastrowid
     await db.commit()
+
+    # Auto-join eligible users
+    await _auto_join_round(db, round_id, price_per_share)
+
+    # Notify all users who want new-round alerts
+    draw_str = f" · Draw {draw_date}" if draw_date else ""
+    jackpot_str = f" · ${jackpot/1_000_000:.0f}M jackpot" if jackpot else ""
+    await _notify_all(db,
+        f"🎟 <b>New round opened — #{round_id}</b>{draw_str}{jackpot_str}\n"
+        f"${price_per_share:.0f}/share · target {tickets_target} tickets\n"
+        f"Open the app to join! 👉",
+        setting_col="notif_new_round",
+    )
+
     await db.close()
     return {"ok": True, "round_id": round_id}
 
@@ -437,6 +623,32 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
         (json.dumps(numbers), round_["id"])
     )
     await db.commit()
+
+    # Notify participants: ticket purchased
+    draw_date_str = round_["draw_date"] or "TBD"
+    nums_str = "  ".join(f"<b>{n}</b>" for n in numbers)
+    cur = await db.execute(
+        "SELECT p.user_id FROM participations p WHERE p.round_id=?", (round_["id"],)
+    )
+    participant_ids = [r["user_id"] for r in await cur.fetchall()]
+    for uid in participant_ids:
+        setting = await db.execute(
+            "SELECT notif_ticket, notif_reminder FROM user_settings WHERE user_id=?", (uid,)
+        )
+        s = await setting.fetchone()
+        notif_ticket   = s["notif_ticket"]   if s else 1
+        notif_reminder = s["notif_reminder"] if s else 1
+        msg_parts = []
+        if notif_ticket:
+            msg_parts.append(
+                f"✅ <b>Ticket purchased — Round #{round_['id']}</b>\n"
+                f"Numbers: {nums_str}"
+            )
+        if notif_reminder:
+            msg_parts.append(f"⏰ Draw date: <b>{draw_date_str}</b> — good luck! 🍀")
+        if msg_parts:
+            await _notify(uid, "\n".join(msg_parts))
+
     await db.close()
     return {"ok": True, "round_id": round_["id"]}
 
@@ -592,6 +804,36 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
         (json.dumps(winning_numbers), bonus_number, round_["id"])
     )
     await db.commit()
+
+    # Notify each participant individually with their result
+    win_str = "  ".join(f"<b>{n}</b>" for n in winning_numbers)
+    if bonus_number:
+        win_str += f"  +<b>{bonus_number}</b> (bonus)"
+    for p in parts:
+        setting = await db.execute(
+            "SELECT notif_results FROM user_settings WHERE user_id=?", (p["user_id"],)
+        )
+        s = await setting.fetchone()
+        if s and not s["notif_results"]:
+            continue
+        prize = p.get("prize", 0) or 0
+        share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
+        if prize > 0:
+            msg = (
+                f"🏆 <b>You won — Round #{round_['id']}</b>\n"
+                f"Prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n"
+                f"Winning numbers: {win_str}\n"
+                f"Credited to your balance! 💰"
+            )
+        else:
+            msg = (
+                f"🎟 <b>Results — Round #{round_['id']}</b>\n"
+                f"Winning numbers: {win_str}\n"
+                f"Your stake: ${p['amount']:.2f} ({share_pct}%)\n"
+                f"No prize this time — better luck next round! 🍀"
+            )
+        await _notify(p["user_id"], msg)
+
     await db.close()
     return {"ok": True, "total_prize": total_prize, "distributed": len(parts)}
 

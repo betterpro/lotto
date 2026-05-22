@@ -22,6 +22,10 @@ export const UploadIcon   = (p) => <svg {...props(p)}><path d="M21 15v4a2 2 0 01
 export const SearchIcon   = (p) => <svg {...props(p)}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
 export const MoreIcon     = (p) => <svg viewBox="0 0 24 24" fill="currentColor" {...p}><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
 export const StarIcon     = (p) => <svg {...props(p)}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+export const PersonIcon   = (p) => <svg {...props(p)}><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.582-7 8-7s8 3 8 7"/></svg>
+export const BellIcon     = (p) => <svg {...props(p)}><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+export const ToggleOnIcon = (p) => <svg viewBox="0 0 24 24" fill="currentColor" {...p}><rect x="2" y="7" width="20" height="10" rx="5" fill="currentColor" opacity=".25"/><circle cx="17" cy="12" r="4" fill="currentColor"/></svg>
+export const ToggleOffIcon= (p) => <svg viewBox="0 0 24 24" fill="currentColor" {...p}><rect x="2" y="7" width="20" height="10" rx="5" fill="currentColor" opacity=".25"/><circle cx="7" cy="12" r="4" fill="currentColor"/></svg>
 
 export const Icon = {
   Home: HomeIcon, Ticket: TicketIcon, Clock: ClockIcon, Shield: ShieldIcon,
@@ -31,3 +35,4 @@ export const Icon = {
   ArrowDown: ArrowDownIcon, Camera: CameraIcon,
   Filter: FilterIcon, Upload: UploadIcon, Search: SearchIcon, More: MoreIcon, Star: StarIcon,
 }
+

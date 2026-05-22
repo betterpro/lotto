@@ -4,6 +4,7 @@ import BottomNav from './components/BottomNav.jsx'
 import Home      from './pages/Home.jsx'
 import Rounds    from './pages/Rounds.jsx'
 import History   from './pages/History.jsx'
+import Profile   from './pages/Profile.jsx'
 import Admin     from './pages/Admin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 
@@ -13,6 +14,7 @@ const TITLE = {
   home:    { t: 'LOTTOO',   s: 'Group lotto · live'  },
   rounds:  { t: 'Rounds',   s: 'All draws'           },
   history: { t: 'Activity', s: 'Your account'        },
+  profile: { t: 'Profile',  s: 'Settings & prefs'    },
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
 
@@ -65,7 +67,7 @@ export default function App() {
     }} />
   )
 
-  const PAGES = { home: Home, rounds: Rounds, history: History, admin: Admin }
+  const PAGES = { home: Home, rounds: Rounds, history: History, profile: Profile, admin: Admin }
   const Page  = PAGES[page] ?? Home
 
   return (
