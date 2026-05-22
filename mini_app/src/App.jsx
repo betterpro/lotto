@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from './api.js'
-import BottomNav from './components/BottomNav.jsx'
+import BottomNav       from './components/BottomNav.jsx'
+import TelegramAvatar  from './components/TelegramAvatar.jsx'
 import Home      from './pages/Home.jsx'
 import Rounds    from './pages/Rounds.jsx'
 import History   from './pages/History.jsx'
@@ -18,11 +19,16 @@ const TITLE = {
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
 
-function TGHeader({ page }) {
+function TGHeader({ page, user }) {
   const { t, s } = TITLE[page] ?? TITLE.home
   return (
     <header className="tg-header">
-      <div className="logo" onClick={() => window.Telegram?.WebApp?.close()}>L</div>
+      <TelegramAvatar
+        user={user}
+        size={34}
+        style={{ cursor: 'pointer' }}
+        onClick={() => window.Telegram?.WebApp?.close()}
+      />
       <div className="col gap-4 grow">
         <span className="hd-title">{t}</span>
         <span className="hd-sub">{s}</span>
@@ -72,7 +78,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TGHeader page={page} />
+      <TGHeader page={page} user={user} />
       <div className="scroll">
         <Page user={user} onUserUpdate={setUser} />
       </div>

@@ -5,6 +5,7 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
 import { GiftIcon, WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
+import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
 const STRIPE_APPEARANCE = {
   theme: 'night',
@@ -374,7 +375,7 @@ export default function Home({ user, onUserUpdate }) {
 
       {/* Greeting + balance */}
       <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div className="avatar">{getInitials(user.full_name || user.username)}</div>
+        <TelegramAvatar user={user} size={40} />
         <div className="col grow gap-4">
           <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Welcome back</span>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>

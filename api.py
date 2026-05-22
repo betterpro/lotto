@@ -86,12 +86,15 @@ async def _get_user(init_data: str, db):
     if user is None:
         raise HTTPException(403, "User not registered. Send /start to the bot first.")
     user = dict(user)
-    # Sync photo_url from Telegram initData if it changed
+    # Sync photo_url from Telegram initData if present and changed
     photo_url = tg.get("photo_url")
     if photo_url and user.get("photo_url") != photo_url:
         await db.execute("UPDATE users SET photo_url=? WHERE telegram_id=?", (photo_url, tg["id"]))
         await db.commit()
         user["photo_url"] = photo_url
+    # If still no photo stored, trigger a background fetch via Bot API (non-blocking)
+    elif not user.get("photo_url") and _ptb_app:
+        asyncio.ensure_future(_bg_fetch_photo(tg["id"]))
     return user
 
 
@@ -107,6 +110,33 @@ async def _notify(telegram_id: int, text: str):
         await _ptb_app.bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
     except Exception as e:
         log.debug("Notification to %s skipped: %s", telegram_id, e)
+
+
+async def _bg_fetch_photo(telegram_id: int):
+    """Background task: fetch Telegram profile photo via Bot API and store as data URL."""
+    if _ptb_app is None:
+        return
+    try:
+        photos = await _ptb_app.bot.get_user_profile_photos(telegram_id, limit=1)
+        if not photos.photos:
+            return
+        # Use the smallest available size to keep DB lean (~160×160)
+        photo_size = photos.photos[0][0]
+        file_obj   = await _ptb_app.bot.get_file(photo_size.file_id)
+        image_bytes = bytes(await file_obj.download_as_bytearray())
+        b64 = base64.b64encode(image_bytes).decode()
+        data_url = f"data:image/jpeg;base64,{b64}"
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE users SET photo_url=? WHERE telegram_id=?", (data_url, telegram_id)
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        log.debug("Stored profile photo for user %s (%d bytes)", telegram_id, len(image_bytes))
+    except Exception as exc:
+        log.debug("Background photo fetch failed for %s: %s", telegram_id, exc)
 
 
 async def _notify_all(db, text: str, setting_col: str | None = None):

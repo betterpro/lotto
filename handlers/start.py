@@ -1,11 +1,36 @@
 """Registration and main-menu handlers."""
 
+import base64
+import logging
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 import database as db
 from config import TRUSTEE_ID, CURRENCY
 from keyboards import main_menu, admin_menu
+
+logger = logging.getLogger(__name__)
+
+
+async def _fetch_and_store_photo(bot, user_id: int, conn) -> None:
+    """Fetch Telegram profile photo via Bot API and persist as base64 data URL."""
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if not photos.photos:
+            return
+        photo_size  = photos.photos[0][0]          # smallest size (~160×160)
+        file_obj    = await bot.get_file(photo_size.file_id)
+        image_bytes = bytes(await file_obj.download_as_bytearray())
+        b64         = base64.b64encode(image_bytes).decode()
+        data_url    = f"data:image/jpeg;base64,{b64}"
+        await conn.execute(
+            "UPDATE users SET photo_url=? WHERE telegram_id=?", (data_url, user_id)
+        )
+        await conn.commit()
+        logger.debug("Stored profile photo for %s (%d bytes)", user_id, len(image_bytes))
+    except Exception as exc:
+        logger.debug("Could not fetch profile photo for %s: %s", user_id, exc)
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -44,6 +69,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     record = await db.get_user(conn, user.id)
     credit = record["credit"] if record else 0.0
+
+    # Fetch and store profile photo (no-op if already stored or user has no photo)
+    if not record or not record.get("photo_url"):
+        await _fetch_and_store_photo(ctx.bot, user.id, conn)
 
     msg = (
         f"{welcome}\n\n"

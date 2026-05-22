@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
+import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -140,22 +141,7 @@ export default function Profile({ user, onUserUpdate }) {
 
       {/* ── Avatar + identity ── */}
       <div style={{ padding: '20px 16px 4px', display: 'flex', alignItems: 'center', gap: 16 }}>
-        {photoUrl ? (
-          <img src={photoUrl} alt={name} style={{
-            width: 72, height: 72, borderRadius: '50%',
-            objectFit: 'cover', flexShrink: 0,
-            border: '2px solid var(--hairline-2)',
-          }} />
-        ) : (
-          <div style={{
-            width: 72, height: 72, borderRadius: '50%', flexShrink: 0,
-            background: 'linear-gradient(135deg, var(--tg), var(--money))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 26, fontWeight: 700, color: '#fff',
-          }}>
-            {getInitials(name)}
-          </div>
-        )}
+        <TelegramAvatar user={user} size={72} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={{ fontSize: 20, fontWeight: 700 }}>{name}</span>
           {username && (
