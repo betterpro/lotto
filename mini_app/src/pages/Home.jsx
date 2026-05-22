@@ -56,7 +56,7 @@ function PaymentForm({ onSuccess, onError }) {
 }
 
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
-const PRESETS = [9, 18, 27, 36]
+const PRESETS = [3, 6, 9, 12]
 
 function TopUpSheet({ open, onClose, onSuccess }) {
   const [tab, setTab]           = useState('once')
@@ -74,9 +74,8 @@ function TopUpSheet({ open, onClose, onSuccess }) {
 
   function resetMethod() { setCS(null); setStep('select') }
 
-  const fee        = method === 'card' ? +(amount * 0.05).toFixed(2) : 0
-  const chargeAmt  = +(amount + fee).toFixed(2)
-  const coversEach = Math.floor(amount / 9)
+  const fee       = method === 'card' ? +(amount * 0.05).toFixed(2) : 0
+  const chargeAmt = +(amount + fee).toFixed(2)
 
   async function proceed() {
     if (method === 'card') {
@@ -215,7 +214,10 @@ function TopUpSheet({ open, onClose, onSuccess }) {
             ))}
           </div>
           <div style={{ fontSize: 11, color: 'var(--tx-3)', marginBottom: 16, textAlign: 'center', lineHeight: 1.5 }}>
-            ${amount} = {coversEach}× Lotto Max ($6) + {coversEach}× 6/49 ($3) per draw
+            {amount >= 9
+              ? `$${amount} = ${Math.floor(amount/9)}× combo (Lotto Max + 6/49)`
+              : amount === 6 ? '$6 = 1× Lotto Max ticket'
+              : '$3 = 1× 6/49 ticket'}
           </div>
 
           {/* Payment method */}
@@ -568,7 +570,7 @@ export default function Home({ user, onUserUpdate }) {
           </div>
           <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 12 }}
             onClick={() => showToast('Share link copied to clipboard', 'success')}>
-            <ShareIcon width={14} height={14} /> Share my LOTTOO link
+            <ShareIcon width={14} height={14} /> Share my Lotto Chee link
           </button>
         </div>
       </div>

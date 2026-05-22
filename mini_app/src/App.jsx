@@ -11,7 +11,7 @@ import Onboarding from './pages/Onboarding.jsx'
 const ONB_KEY = 'lottoo_beneficiary'
 
 const TITLE = {
-  home:    { t: 'LOTTOO',   s: 'Group lotto · live'  },
+  home:    { t: 'Lotto Chee',   s: 'Group lotto · live'  },
   rounds:  { t: 'Rounds',   s: 'All draws'           },
   history: { t: 'Activity', s: 'Your account'        },
   profile: { t: 'Profile',  s: 'Settings & prefs'    },

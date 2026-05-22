@@ -1149,7 +1149,7 @@ async def stripe_create_subscription(
             unit_amount=int(charge_amount * 100),
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
-            product_data={"name": "LOTTOO Monthly Deposit"},
+            product_data={"name": "Lotto Chee Monthly Deposit"},
         )
         subscription = stripe.Subscription.create(
             customer=customer_id,
