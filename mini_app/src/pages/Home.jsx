@@ -109,7 +109,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
             <>
               {tab === 'monthly' && (
                 <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 12, lineHeight: 1.5 }}>
-                  Authorize LOTTOO to charge ${amount} CAD on the 4th of each month until cancelled.
+                  Authorize LottoChi to charge ${amount} CAD on the 4th of each month until cancelled.
                 </p>
               )}
               <button className="btn btn-primary btn-block" onClick={pay}>
@@ -119,7 +119,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
           )}
 
           <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-            🔒 Secured by Stripe · No card data stored on LOTTOO
+            🔒 Secured by Stripe · No card data stored on LottoChi
           </div>
         </div>
       </div>
@@ -384,7 +384,7 @@ export default function Home({ user, onUserUpdate }) {
           </div>
           <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 12 }}
             onClick={() => showToast('Share link copied to clipboard', 'success')}>
-            <ShareIcon width={14} height={14} /> Share my LOTTOO link
+            <ShareIcon width={14} height={14} /> Share my LottoChi link
           </button>
         </div>
       </div>

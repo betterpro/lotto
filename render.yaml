@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: lottoomax
+    name: lottochi
     env: python
     plan: starter
     buildCommand: bash build.sh

@@ -72,7 +72,7 @@ export default function Onboarding({ onAccept }) {
         <div className="row gap-10">
           <div className="ob-logo">L</div>
           <div className="col">
-            <span style={{ fontSize: 15, fontWeight: 700 }}>Welcome to LOTTOO</span>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Welcome to LottoChi</span>
             <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 2</span>
           </div>
         </div>
@@ -90,7 +90,7 @@ export default function Onboarding({ onAccept }) {
               <span className="ob-eyebrow">Beneficiary information</span>
               <h2 className="ob-h2">Tell us who you are</h2>
               <p className="ob-p">
-                Because LOTTOO buys real BCLC group tickets on your behalf, we need to
+                Because LottoChi buys real BCLC group tickets on your behalf, we need to
                 register you as a <strong>Beneficiary</strong>. Your details are required by
                 the <strong>Group Prize Agreement</strong> if any pooled ticket wins $10,000 CAD or more.
               </p>
@@ -201,7 +201,7 @@ export default function Onboarding({ onAccept }) {
                   <span className="mono" style={{ fontSize: 12 }}>Auto-assigned per round</span></div>
               </div>
               <p className="ob-p" style={{ fontSize: 12 }}>
-                LOTTOO is your <strong>Group Trustee</strong> — we hold each pooled ticket on
+                LottoChi is your <strong>Group Trustee</strong> — we hold each pooled ticket on
                 behalf of all beneficiaries who joined that round.
               </p>
             </Section>
@@ -214,12 +214,12 @@ export default function Onboarding({ onAccept }) {
                 Corporations as follows:
               </p>
               <Clause n={1}>That the Beneficiaries are the only individuals with a legal or beneficial
-                interest in the <em>Lotto Max</em> ticket bearing the control number assigned by LOTTOO
+                interest in the <em>Lotto Max</em> ticket bearing the control number assigned by LottoChi
                 for the round joined (the <strong>Ticket</strong>).</Clause>
               <Clause n={2}>The Group Trustee is the lawful holder of the Ticket and no person other than
                 the Beneficiaries has any interest in the Ticket or any right to payment or delivery
                 of any portion of the Prize.</Clause>
-              <Clause n={3}>That <strong>LOTTOO Operations Inc.</strong> ("Group Trustee") has been authorized
+              <Clause n={3}>That <strong>LottoChi Operations Inc.</strong> ("Group Trustee") has been authorized
                 by the Beneficiaries to accept from BCLC, for and on behalf of all Beneficiaries, the Prize.</Clause>
               <Clause n={4}>That the Group Trustee is: (a) a Beneficiary and member of the group entitled to
                 receive a share of the Prize; (b) the holder of the ticket as trustee for the Beneficiaries;
@@ -323,7 +323,7 @@ export default function Onboarding({ onAccept }) {
               <button className="btn btn-primary" style={{ flex: 1, opacity: scrolled && allChecked ? 1 : .45 }}
                 disabled={!(scrolled && allChecked)}
                 onClick={() => onAccept({ ...info, acceptedAt: new Date().toISOString() })}>
-                <CheckIcon width={16} height={16} /> Agree &amp; start using LOTTOO
+                <CheckIcon width={16} height={16} /> Agree &amp; start using LottoChi
               </button>
             </div>
           </div>

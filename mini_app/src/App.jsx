@@ -7,10 +7,10 @@ import History from './pages/History.jsx'
 import Admin   from './pages/Admin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 
-const ONB_KEY = 'lottoo_beneficiary'
+const ONB_KEY = 'lottochi_beneficiary'
 
 const TITLE = {
-  home:    { t: 'LOTTOO',   s: 'Group lotto · live'  },
+  home:    { t: 'LottoChi', s: 'Group lotto · live'  },
   round:   { t: 'Rounds',   s: 'All draws'           },
   history: { t: 'Activity', s: 'Your account'        },
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
@@ -46,7 +46,7 @@ export default function App() {
       <span style={{ fontSize: 48 }}>⚠️</span>
       <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
       <span style={{ fontSize: 13, color: 'var(--tx-2)', textAlign: 'center' }}>
-        Open @Lottoomax_bot first, then come back.
+        Open @LottoChi_bot first, then come back.
       </span>
     </div>
   )
