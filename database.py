@@ -94,6 +94,7 @@ async def get_db() -> aiosqlite.Connection:
         "ALTER TABLE rounds ADD COLUMN ticket_numbers TEXT",
         "ALTER TABLE participations ADD COLUMN shares INTEGER DEFAULT 1",
         "ALTER TABLE participations ADD COLUMN prize REAL DEFAULT 0",
+        "ALTER TABLE rounds ADD COLUMN ticket_image TEXT",
     ]:
         try:
             await db.execute(col_sql)

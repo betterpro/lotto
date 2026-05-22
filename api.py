@@ -3,6 +3,7 @@ FastAPI application — serves the REST API, the React Mini App static files,
 the Telegram bot webhook, and Stripe payment endpoints.
 """
 
+import base64
 import hashlib
 import hmac
 import json
@@ -14,8 +15,9 @@ from datetime import date, datetime
 from urllib.parse import parse_qsl
 
 import stripe
+from anthropic import AsyncAnthropic
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from telegram import Update
 from telegram.ext import Application
@@ -211,6 +213,8 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+    rd["has_ticket_image"] = bool(rd.get("ticket_image"))
+    rd.pop("ticket_image", None)  # don't send full image in list response
     if rd.get("winner_id"):
         cur = await db.execute(
             "SELECT full_name, username FROM users WHERE telegram_id=?", (rd["winner_id"],)
@@ -244,6 +248,8 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
         rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
         rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
+        rd["has_ticket_image"] = bool(rd.get("ticket_image"))
+        rd.pop("ticket_image", None)
         rounds.append(rd)
     await db.close()
     return {"rounds": rounds}
@@ -369,6 +375,9 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
     rd["participants"] = parts
     rd["pool"] = pool
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+    rd["has_ticket_image"] = bool(rd.get("ticket_image"))
+    if rd.get("ticket_image"):
+        rd["ticket_image"] = f"data:image/jpeg;base64,{rd['ticket_image']}"
     await db.close()
     return {"round": rd}
 
@@ -430,6 +439,111 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
     await db.commit()
     await db.close()
     return {"ok": True, "round_id": round_["id"]}
+
+
+@app.post("/api/admin/round/scan-ticket")
+async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+    """Scan a ticket photo with Claude Vision to extract numbers and draw date."""
+    user, db = await _require_trustee(x_init_data)
+
+    if not config.ANTHROPIC_API_KEY:
+        await db.close()
+        raise HTTPException(400, "Ticket scanning not configured (set ANTHROPIC_API_KEY)")
+
+    body = await request.json()
+    round_id = body.get("round_id")
+    image_data = body.get("image_b64", "")
+
+    if not image_data:
+        await db.close()
+        raise HTTPException(400, "No image provided")
+
+    # Strip data URL prefix, detect media type
+    media_type = "image/jpeg"
+    if image_data.startswith("data:"):
+        header, image_data = image_data.split(",", 1)
+        if "png" in header:
+            media_type = "image/png"
+        elif "webp" in header:
+            media_type = "image/webp"
+
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    else:
+        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(400, "No round found")
+
+    client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+    try:
+        msg = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": image_data},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "This is a Canadian Lotto Max lottery ticket. "
+                            "Extract and return ONLY a JSON object with no extra text:\n"
+                            "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
+                            "- numbers: array of exactly 7 integers 1-50 from the FIRST selection (null if not visible)\n"
+                            "Example: {\"draw_date\":\"2025-03-14\",\"numbers\":[3,14,22,31,38,45,49]}"
+                        ),
+                    },
+                ],
+            }],
+        )
+        raw = msg.content[0].text.strip()
+        if "```" in raw:
+            raw = raw.split("```")[1].lstrip("json").strip()
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        await db.close()
+        raise HTTPException(422, "Could not read ticket data — try a clearer photo")
+    except Exception as e:
+        log.exception("Claude scan error: %s", e)
+        await db.close()
+        raise HTTPException(422, f"Scan error: {e}")
+
+    # Persist image (store raw base64 without data: prefix)
+    await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
+    await db.commit()
+    await db.close()
+
+    numbers = result.get("numbers")
+    if isinstance(numbers, list):
+        numbers = [int(n) for n in numbers if isinstance(n, (int, float)) and 1 <= int(n) <= 50][:7]
+
+    return {
+        "ok": True,
+        "round_id": round_["id"],
+        "draw_date": result.get("draw_date"),
+        "numbers": numbers or [],
+    }
+
+
+@app.get("/api/round/{round_id}/ticket-image")
+async def round_ticket_image(round_id: int, x_init_data: str | None = Header(default=None)):
+    """Serve the stored ticket image for any authenticated user."""
+    user, db = await _auth(x_init_data)
+    cur = await db.execute("SELECT ticket_image FROM rounds WHERE id=?", (round_id,))
+    row = await cur.fetchone()
+    await db.close()
+    if not row or not row["ticket_image"]:
+        raise HTTPException(404, "No ticket image for this round")
+    try:
+        img_bytes = base64.b64decode(row["ticket_image"])
+    except Exception:
+        raise HTTPException(500, "Invalid image data")
+    return Response(content=img_bytes, media_type="image/jpeg")
 
 
 @app.post("/api/admin/round/results")

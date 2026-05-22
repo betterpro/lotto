@@ -3,6 +3,48 @@ import { api } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 
+function TicketPhotoModal({ roundId, onClose }) {
+  const [src, setSrc] = useState(null)
+  const [err, setErr] = useState(false)
+
+  useEffect(() => {
+    const initData = window.Telegram?.WebApp?.initData ?? ''
+    fetch(`/api/round/${roundId}/ticket-image`, {
+      headers: { 'X-Init-Data': initData },
+    }).then(r => {
+      if (!r.ok) throw new Error()
+      return r.blob()
+    }).then(blob => setSrc(URL.createObjectURL(blob)))
+      .catch(() => setErr(true))
+    return () => src && URL.revokeObjectURL(src)
+  }, [roundId])
+
+  return (
+    <div className="sheet-overlay" onClick={onClose}
+      style={{ alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: 420, borderRadius: 16, overflow: 'hidden', background: 'var(--surface)' }}>
+        <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>Ticket · Round #{roundId}</span>
+          <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 14 }}>✕</button>
+        </div>
+        {err ? (
+          <div style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--tx-2)', fontSize: 13 }}>
+            Image not available
+          </div>
+        ) : !src ? (
+          <div style={{ padding: '40px 16px', display: 'flex', justifyContent: 'center' }}>
+            <div className="spinner" />
+          </div>
+        ) : (
+          <img src={src} alt="Lotto ticket" style={{ width: '100%', display: 'block' }} />
+        )}
+      </div>
+    </div>
+  )
+}
+
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
@@ -23,6 +65,7 @@ function fmtDate(s) {
 const FILTERS = ['All', 'Live', 'Drawn', 'Won']
 
 function RoundCard({ round }) {
+  const [showPhoto, setShowPhoto] = useState(false)
   const ds = round.display_status || round.status
   const isOpen     = ['OPEN','live','open'].includes(ds)
   const isUploaded = ['UPLOADED','CLOSING','uploaded','closed'].includes(ds)
@@ -103,6 +146,22 @@ function RoundCard({ round }) {
           </div>
         )}
       </div>
+
+      {round.has_ticket_image && (
+        <>
+          <div style={{ height: '.5px', background: 'var(--hairline)', margin: '10px 0 8px' }} />
+          <button onClick={() => setShowPhoto(true)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+              display: 'flex', alignItems: 'center', gap: 6,
+              color: 'var(--tg)', fontSize: 12, fontWeight: 600,
+            }}>
+            📎 View ticket photo
+          </button>
+        </>
+      )}
+
+      {showPhoto && <TicketPhotoModal roundId={round.id} onClose={() => setShowPhoto(false)} />}
     </div>
   )
 }

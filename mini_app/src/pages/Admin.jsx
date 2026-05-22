@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
@@ -6,6 +6,28 @@ import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon,
 } from '../components/Icon.jsx'
+
+function compressImage(file, maxPx = 1200, quality = 0.82) {
+  return new Promise(resolve => {
+    const reader = new FileReader()
+    reader.onload = e => {
+      const img = new Image()
+      img.onload = () => {
+        let { width: w, height: h } = img
+        if (w > maxPx || h > maxPx) {
+          if (w > h) { h = Math.round(h * maxPx / w); w = maxPx }
+          else       { w = Math.round(w * maxPx / h); h = maxPx }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      }
+      img.src = e.target.result
+    }
+    reader.readAsDataURL(file)
+  })
+}
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -102,17 +124,41 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
   )
 }
 
-// ── Upload Ticket Sheet ───────────────────────────────────────────────────
+// ── Upload Ticket Sheet (with camera scan) ───────────────────────────────
 function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
-  const [nums, setNums] = useState(['', '', '', '', '', '', ''])
-  const [busy, setBusy] = useState(false)
+  const [nums,      setNums]      = useState(['', '', '', '', '', '', ''])
+  const [busy,      setBusy]      = useState(false)
+  const [scanning,  setScanning]  = useState(false)
+  const [preview,   setPreview]   = useState(null)   // data URL for thumbnail
+  const [scanDate,  setScanDate]  = useState(null)   // draw date from scan
+  const fileRef = useRef()
 
   function setNum(i, v) {
     const c = [...nums]
     c[i] = v.replace(/\D/g, '').slice(0, 2)
     setNums(c)
-    if (v.length >= 2 && i < 6) {
-      document.getElementById(`tn${i + 1}`)?.focus()
+    if (v.length >= 2 && i < 6) document.getElementById(`tn${i + 1}`)?.focus()
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const dataUrl = await compressImage(file)
+    setPreview(dataUrl)
+    setScanning(true)
+    try {
+      const res = await api.admin.scanTicket(round.id, dataUrl)
+      if (res.numbers?.length === 7) {
+        setNums(res.numbers.map(String))
+        showToast('Ticket scanned — numbers pre-filled!', 'success')
+      } else {
+        showToast('Scan done — verify numbers manually', 'success')
+      }
+      if (res.draw_date) setScanDate(res.draw_date)
+    } catch (err) {
+      showToast('Scan failed: ' + err.message, 'error')
+    } finally {
+      setScanning(false)
     }
   }
 
@@ -129,6 +175,8 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     finally { setBusy(false) }
   }
 
+  const dateMismatch = scanDate && round?.draw_date && scanDate !== round.draw_date
+
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -138,10 +186,57 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
-            Enter the 7 numbers from the purchased Lotto Max ticket. Once submitted,
-            the round status changes to <strong>TICKET UPLOADED</strong>.
-          </p>
+
+          {/* Camera scan section */}
+          <input ref={fileRef} type="file" accept="image/*" capture="environment"
+            style={{ display: 'none' }} onChange={handleFile} />
+
+          {preview ? (
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+              <img src={preview} alt="ticket"
+                style={{ width: '100%', borderRadius: 12, maxHeight: 200, objectFit: 'cover' }} />
+              {scanning && (
+                <div style={{
+                  position: 'absolute', inset: 0, borderRadius: 12,
+                  background: 'rgba(13,20,27,.75)',
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10,
+                }}>
+                  <div className="spinner" />
+                  <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>Scanning ticket…</span>
+                </div>
+              )}
+              {!scanning && (
+                <button onClick={() => fileRef.current?.click()}
+                  style={{
+                    position: 'absolute', bottom: 8, right: 8,
+                    background: 'rgba(46,166,255,.9)', color: '#fff',
+                    border: 'none', borderRadius: 8, padding: '5px 10px',
+                    fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                  }}>
+                  Rescan
+                </button>
+              )}
+            </div>
+          ) : (
+            <button className="btn btn-block" onClick={() => fileRef.current?.click()}
+              style={{ background: 'rgba(46,166,255,.12)', color: 'var(--tg)', marginBottom: 14, gap: 8 }}>
+              <span style={{ fontSize: 20 }}>📷</span>
+              Scan ticket photo
+            </button>
+          )}
+
+          {scanDate && (
+            <div style={{
+              fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+              background: dateMismatch ? 'rgba(242,163,59,.1)' : 'rgba(78,208,122,.1)',
+              color: dateMismatch ? 'var(--warn)' : 'var(--money)',
+              border: `.5px solid ${dateMismatch ? 'rgba(242,163,59,.3)' : 'rgba(78,208,122,.3)'}`,
+            }}>
+              {dateMismatch
+                ? `⚠ Ticket draw date ${scanDate} differs from round draw date ${round.draw_date}`
+                : `✓ Draw date confirmed: ${fmtDate(scanDate)}`}
+            </div>
+          )}
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
@@ -159,15 +254,15 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <SummaryRow k="Round"       v={`#${round?.id}`} mono />
-            <SummaryRow k="Pool total"  v={fmtCAD(round?.pool)} mono />
+            <SummaryRow k="Round"        v={`#${round?.id}`} mono />
+            <SummaryRow k="Pool total"   v={fmtCAD(round?.pool)} mono />
             <SummaryRow k="Participants" v={round?.participants?.length ?? 0} mono />
-            <SummaryRow k="Draw date"   v={round?.draw_date ? fmtDate(round.draw_date) : '—'} />
+            <SummaryRow k="Draw date"    v={round?.draw_date ? fmtDate(round.draw_date) : '—'} />
           </div>
 
-          <button className="btn btn-primary btn-block" disabled={!valid || busy} onClick={submit}>
+          <button className="btn btn-primary btn-block" disabled={!valid || busy || scanning} onClick={submit}>
             <UploadIcon width={16} height={16} />
-            {busy ? 'Uploading…' : 'Submit ticket numbers'}
+            {busy ? 'Uploading…' : scanning ? 'Scanning…' : 'Submit ticket numbers'}
           </button>
         </div>
       </div>
@@ -438,6 +533,17 @@ export default function Admin() {
                       <span key={n} className="ball md white">{n}</span>
                     ))}
                   </div>
+                </>
+              )}
+
+              {round.ticket_image && (
+                <>
+                  <div style={{ height: '.5px', background: 'var(--hairline)', margin: '12px 0 12px' }} />
+                  <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
+                    Ticket photo
+                  </div>
+                  <img src={round.ticket_image} alt="Lotto ticket"
+                    style={{ width: '100%', borderRadius: 10, maxHeight: 220, objectFit: 'cover' }} />
                 </>
               )}
 
