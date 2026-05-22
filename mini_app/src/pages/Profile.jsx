@@ -97,9 +97,16 @@ const DAYS = [
   { v: 4,    label: 'Fri'  },
 ]
 
+const LOTTERY_PREFS = [
+  { v: 'lotto_max', label: 'Lotto Max', price: 6, tag: '$6/ticket' },
+  { v: '649',       label: '6/49',      price: 3, tag: '$3/ticket' },
+  { v: 'both',      label: 'Both',      price: 9, tag: '$9/draw'   },
+]
+
 const DEFAULTS = {
   auto_participate: false, shares_per_round: 1,
   max_rounds_per_month: 4, preferred_day: null,
+  lottery_preference: 'both',
   notif_new_round: true, notif_reminder: true,
   notif_ticket: true, notif_results: true,
 }
@@ -131,10 +138,11 @@ export default function Profile({ user, onUserUpdate }) {
     }
   }
 
-  const photoUrl = user?.photo_url
-  const name     = user?.full_name || user?.first_name || 'You'
-  const username = user?.username
-  const balance  = user?.credit ?? user?.balance ?? 0
+  const photoUrl  = user?.photo_url
+  const name      = user?.full_name || user?.first_name || 'You'
+  const username  = user?.username
+  const balance   = user?.credit ?? user?.balance ?? 0
+  const sharePrice = LOTTERY_PREFS.find(p => p.v === settings?.lottery_preference)?.price ?? 9
 
   return (
     <div className="tab-content" style={{ paddingBottom: 32 }}>
@@ -206,9 +214,38 @@ export default function Profile({ user, onUserUpdate }) {
               {settings.auto_participate && (
                 <>
                   <div style={{ height: '.5px', background: 'var(--hairline)', margin: '0 14px' }} />
+
+                  {/* Lottery type preference */}
+                  <div style={{ padding: '11px 14px 14px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
+                                  textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: 8 }}>
+                      Lottery type
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                      {LOTTERY_PREFS.map(lp => (
+                        <button key={lp.v} onClick={() => set('lottery_preference', lp.v)}
+                          style={{
+                            padding: '8px 4px', borderRadius: 10, border: 'none', cursor: 'pointer',
+                            textAlign: 'center',
+                            background: settings.lottery_preference === lp.v
+                              ? 'rgba(46,166,255,.18)' : 'var(--bg-3)',
+                            outline: settings.lottery_preference === lp.v
+                              ? '1.5px solid rgba(46,166,255,.5)' : '1.5px solid transparent',
+                          }}>
+                          <div style={{ fontSize: 13, fontWeight: 700,
+                            color: settings.lottery_preference === lp.v ? 'var(--tg)' : 'var(--tx-1)' }}>
+                            {lp.label}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: 2 }}>{lp.tag}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{ height: '.5px', background: 'var(--hairline)', margin: '0 14px' }} />
                   <PrefRow
                     label="Shares per round"
-                    sub={`$${(settings.shares_per_round * 5).toFixed(0)} per draw`}
+                    sub={`${fmtCAD(settings.shares_per_round * sharePrice)} per draw`}
                     right={
                       <Stepper value={settings.shares_per_round} min={1} max={10}
                         onChange={v => set('shares_per_round', v)} />
@@ -250,12 +287,14 @@ export default function Profile({ user, onUserUpdate }) {
               <div style={{
                 marginTop: 8, padding: '10px 14px', borderRadius: 10,
                 background: 'rgba(46,166,255,.07)', border: '.5px solid rgba(46,166,255,.2)',
-                fontSize: 12, color: 'var(--tx-2)',
+                fontSize: 12, color: 'var(--tx-2)', lineHeight: 1.6,
               }}>
-                Max auto-spend: <span className="mono" style={{ color: 'var(--tg)', fontWeight: 700 }}>
-                  ${(settings.shares_per_round * 5 * settings.max_rounds_per_month).toFixed(0)}/mo
+                Max auto-spend:{' '}
+                <span className="mono" style={{ color: 'var(--tg)', fontWeight: 700 }}>
+                  {fmtCAD(settings.shares_per_round * sharePrice * settings.max_rounds_per_month)}/mo
                 </span>
-                {' '}across {settings.max_rounds_per_month} rounds ·{' '}
+                {' '}· {settings.shares_per_round} share{settings.shares_per_round > 1 ? 's' : ''} ×{' '}
+                {fmtCAD(sharePrice)} × {settings.max_rounds_per_month} rounds ·{' '}
                 {settings.preferred_day == null ? 'any draw day' :
                   settings.preferred_day === 1 ? 'Tuesdays only' : 'Fridays only'}
               </div>

@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     shares_per_round     INTEGER NOT NULL DEFAULT 1,
     max_rounds_per_month INTEGER NOT NULL DEFAULT 4,
     preferred_day        INTEGER,
+    lottery_preference   TEXT    NOT NULL DEFAULT 'both',
     notif_new_round      INTEGER NOT NULL DEFAULT 1,
     notif_reminder       INTEGER NOT NULL DEFAULT 1,
     notif_ticket         INTEGER NOT NULL DEFAULT 1,
@@ -114,6 +115,7 @@ async def get_db() -> aiosqlite.Connection:
         "ALTER TABLE users  ADD COLUMN email TEXT",
         "ALTER TABLE deposit_requests ADD COLUMN payment_method TEXT DEFAULT 'etransfer'",
         "ALTER TABLE deposit_requests ADD COLUMN ref_code TEXT",
+        "ALTER TABLE user_settings ADD COLUMN lottery_preference TEXT DEFAULT 'both'",
     ]:
         try:
             await db.execute(col_sql)

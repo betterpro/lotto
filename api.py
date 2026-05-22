@@ -160,19 +160,28 @@ async def _auto_join_round(db, round_id: int, price_per_share: float):
 
     cur = await db.execute("""
         SELECT u.telegram_id, u.credit, u.full_name,
-               COALESCE(s.shares_per_round, 1)     AS shares,
-               COALESCE(s.max_rounds_per_month, 4)  AS max_mo,
+               COALESCE(s.shares_per_round, 1)        AS shares,
+               COALESCE(s.max_rounds_per_month, 4)    AS max_mo,
+               COALESCE(s.lottery_preference, 'both') AS lottery_preference,
                s.preferred_day
         FROM users u
         JOIN user_settings s ON s.user_id = u.telegram_id
         WHERE s.auto_participate = 1
     """)
-    for u in await cur.fetchall():
-        shares = u["shares"]
-        amount = shares * price_per_share
+    # Determine the round's lottery type for filtering
+    round_cur = await db.execute("SELECT lottery_type FROM rounds WHERE id=?", (round_id,))
+    round_row = await round_cur.fetchone()
+    round_lottery_type = (round_row["lottery_type"] if round_row else None) or "lotto_max"
 
-        # Preferred draw day check (0=Mon..6=Sun, None=any)
-        # (round draw date day-of-week will be checked when available)
+    for u in await cur.fetchall():
+        # Skip if user's lottery preference doesn't include this round's type
+        pref = u["lottery_preference"]
+        if pref != "both" and pref != round_lottery_type:
+            continue
+
+        # Use the share price matching user's preference, not necessarily the round's price
+        shares = u["shares"]
+        amount = shares * _LOTTERY_SHARE_PRICE.get(pref, price_per_share)
 
         # Monthly participation limit
         cnt_cur = await db.execute("""
@@ -574,9 +583,11 @@ async def api_deposit(request: Request, x_init_data: str | None = Header(default
 
 _SETTING_DEFAULTS = dict(
     auto_participate=False, shares_per_round=1, max_rounds_per_month=4,
-    preferred_day=None,
+    preferred_day=None, lottery_preference="both",
     notif_new_round=True, notif_reminder=True, notif_ticket=True, notif_results=True,
 )
+
+_LOTTERY_SHARE_PRICE = {"lotto_max": 6.0, "649": 3.0, "both": 9.0}
 
 
 def _row_to_settings(row) -> dict:
@@ -587,6 +598,7 @@ def _row_to_settings(row) -> dict:
         "shares_per_round":     row["shares_per_round"],
         "max_rounds_per_month": row["max_rounds_per_month"],
         "preferred_day":        row["preferred_day"],
+        "lottery_preference":   row["lottery_preference"] or "both",
         "notif_new_round":      bool(row["notif_new_round"]),
         "notif_reminder":       bool(row["notif_reminder"]),
         "notif_ticket":         bool(row["notif_ticket"]),
@@ -607,16 +619,21 @@ async def get_settings(x_init_data: str | None = Header(default=None)):
 async def put_settings(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     b = await request.json()
+    lottery_pref = b.get("lottery_preference", "both")
+    if lottery_pref not in _LOTTERY_SHARE_PRICE:
+        lottery_pref = "both"
     await db.execute("""
         INSERT INTO user_settings
             (user_id, auto_participate, shares_per_round, max_rounds_per_month,
-             preferred_day, notif_new_round, notif_reminder, notif_ticket, notif_results, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+             preferred_day, lottery_preference,
+             notif_new_round, notif_reminder, notif_ticket, notif_results, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
         ON CONFLICT(user_id) DO UPDATE SET
             auto_participate=excluded.auto_participate,
             shares_per_round=excluded.shares_per_round,
             max_rounds_per_month=excluded.max_rounds_per_month,
             preferred_day=excluded.preferred_day,
+            lottery_preference=excluded.lottery_preference,
             notif_new_round=excluded.notif_new_round,
             notif_reminder=excluded.notif_reminder,
             notif_ticket=excluded.notif_ticket,
@@ -627,7 +644,8 @@ async def put_settings(request: Request, x_init_data: str | None = Header(defaul
         int(bool(b.get("auto_participate", False))),
         max(1, int(b.get("shares_per_round", 1))),
         max(1, int(b.get("max_rounds_per_month", 4))),
-        b.get("preferred_day"),          # None / 1 / 4 (Mon=0, Tue=1, Fri=4)
+        b.get("preferred_day"),
+        lottery_pref,
         int(bool(b.get("notif_new_round",  True))),
         int(bool(b.get("notif_reminder",   True))),
         int(bool(b.get("notif_ticket",     True))),
