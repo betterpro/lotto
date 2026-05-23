@@ -85,7 +85,21 @@ async def _get_user(init_data: str, db):
     row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
     user = await row.fetchone()
     if user is None:
-        raise HTTPException(403, "User not registered. Send /start to the bot first.")
+        # Auto-register on first Mini App open using Telegram initData
+        full_name = " ".join(filter(None, [
+            tg.get("first_name", ""), tg.get("last_name", "")
+        ])).strip() or tg.get("username") or f"user_{tg['id']}"
+        is_trustee = 1 if tg["id"] == config.TRUSTEE_ID else 0
+        await db.execute(
+            "INSERT OR IGNORE INTO users (telegram_id, username, full_name, is_trustee) VALUES (?,?,?,?)",
+            (tg["id"], tg.get("username"), full_name, is_trustee),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (tg["id"],)
+        )
+        await db.commit()
+        row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
+        user = await row.fetchone()
     user = dict(user)
     # Sync photo_url from Telegram initData if present and changed
     photo_url = tg.get("photo_url")
