@@ -59,14 +59,14 @@ function PaymentForm({ onSuccess, onError }) {
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
 const PRESETS = [3, 6, 9, 12]
 
-function TopUpSheet({ open, onClose, onSuccess }) {
+function TopUpSheet({ open, onClose, onSuccess, showToast }) {
   const [tab, setTab]           = useState('once')
   const [amount, setAmount]     = useState(18)
   const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
   const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
   const [stripePromise, setSP]  = useState(null)
   const [clientSecret, setCS]   = useState(null)
-  const [etxInfo, setEtxInfo]   = useState(null)     // { ref_code, admin_email, amount }
+  const [etxInfo, setEtxInfo]   = useState(null)     // { admin_email, amount }
 
   useEffect(() => {
     if (!open) { setCS(null); setEtxInfo(null); setStep('select'); return }
@@ -86,18 +86,20 @@ function TopUpSheet({ open, onClose, onSuccess }) {
           : await api.stripe.createSubscription(amount)
         setCS(r.client_secret)
         setStep('card')
-      } catch (e) { alert(e.message) }
+      } catch (e) { showToast(e.message, 'error') }
     } else {
       try {
         const r = await api.etransfer.deposit(amount)
         setEtxInfo(r)
         setStep('sent')
-      } catch (e) { alert(e.message) }
+      } catch (e) { showToast(e.message, 'error') }
     }
   }
 
-  function copy(text) {
-    navigator.clipboard?.writeText(text).catch(() => {})
+  function copy(text, label = 'Copied') {
+    navigator.clipboard?.writeText(text)
+      .then(() => showToast(label, 'success'))
+      .catch(() => showToast('Could not copy', 'error'))
   }
 
   if (!open) return null
@@ -116,27 +118,15 @@ function TopUpSheet({ open, onClose, onSuccess }) {
           <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--tx-2)', marginBottom: 18 }}>
             Send <strong style={{ color: '#fff' }}>${amount.toFixed(2)} CAD</strong> via Interac e-Transfer
           </p>
-          <div className="card" style={{ marginBottom: 10 }}>
+          <div className="card" style={{ marginBottom: 16 }}>
             <div className="row between" style={{ marginBottom: 4 }}>
               <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Send to</span>
-              <button onClick={() => copy(etxInfo.admin_email)}
+              <button onClick={() => copy(etxInfo.admin_email, 'Email copied')}
                 style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
                 Copy
               </button>
             </div>
             <span className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
-          </div>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div className="row between" style={{ marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Reference / Message</span>
-              <button onClick={() => copy(etxInfo.ref_code)}
-                style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
-                Copy
-              </button>
-            </div>
-            <span className="mono" style={{ fontSize: 22, fontWeight: 700, color: 'var(--tg)', letterSpacing: '.5px' }}>
-              {etxInfo.ref_code}
-            </span>
           </div>
           <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
             borderRadius: 10, padding: '12px 14px', marginBottom: 20, fontSize: 12,
@@ -168,7 +158,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
           <Elements stripe={stripePromise} options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
             <PaymentForm
               onSuccess={() => { setCS(null); onSuccess(amount, tab); onClose() }}
-              onError={msg => alert(msg)}
+              onError={msg => showToast(msg, 'error')}
             />
           </Elements>
           <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
@@ -264,7 +254,7 @@ function TopUpSheet({ open, onClose, onSuccess }) {
 }
 
 // ─── Join sheet ──────────────────────────────────────────────────────────────
-function JoinSheet({ open, onClose, round, user, onJoined }) {
+function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
   const PRICE = round?.price_per_share || 5
   const [shares, setShares] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -277,7 +267,7 @@ function JoinSheet({ open, onClose, round, user, onJoined }) {
       await api.participate(cost)
       onJoined(shares)
       onClose()
-    } catch (e) { alert(e.message) }
+    } catch (e) { showToast(e.message, 'error') }
     finally { setBusy(false) }
   }
 
@@ -347,7 +337,7 @@ export default function Home({ user, onUserUpdate }) {
   const [sub, setSub]       = useState(null)
   const [topUp, setTopUp]   = useState(false)
   const [join, setJoin]     = useState(false)
-  const [showToast, toastNode] = useToast()
+  const showToast = useToast()
 
   useEffect(() => {
     api.round().then(d => setRound(d.round)).catch(() => setRound(null))
@@ -371,8 +361,6 @@ export default function Home({ user, onUserUpdate }) {
 
   return (
     <div className="tab-content">
-      {toastNode}
-
       {/* Greeting + balance */}
       <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <TelegramAvatar user={user} size={40} />
@@ -625,13 +613,13 @@ export default function Home({ user, onUserUpdate }) {
         </>
       )}
 
-      <TopUpSheet open={topUp} onClose={() => setTopUp(false)}
+      <TopUpSheet open={topUp} onClose={() => setTopUp(false)} showToast={showToast}
         onSuccess={(amt, plan) => {
           showToast(plan === 'once' ? `Added $${amt} credit` : `Subscribed · $${amt}/mo`, 'success')
           setTimeout(() => api.me().then(onUserUpdate), 3000)
         }} />
 
-      <JoinSheet open={join} onClose={() => setJoin(false)} round={round} user={user}
+      <JoinSheet open={join} onClose={() => setJoin(false)} round={round} user={user} showToast={showToast}
         onJoined={(n) => {
           showToast(`Joined with ${n} share${n > 1 ? 's' : ''}!`, 'success')
           api.round().then(d => setRound(d.round))

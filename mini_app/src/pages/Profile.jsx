@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
+import { useToast } from '../components/Toast.jsx'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
@@ -112,6 +113,7 @@ const DEFAULTS = {
 }
 
 export default function Profile({ user, onUserUpdate }) {
+  const showToast = useToast()
   const [settings, setSettings] = useState(null)
   const [saved,    setSaved]    = useState(false)
   const [busy,     setBusy]     = useState(false)
@@ -132,7 +134,7 @@ export default function Profile({ user, onUserUpdate }) {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
-      alert(e.message)
+      showToast(e.message, 'error')
     } finally {
       setBusy(false)
     }

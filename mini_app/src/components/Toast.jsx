@@ -1,22 +1,46 @@
-import { useState, useCallback } from 'react'
+import { createContext, useContext, useState, useCallback, useRef } from 'react'
 
-export function useToast() {
-  const [toast, setToast] = useState(null)
+const ToastContext = createContext(null)
 
-  const showToast = useCallback((msg, type = 'default') => {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3200)
-  }, [])
-
-  const node = toast ? (
-    <div className={`toast${toast.type === 'error' ? ' error' : toast.type === 'success' ? ' success' : ''}`}>
-      {toast.msg}
-    </div>
-  ) : null
-
-  return [showToast, node]
+const ICONS = {
+  success: '✓',
+  error: '✕',
+  warn: '!',
+  info: 'i',
 }
 
-export default function Toast({ msg, error }) {
-  return <div className={`toast${error ? ' error' : ''}`}>{msg}</div>
+export function ToastProvider({ children }) {
+  const [toast, setToast] = useState(null)
+  const timerRef = useRef(null)
+
+  const showToast = useCallback((msg, type = 'info') => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    setToast({ msg, type })
+    timerRef.current = setTimeout(() => {
+      setToast(null)
+      timerRef.current = null
+    }, 3600)
+  }, [])
+
+  return (
+    <ToastContext.Provider value={showToast}>
+      {children}
+      {toast && (
+        <div className="toast-host" role="status" aria-live="polite">
+          <div className={`toast toast-${toast.type}`}>
+            <span className="toast-icon" aria-hidden="true">{ICONS[toast.type] ?? ICONS.info}</span>
+            <span className="toast-msg">{toast.msg}</span>
+          </div>
+        </div>
+      )}
+    </ToastContext.Provider>
+  )
+}
+
+export function useToast() {
+  const showToast = useContext(ToastContext)
+  if (!showToast) {
+    throw new Error('useToast must be used within ToastProvider')
+  }
+  return showToast
 }

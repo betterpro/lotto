@@ -407,7 +407,7 @@ export default function Admin() {
   const [showNew,  setShowNew]  = useState(false)
   const [showUp,   setShowUp]   = useState(false)
   const [showRes,  setShowRes]  = useState(false)
-  const [showToast, toastNode]  = useToast()
+  const showToast = useToast()
 
   const loadRound    = useCallback(() => api.admin.round().then(d => setRound(d.round)).catch(() => setRound(null)), [])
   const loadDeposits = useCallback(() => api.admin.deposits().then(d => { setDeposits(d.deposits); setImapOk(!!d.imap_configured) }).catch(() => setDeposits([])), [])
@@ -448,8 +448,6 @@ export default function Admin() {
 
   return (
     <div className="tab-content">
-      {toastNode}
-
       {/* Admin header */}
       <div style={{ padding: '12px 16px 4px' }}>
         <div className="row between">

@@ -10,13 +10,19 @@ async function req(method, path, body) {
     headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData() },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
+  const text = await res.text()
   if (!res.ok) {
-    const text = await res.text()
     let msg = text
     try { msg = JSON.parse(text).detail ?? text } catch {}
     throw new Error(msg)
   }
-  return res.json()
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(
+      'API returned HTML instead of JSON — is the backend running on port 8000?'
+    )
+  }
 }
 
 export const api = {

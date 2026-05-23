@@ -8,6 +8,7 @@ import History   from './pages/History.jsx'
 import Profile   from './pages/Profile.jsx'
 import Admin     from './pages/Admin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
+import { LOGO_SRC } from './brand.js'
 
 const ONB_KEY = 'lottoo_beneficiary'
 
@@ -22,7 +23,7 @@ const TITLE = {
 function TGHeader() {
   return (
     <header className="tg-header">
-      <img src="/logo.svg" alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
+      <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
       <div className="col" style={{ marginLeft: 10, gap: 1 }}>
         <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
         <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
@@ -49,7 +50,7 @@ export default function App() {
       const botUsername = import.meta.env.VITE_BOT_USERNAME ?? 'LottoCheeBot'
       return (
         <div style={{ minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 28, textAlign: 'center' }}>
-          <img src="/logo.svg" alt="Lotto Chee" style={{ width: 140, height: 154, objectFit: 'contain' }} />
+          <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 140, height: 154, objectFit: 'contain' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <span style={{ fontSize: 24, fontWeight: 800, color: '#111' }}>Group Lottery, Together</span>
             <span style={{ fontSize: 15, color: '#666', lineHeight: 1.6, maxWidth: 280 }}>

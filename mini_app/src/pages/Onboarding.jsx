@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CheckIcon, ShieldIcon, ArrowDownIcon } from '../components/Icon.jsx'
+import { LOGO_SRC } from '../brand.js'
 
 function Section({ title, children }) {
   return (
@@ -70,7 +71,7 @@ export default function Onboarding({ onAccept }) {
       {/* Top bar */}
       <div className="ob-top">
         <div className="row gap-10" style={{ alignItems: 'center' }}>
-          <img src="/logo.svg" alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
+          <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
           <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 2</span>
         </div>
         <div className="ob-steps">

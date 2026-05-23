@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
+import { useToast } from '../components/Toast.jsx'
 import { WalletIcon, TicketIcon, TrophyIcon, ArrowDownIcon, BoltIcon } from '../components/Icon.jsx'
 
 function fmtCAD(n) {
@@ -48,6 +49,7 @@ const FILTERS = [
 ]
 
 export default function History() {
+  const showToast = useToast()
   const [txs,    setTxs]    = useState(null)
   const [filter, setFilter] = useState('all')
   const [sub,    setSub]    = useState(null)
@@ -60,12 +62,13 @@ export default function History() {
   async function cancelSub() {
     try {
       if (sub?.cancel_at_period_end) {
-        alert('Contact support to reactivate your subscription.')
+        showToast('Contact support to reactivate your subscription.', 'warn')
       } else {
         await api.stripe.cancelSub()
         setSub(s => s ? { ...s, cancel_at_period_end: true } : s)
+        showToast('Subscription will cancel at period end', 'success')
       }
-    } catch (e) { alert(e.message) }
+    } catch (e) { showToast(e.message, 'error') }
   }
 
   if (txs === null) return (

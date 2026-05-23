@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
-import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import { TrophyIcon, TicketIcon } from '../components/Icon.jsx'
 
@@ -93,7 +92,6 @@ function RoundDetail({ round, onClose }) {
 export default function Round() {
   const [data, setData]     = useState(undefined)
   const [detail, setDetail] = useState(false)
-  const [showToast, toastNode] = useToast()
 
   useEffect(() => {
     api.round().then(d => setData(d.round)).catch(() => setData(null))
@@ -120,8 +118,6 @@ export default function Round() {
 
   return (
     <div className="tab-content">
-      {toastNode}
-
       {/* Summary card */}
       <div style={{ padding: '10px 16px 6px' }}>
         <div className="card" style={{ background: 'linear-gradient(135deg, #1f2c3a, #1a2531)' }}>
