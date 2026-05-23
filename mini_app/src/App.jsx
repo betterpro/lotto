@@ -20,7 +20,7 @@ const TITLE = {
 }
 
 function TGHeader({ page, user }) {
-  const { t, s } = TITLE[page] ?? TITLE.home
+  const { s } = TITLE[page] ?? TITLE.home
   return (
     <header className="tg-header">
       <TelegramAvatar
@@ -30,7 +30,11 @@ function TGHeader({ page, user }) {
         onClick={() => window.Telegram?.WebApp?.close()}
       />
       <div className="col gap-4 grow">
-        <span className="hd-title">{t}</span>
+        <img
+          src="/logo.png"
+          alt="Lotto Chee"
+          style={{ height: 22, objectFit: 'contain', objectPosition: 'left' }}
+        />
         <span className="hd-sub">{s}</span>
       </div>
     </header>
