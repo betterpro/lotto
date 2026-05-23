@@ -21,7 +21,8 @@ from urllib.parse import parse_qsl
 import stripe
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+import httpx
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from telegram import Update
 from telegram.ext import Application
@@ -137,6 +138,24 @@ async def _bg_fetch_photo(telegram_id: int):
         log.debug("Stored profile photo for user %s (%d bytes)", telegram_id, len(image_bytes))
     except Exception as exc:
         log.debug("Background photo fetch failed for %s: %s", telegram_id, exc)
+
+
+async def _upload_ticket_to_storage(round_id: int, image_bytes: bytes, media_type: str) -> str:
+    """Upload ticket image to Supabase Storage bucket 'tickets'; return public URL."""
+    ext = "jpg" if "jpeg" in media_type else media_type.split("/")[-1]
+    path = f"round-{round_id}.{ext}"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{config.SUPABASE_URL}/storage/v1/object/tickets/{path}",
+            content=image_bytes,
+            headers={
+                "Authorization": f"Bearer {config.SUPABASE_SERVICE_KEY}",
+                "Content-Type": media_type,
+                "x-upsert": "true",
+            },
+        )
+        resp.raise_for_status()
+    return f"{config.SUPABASE_URL}/storage/v1/object/public/tickets/{path}"
 
 
 async def _notify_all(db, text: str, setting_col: str | None = None):
@@ -722,7 +741,7 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
     rd["pool"] = pool
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
     rd["has_ticket_image"] = bool(rd.get("ticket_image"))
-    if rd.get("ticket_image"):
+    if rd.get("ticket_image") and not rd["ticket_image"].startswith("http"):
         rd["ticket_image"] = f"data:image/jpeg;base64,{rd['ticket_image']}"
     await db.close()
     return {"round": rd}
@@ -900,8 +919,18 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
         await db.close()
         raise HTTPException(422, f"Scan error: {e}")
 
-    # Persist image (store raw base64 without data: prefix)
-    await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
+    # Upload to Supabase Storage if configured, otherwise fall back to storing base64 in DB
+    img_bytes = base64.b64decode(image_data)
+    if config.SUPABASE_URL and config.SUPABASE_SERVICE_KEY:
+        try:
+            storage_url = await _upload_ticket_to_storage(round_["id"], img_bytes, media_type)
+            await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (storage_url, round_["id"]))
+            log.info("Ticket uploaded to Storage: %s", storage_url)
+        except Exception as exc:
+            log.warning("Storage upload failed, storing base64 in DB: %s", exc)
+            await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
+    else:
+        await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
     await db.commit()
     await db.close()
 
@@ -926,8 +955,11 @@ async def round_ticket_image(round_id: int, x_init_data: str | None = Header(def
     await db.close()
     if not row or not row["ticket_image"]:
         raise HTTPException(404, "No ticket image for this round")
+    val = row["ticket_image"]
+    if val.startswith("http"):
+        return RedirectResponse(url=val)
     try:
-        img_bytes = base64.b64decode(row["ticket_image"])
+        img_bytes = base64.b64decode(val)
     except Exception:
         raise HTTPException(500, "Invalid image data")
     return Response(content=img_bytes, media_type="image/jpeg")
