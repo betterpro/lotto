@@ -3,6 +3,7 @@ services:
     name: lottoo
     env: python
     plan: starter
+    pythonVersion: "3.12.9"
     buildCommand: bash build.sh
     startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
     envVars:
