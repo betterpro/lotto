@@ -45,24 +45,27 @@ export default function App() {
 
   if (error) {
     const notInTelegram = error.includes('X-Init-Data') || error.includes('initData') || error.includes('bot first')
-    if (notInTelegram) return (
-      <div style={{ minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 24, textAlign: 'center' }}>
-        <img src="/logo.svg" alt="Lotto Chee" style={{ height: 90, objectFit: 'contain' }} />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <span style={{ fontSize: 22, fontWeight: 800, color: '#111' }}>Group Lottery, Together</span>
-          <span style={{ fontSize: 15, color: '#666', lineHeight: 1.5 }}>
-            Lotto Chee lets you pool tickets with friends and share the winnings — all inside Telegram.
-          </span>
+    if (notInTelegram) {
+      const botUsername = import.meta.env.VITE_BOT_USERNAME ?? 'LottoCheeBot'
+      return (
+        <div style={{ minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 28, textAlign: 'center' }}>
+          <img src="/logo.svg" alt="Lotto Chee" style={{ width: 140, height: 154, objectFit: 'contain' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <span style={{ fontSize: 24, fontWeight: 800, color: '#111' }}>Group Lottery, Together</span>
+            <span style={{ fontSize: 15, color: '#666', lineHeight: 1.6, maxWidth: 280 }}>
+              Pool tickets with friends and share the winnings — all inside Telegram.
+            </span>
+          </div>
+          <a
+            href={`https://t.me/${botUsername}?startapp=open`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#E8503A', color: '#fff', fontWeight: 700, fontSize: 17, padding: '16px 32px', borderRadius: 16, textDecoration: 'none', boxShadow: '0 4px 16px rgba(232,80,58,0.35)' }}
+          >
+            Open App in Telegram
+          </a>
+          <span style={{ fontSize: 12, color: '#bbb' }}>lottochee.com · BC, Canada</span>
         </div>
-        <a
-          href={`https://t.me/${import.meta.env.VITE_BOT_USERNAME ?? 'LottoCheeBot'}`}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#E8503A', color: '#fff', fontWeight: 700, fontSize: 16, padding: '14px 28px', borderRadius: 14, textDecoration: 'none' }}
-        >
-          Open in Telegram
-        </a>
-        <span style={{ fontSize: 12, color: '#aaa' }}>lottochee.com · BC, Canada</span>
-      </div>
-    )
+      )
+    }
     return (
       <div className="center-screen" style={{ padding: 24 }}>
         <span style={{ fontSize: 48 }}>⚠️</span>
