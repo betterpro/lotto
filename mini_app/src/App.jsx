@@ -19,17 +19,13 @@ const TITLE = {
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
 
-function TGHeader({ page }) {
-  const { s } = TITLE[page] ?? TITLE.home
+function TGHeader() {
   return (
     <header className="tg-header">
-      <div className="col gap-2">
-        <img
-          src="/logo.svg"
-          alt="Lotto Chee"
-          style={{ height: 28, objectFit: 'contain', objectPosition: 'left' }}
-        />
-        <span className="hd-sub">Play together, dream bigger</span>
+      <img src="/logo.svg" alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
+      <div className="col" style={{ marginLeft: 10, gap: 1 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
+        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
       </div>
     </header>
   )
@@ -47,15 +43,33 @@ export default function App() {
     api.me().then(setUser).catch(e => setError(e.message))
   }, [])
 
-  if (error) return (
-    <div className="center-screen" style={{ padding: 24 }}>
-      <span style={{ fontSize: 48 }}>⚠️</span>
-      <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
-      <span style={{ fontSize: 13, color: 'var(--tx-2)', textAlign: 'center' }}>
-        Open the bot first, then come back.
-      </span>
-    </div>
-  )
+  if (error) {
+    const notInTelegram = error.includes('X-Init-Data') || error.includes('initData') || error.includes('bot first')
+    if (notInTelegram) return (
+      <div style={{ minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 24, textAlign: 'center' }}>
+        <img src="/logo.svg" alt="Lotto Chee" style={{ height: 90, objectFit: 'contain' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <span style={{ fontSize: 22, fontWeight: 800, color: '#111' }}>Group Lottery, Together</span>
+          <span style={{ fontSize: 15, color: '#666', lineHeight: 1.5 }}>
+            Lotto Chee lets you pool tickets with friends and share the winnings — all inside Telegram.
+          </span>
+        </div>
+        <a
+          href={`https://t.me/${import.meta.env.VITE_BOT_USERNAME ?? 'LottoCheeBot'}`}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#E8503A', color: '#fff', fontWeight: 700, fontSize: 16, padding: '14px 28px', borderRadius: 14, textDecoration: 'none' }}
+        >
+          Open in Telegram
+        </a>
+        <span style={{ fontSize: 12, color: '#aaa' }}>lottochee.com · BC, Canada</span>
+      </div>
+    )
+    return (
+      <div className="center-screen" style={{ padding: 24 }}>
+        <span style={{ fontSize: 48 }}>⚠️</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
+      </div>
+    )
+  }
 
   if (!user) return (
     <div className="center-screen">
@@ -76,7 +90,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TGHeader page={page} />
+      <TGHeader />
       <div className="scroll">
         <Page user={user} onUserUpdate={setUser} />
       </div>
