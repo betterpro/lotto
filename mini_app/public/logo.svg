@@ -1,5 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 64" fill="none">
-  <text x="0" y="52" font-family="'Arial Black',Arial,sans-serif" font-weight="900" font-size="56" fill="#111111" letter-spacing="-1">Lotto</text>
-  <rect x="148" y="4" width="108" height="56" rx="18" fill="#E8503A"/>
-  <text x="160" y="49" font-family="Georgia,'Times New Roman',serif" font-style="italic" font-weight="700" font-size="36" fill="#FFFFFF">chee!</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 220" fill="none">
+  <!-- "Lotto" top -->
+  <text x="100" y="100" font-family="'Arial Black',Arial,sans-serif" font-weight="900"
+        font-size="96" fill="#111111" text-anchor="middle" letter-spacing="-2">Lotto</text>
+  <!-- Red badge -->
+  <rect x="16" y="118" width="168" height="88" rx="26" fill="#E8503A"/>
+  <!-- "chee!" -->
+  <text x="100" y="183" font-family="Georgia,'Times New Roman',serif" font-style="italic"
+        font-weight="700" font-size="62" fill="#FFFFFF" text-anchor="middle">chee!</text>
 </svg>
