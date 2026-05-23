@@ -24,7 +24,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 import httpx
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application
 
 import config
@@ -117,12 +117,25 @@ async def _get_user(init_data: str, db):
 # Notification helpers
 # ---------------------------------------------------------------------------
 
+def _open_app_markup() -> InlineKeyboardMarkup | None:
+    if not _bot_username:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Open Lotto Chee 🎟", url=f"https://t.me/{_bot_username}?startapp=open")
+    ]])
+
+
 async def _notify(telegram_id: int, text: str):
-    """Send a Telegram message. Silently swallows errors (user may have blocked bot)."""
+    """Send a Telegram message with an Open App button. Silently swallows errors."""
     if _ptb_app is None:
         return
     try:
-        await _ptb_app.bot.send_message(chat_id=telegram_id, text=text, parse_mode="HTML")
+        await _ptb_app.bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=_open_app_markup(),
+        )
     except Exception as e:
         log.debug("Notification to %s skipped: %s", telegram_id, e)
 
@@ -379,11 +392,12 @@ async def _get_or_create_customer(user: dict, db) -> str:
 # ---------------------------------------------------------------------------
 
 _ptb_app: Application | None = None
+_bot_username: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ptb_app
+    global _ptb_app, _bot_username
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url and not config.MINI_APP_URL:
         os.environ["MINI_APP_URL"] = render_url
@@ -391,7 +405,12 @@ async def lifespan(app: FastAPI):
     _ptb_app = build_application()
     await _ptb_app.initialize()
     await _ptb_app.start()
-    log.info("PTB started (webhook mode)")
+    try:
+        bot_info = await _ptb_app.bot.get_me()
+        _bot_username = bot_info.username
+    except Exception:
+        pass
+    log.info("PTB started (webhook mode), bot=@%s", _bot_username)
     yield
     await _ptb_app.stop()
     await _ptb_app.shutdown()
@@ -447,16 +466,9 @@ async def api_me(x_init_data: str | None = Header(default=None)):
 async def api_invite(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     await db.close()
-    bot_username = None
-    if _ptb_app:
-        try:
-            bot_info = await _ptb_app.bot.get_me()
-            bot_username = bot_info.username
-        except Exception:
-            pass
-    if not bot_username:
+    if not _bot_username:
         raise HTTPException(500, "Bot not available")
-    link = f"https://t.me/{bot_username}?start=ref_{user['telegram_id']}"
+    link = f"https://t.me/{_bot_username}?start=ref_{user['telegram_id']}"
     return {"link": link}
 
 
@@ -806,8 +818,7 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     jackpot_str = f" · ${jackpot/1_000_000:.0f}M jackpot" if jackpot else ""
     await _notify_all(db,
         f"🎟 <b>New round opened — #{round_id}</b>{draw_str}{jackpot_str}\n"
-        f"${price_per_share:.0f}/share · target {tickets_target} tickets\n"
-        f"Open the app to join! 👉",
+        f"${price_per_share:.0f}/share · target {tickets_target} tickets",
         setting_col="notif_new_round",
     )
 
