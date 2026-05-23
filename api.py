@@ -440,6 +440,27 @@ async def api_me(x_init_data: str | None = Header(default=None)):
 
 
 # ---------------------------------------------------------------------------
+# /api/invite
+# ---------------------------------------------------------------------------
+
+@app.get("/api/invite")
+async def api_invite(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    await db.close()
+    bot_username = None
+    if _ptb_app:
+        try:
+            bot_info = await _ptb_app.bot.get_me()
+            bot_username = bot_info.username
+        except Exception:
+            pass
+    if not bot_username:
+        raise HTTPException(500, "Bot not available")
+    link = f"https://t.me/{bot_username}?start=ref_{user['telegram_id']}"
+    return {"link": link}
+
+
+# ---------------------------------------------------------------------------
 # /api/round
 # ---------------------------------------------------------------------------
 

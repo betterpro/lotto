@@ -570,8 +570,22 @@ export default function Home({ user, onUserUpdate }) {
             </div>
           </div>
           <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 12 }}
-            onClick={() => showToast('Share link copied to clipboard', 'success')}>
-            <ShareIcon width={14} height={14} /> Share my Lotto Chee link
+            onClick={async () => {
+              try {
+                const { link } = await api.invite()
+                const text = '🎟 Join me on Lotto Chee — group lottery where we play together and share the winnings!'
+                const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`
+                if (window.Telegram?.WebApp?.openTelegramLink) {
+                  window.Telegram.WebApp.openTelegramLink(shareUrl)
+                } else {
+                  await navigator.clipboard.writeText(link)
+                  showToast('Link copied to clipboard!', 'success')
+                }
+              } catch {
+                showToast('Could not get invite link', 'error')
+              }
+            }}>
+            <ShareIcon width={14} height={14} /> Invite friends on Telegram
           </button>
         </div>
       </div>

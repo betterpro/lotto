@@ -21,6 +21,7 @@ async function req(method, path, body) {
 
 export const api = {
   me:           ()             => req('GET',  '/api/me'),
+  invite:       ()             => req('GET',  '/api/invite'),
   settings:     {
     get: ()      => req('GET', '/api/settings'),
     put: (body)  => req('PUT', '/api/settings', body),
