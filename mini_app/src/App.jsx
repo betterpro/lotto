@@ -19,23 +19,17 @@ const TITLE = {
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
 
-function TGHeader({ page, user }) {
+function TGHeader({ page }) {
   const { s } = TITLE[page] ?? TITLE.home
   return (
     <header className="tg-header">
-      <TelegramAvatar
-        user={user}
-        size={34}
-        style={{ cursor: 'pointer' }}
-        onClick={() => window.Telegram?.WebApp?.close()}
-      />
-      <div className="col gap-4 grow">
+      <div className="col gap-2">
         <img
-          src="/logo.png"
+          src="/logo.svg"
           alt="Lotto Chee"
-          style={{ height: 22, objectFit: 'contain', objectPosition: 'left' }}
+          style={{ height: 28, objectFit: 'contain', objectPosition: 'left' }}
         />
-        <span className="hd-sub">{s}</span>
+        <span className="hd-sub">Play together, dream bigger</span>
       </div>
     </header>
   )
@@ -82,7 +76,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TGHeader page={page} user={user} />
+      <TGHeader page={page} />
       <div className="scroll">
         <Page user={user} onUserUpdate={setUser} />
       </div>

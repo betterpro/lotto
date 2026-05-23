@@ -69,12 +69,9 @@ export default function Onboarding({ onAccept }) {
     <div className="ob">
       {/* Top bar */}
       <div className="ob-top">
-        <div className="row gap-10">
-          <div className="ob-logo">L</div>
-          <div className="col">
-            <span style={{ fontSize: 15, fontWeight: 700 }}>Welcome to Lotto Chee</span>
-            <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 2</span>
-          </div>
+        <div className="row gap-10" style={{ alignItems: 'center' }}>
+          <img src="/logo.svg" alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
+          <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 2</span>
         </div>
         <div className="ob-steps">
           <span className={'dot' + (step >= 1 ? ' on' : '')} />
