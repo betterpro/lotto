@@ -55,6 +55,23 @@ class _Cursor:
         pass
 
 
+class _ExecuteContext:
+    """Supports both `await db.execute(...)` and `async with db.execute(...) as c:`."""
+
+    def __init__(self, coro):
+        self._coro = coro
+
+    def __await__(self):
+        return self._coro.__await__()
+
+    async def __aenter__(self):
+        self._cursor = await self._coro
+        return self._cursor
+
+    async def __aexit__(self, *_):
+        pass
+
+
 # ── SQL adapter ───────────────────────────────────────────────────────────────
 
 _NOW = "to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"
@@ -97,7 +114,10 @@ class _DB:
     @row_factory.setter
     def row_factory(self, _): pass
 
-    async def execute(self, sql: str, params: tuple = ()) -> _Cursor:
+    def execute(self, sql: str, params: tuple = ()) -> _ExecuteContext:
+        return _ExecuteContext(self._execute(sql, params))
+
+    async def _execute(self, sql: str, params: tuple = ()) -> _Cursor:
         pg_sql, pg_params = _adapt(sql, params)
         upper = sql.strip().upper()
         if upper.startswith('SELECT') or upper.startswith('WITH'):
