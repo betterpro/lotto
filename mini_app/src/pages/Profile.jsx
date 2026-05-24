@@ -306,12 +306,12 @@ export default function Profile({ user, onUserUpdate }) {
             {/* ── Legal ── */}
             <SectionHead icon={TicketIcon} label="Agreements" />
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Trustee agreement</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Group Prize Agreement</div>
               <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
-                Master agreement between you and the group trustee. References the official BCLC
-                Group Release Form.
+                BCLC Group Prize Agreement with your beneficiary details and trustee Reza Heidari.
+                Each round has a separate amendment with your share and draw info.
               </p>
-              <AgreementLink kind="master" label="View & download" />
+              <AgreementLink kind="master" label="View & download PDF" />
             </div>
 
             {/* ── Notifications ── */}

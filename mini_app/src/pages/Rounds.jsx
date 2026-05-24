@@ -50,6 +50,10 @@ function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
+function fmtDollarInt(n) {
+  return '$' + Math.round(Number(n || 0)).toLocaleString('en-CA')
+}
+
 function fmtBig(n) {
   if (!n) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(0) + 'M'
@@ -116,25 +120,17 @@ function RoundCard({ round }) {
           <div className="col gap-4">
             <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR STAKE</span>
             <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {round.my_stake ? fmtCAD(round.my_stake) : '—'}
+              {round.my_stake
+                ? `${fmtDollarInt(round.my_stake)} / ${fmtDollarInt(round.pool)}`
+                : '—'}
             </span>
           </div>
           <div className="col gap-4">
             <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>
             <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {round.my_shares ?? '—'}
-            </span>
-          </div>
-          <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>PLAYERS</span>
-            <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {playerCount(round)}
-            </span>
-          </div>
-          <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>POOL</span>
-            <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {fmtCAD(round.pool)}
+              {round.my_shares != null
+                ? `${round.my_shares}/${playerCount(round)}`
+                : '—'}
             </span>
           </div>
         </div>
@@ -144,7 +140,7 @@ function RoundCard({ round }) {
             {isWon ? (
               <>
                 <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--money)' }}>
-                  +{fmtCAD(round.my_prize)}
+                  +{fmtDollarInt(round.my_prize)}
                 </span>
                 <span style={{ fontSize: 10, color: 'var(--money)' }}>Won</span>
               </>

@@ -1,12 +1,33 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+const BASE = import.meta.env.VITE_API_BASE ?? ''
+
+function initData() {
+  return window.Telegram?.WebApp?.initData ?? ''
+}
+
+async function downloadAgreementPdf(kind, roundId) {
+  const path = kind === 'master'
+    ? '/api/agreement/master/download'
+    : `/api/agreement/round/${roundId}/download`
+  const res = await fetch(BASE + path, {
+    headers: { 'X-Init-Data': initData() },
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    let msg = text
+    try { msg = JSON.parse(text).detail ?? text } catch {}
+    throw new Error(msg)
+  }
+  const blob = await res.blob()
+  const name = kind === 'master'
+    ? 'lotto-chee-group-prize-agreement.pdf'
+    : `lotto-chee-round-${roundId}-agreement.pdf`
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = filename
+  a.download = name
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -14,20 +35,27 @@ function downloadText(filename, text) {
 export function AgreementSheet({ kind, roundId, title, onClose }) {
   const [doc, setDoc] = useState(null)
   const [err, setErr] = useState(null)
+  const [downloading, setDownloading] = useState(false)
+
+  const isRound = kind === 'round'
 
   useEffect(() => {
-    const load = kind === 'master'
-      ? api.agreement.master()
-      : api.agreement.round(roundId)
+    const load = isRound
+      ? api.agreement.round(roundId)
+      : api.agreement.master()
     load.then(setDoc).catch(e => setErr(e.message))
-  }, [kind, roundId])
+  }, [kind, roundId, isRound])
 
-  const onDownload = () => {
+  async function onDownload() {
     if (!doc) return
-    const name = kind === 'master'
-      ? 'lotto-chee-trustee-agreement.txt'
-      : `lotto-chee-round-${roundId}-agreement.txt`
-    downloadText(name, doc.body)
+    setDownloading(true)
+    try {
+      await downloadAgreementPdf(kind, roundId)
+    } catch (e) {
+      setErr(e.message)
+    } finally {
+      setDownloading(false)
+    }
   }
 
   return (
@@ -47,10 +75,6 @@ export function AgreementSheet({ kind, roundId, title, onClose }) {
             </div>
           ) : (
             <>
-              <a href={doc.bclc_url} target="_blank" rel="noopener noreferrer"
-                style={{ fontSize: 12, color: 'var(--tg)', fontWeight: 600, display: 'block', marginBottom: 12 }}>
-                BCLC Group Release Form (PDF) ↗
-              </a>
               <pre style={{
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                 fontSize: 12, lineHeight: 1.55, color: 'var(--tx-2)',
@@ -58,8 +82,10 @@ export function AgreementSheet({ kind, roundId, title, onClose }) {
                 maxHeight: '52dvh', overflow: 'auto', margin: 0,
               }}>{doc.body}</pre>
               <button type="button" className="btn btn-primary btn-block"
-                style={{ marginTop: 14 }} onClick={onDownload}>
-                Download .txt
+                style={{ marginTop: 14 }}
+                disabled={downloading}
+                onClick={onDownload}>
+                {downloading ? 'Preparing PDF…' : 'Download PDF'}
               </button>
             </>
           )}

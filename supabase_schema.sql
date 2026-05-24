@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS users (
     stripe_customer_id TEXT,
     photo_url          TEXT,
     email              TEXT,
+    street             TEXT,
+    city               TEXT,
+    province           TEXT,
+    postal_code        TEXT,
+    phone              TEXT,
+    declaration_category TEXT,
+    agreement_accepted_at TEXT,
     created_at         TEXT   NOT NULL
                        DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );

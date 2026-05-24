@@ -1,10 +1,17 @@
-"""Plain-text agreements for trustee ↔ beneficiary and per-round draw addenda."""
-
-from datetime import date
+"""Agreement text for BCLC Group Prize Agreement and per-round addenda."""
 
 BCLC_GROUP_RELEASE_URL = (
     "https://corporate.bclc.com/content/dam/bclccorporate/documents/forms/group-release-form.pdf"
 )
+
+TRUSTEE = {
+    "name": "Reza Heidari",
+    "street": "2039 Westview Dr.",
+    "city": "North Vancouver",
+    "province": "BC",
+    "phone": "236-999-7878",
+    "email": "rezaheidari@gmail.com",
+}
 
 _LOTTERY_LABELS = {
     "lotto_max": "Lotto Max",
@@ -17,70 +24,166 @@ def lottery_label(lottery_type: str | None) -> str:
     return _LOTTERY_LABELS.get(lottery_type or "", lottery_type or "BCLC draw")
 
 
+def _format_address(street: str | None, city: str | None, province: str | None, postal: str | None) -> str:
+    parts = []
+    if street:
+        parts.append(street)
+    line2 = ", ".join(p for p in [city, province, postal] if p)
+    if line2:
+        parts.append(line2)
+    return "\n  ".join(parts) if parts else "-"
+
+
 def build_master_agreement(
     *,
     beneficiary_name: str,
     beneficiary_id: int,
-    trustee_name: str,
-    trustee_id: int,
+    beneficiary_street: str | None = None,
+    beneficiary_city: str | None = None,
+    beneficiary_province: str | None = None,
+    beneficiary_postal: str | None = None,
+    beneficiary_phone: str | None = None,
+    beneficiary_email: str | None = None,
+    declaration_category: str | None = None,
     accepted_at: str | None = None,
+    **_kwargs,
 ) -> str:
-    accepted_line = (
-        f"Beneficiary accepted via Lotto Chee on {accepted_at}."
-        if accepted_at
-        else "Beneficiary accepted via Lotto Chee onboarding."
+    """Full Group Prize Agreement (BCLC form content) with Lotto Chee parties and round addendum notice."""
+    ben_address = _format_address(
+        beneficiary_street, beneficiary_city, beneficiary_province, beneficiary_postal
     )
-    return f"""LOTTO CHEE — GROUP POOL TRUSTEE AGREEMENT
-Between Group Trustee and Beneficiary
+    trustee_address = _format_address(
+        TRUSTEE["street"], TRUSTEE["city"], TRUSTEE["province"], None
+    )
+    decl = (declaration_category or "e").lower()
+    signed_date = accepted_at[:10] if accepted_at and len(accepted_at) >= 10 else "See Lotto Chee account"
 
-This agreement is between you (the Beneficiary) and the Group Trustee who purchases
-BCLC group lottery tickets on behalf of the Lotto Chee pool.
+    return f"""GROUP PRIZE AGREEMENT
+(BCLC Group Release Form - Lotto Chee)
 
-PARTIES
-  Group Trustee: {trustee_name} (Telegram ID {trustee_id})
-  Beneficiary:   {beneficiary_name} (Telegram ID {beneficiary_id})
+This Group Prize Agreement is required when a group lottery ticket wins a prize of
+$10,000.00 CAD or greater and must be completed by all group members entitled to a
+share of the prize won. Lotto Chee uses this agreement for pooled play and registers
+each member as a Beneficiary with the Group Trustee named below.
 
-1. ROLE OF TRUSTEE
-   The Trustee collects stakes, forms a group ticket purchase, and holds the physical
-   or digital ticket until the official BCLC draw. The Trustee does not guarantee any
-   prize outcome.
+LOTTO CHEE - GROUP TRUSTEE
+  Name:     {TRUSTEE["name"]}
+  Address:  {trustee_address}
+  Phone:    {TRUSTEE["phone"]}
+  Email:    {TRUSTEE["email"]}
 
-2. BCLC GROUP PRIZE REQUIREMENTS
-   If any pooled ticket wins $10,000 CAD or more, the official BCLC Group Prize
-   Agreement (Group Release Form) applies. Reference document:
-   {BCLC_GROUP_RELEASE_URL}
+BENEFICIARY
+  Name:     {beneficiary_name}
+  Address:  {ben_address}
+  Phone:    {beneficiary_phone or "-"}
+  Email:    {beneficiary_email or "-"}
+  Telegram: {beneficiary_id}
+  Declaration category: {decl}
 
-   Each Beneficiary must provide accurate legal identity information as collected
-   during Lotto Chee onboarding. The Trustee will file the BCLC form on behalf of the
-   group when required.
+ROUND AMENDMENT (ADDENDUM)
+  For each draw you join, a separate Round Draw Agreement (amendment) is issued once
+  entries close (one day before the draw). That amendment states your share, stake,
+  pool percentage, lottery game, and draw date for that round. It supplements this
+  master agreement. In case of conflict for a specific round, the round amendment
+  controls for that round only.
 
-3. STAKES & PAYOUTS
-   - Stakes are held in your Lotto Chee balance until allocated to a round.
-   - Prizes are distributed proportionally to each Beneficiary's verified share unless
-     otherwise stated in a round-specific addendum.
-   - The Trustee may deduct only pre-disclosed per-share ticket costs.
+TICKET INFORMATION
+  Ticket name:            Pooled BCLC ticket per round (Lotto Max, 6/49, or as stated
+                          in your round amendment)
+  Draw date(s):           As stated in each round amendment you join
+  Ticket control number:  Assigned by Lotto Chee per round when the ticket is purchased
 
-4. ROUND ADDENDA
-   Each draw round has a short Round Draw Agreement (addendum) that references this
-   master agreement and states your share, game type, and draw date for that round.
-   Round agreements become available once entries close (one day before draw) so the
-   Trustee can purchase tickets.
+The Group Trustee holds each pooled ticket on behalf of all Beneficiaries who joined
+that round.
 
-5. ENTRY WINDOW
-   Rounds accept new stakes until 11:59 PM local time on the calendar day that is
-   one full day before the scheduled draw date. After that, entries lock so tickets
-   can be purchased.
+TERMS AND CONDITIONS
+Each of the Beneficiaries, for and in consideration of and to induce the Corporations
+(British Columbia Lottery Corporation, "BCLC", and the Interprovincial Lottery
+Corporation, "ILC") to make payment or deliver any and all prizes associated with the
+Ticket (the "Prize"), hereby represent and warrant to and agree with the Corporations
+as follows:
 
-6. ACCURACY & ELIGIBILITY
-   You confirm you are 19+ and legally permitted to participate in BCLC lottery
-   products in British Columbia. You agree your profile information is accurate.
+1. That the Beneficiaries are the only individuals with a legal or beneficial interest
+   in the ticket bearing the control number assigned for the round joined (the
+   "Ticket").
 
-7. LIMITATION
-   BCLC is not a party to this agreement. Lotto Chee facilitates pooling only.
+2. The Group Trustee is the lawful holder of the Ticket and no person other than the
+   Beneficiaries has any interest in the Ticket or any right to payment or delivery of
+   any portion of the Prize.
 
-{accepted_line}
+3. That the Group Trustee ({TRUSTEE["name"]}) has been authorized by the Beneficiaries
+   to accept from BCLC, for and on behalf of all Beneficiaries, the Prize.
 
-— Lotto Chee · BC, Canada
+4. That the Group Trustee is: (a) a Beneficiary and member of the group entitled to
+   receive a share of the Prize; (b) the holder of the ticket as trustee for the
+   Beneficiaries; and (c) irrevocably authorized to receive payment of the Prize from
+   the Corporations in trust for the Beneficiaries.
+
+5. It is the responsibility of the Group Trustee and Beneficiaries, and not the
+   Corporations, to ensure that the Prize is distributed to the Beneficiaries as the
+   parties solely entitled to receive a portion of the Prize.
+
+6. The Beneficiaries have read, are familiar with and agree to be bound by, all rules
+   and regulations, game conditions and prize structure statements adopted by the
+   Corporations that apply to the Game or the Ticket.
+
+7. Payment or delivery of the Prize to the Group Trustee by the Corporations as
+   directed herein releases the Corporations from any further claims or demands by any
+   Beneficiary in respect of the Ticket.
+
+8. That the Beneficiaries agree the Ticket is not eligible for any additional payments
+   or prizes even where payments or prizes on other tickets in the Game are unclaimed.
+
+9. All parties entitled to the Prize have been identified as a Beneficiary in this
+   agreement (and in each applicable round amendment). All Beneficiaries acknowledge
+   that BCLC has no responsibility to ensure receipt of any Prize or portion thereof
+   by any Beneficiary.
+
+10. The Beneficiaries are each the full age of nineteen (19) years.
+
+11. The Beneficiaries hereby authorize and consent to BCLC collecting, recording,
+    publishing and broadcasting their respective names, addresses, places of residence,
+    prize details, images and expressed statements (a) without any claim for licensing
+    or broadcasting rights; and (b) without any claim related to the public release of
+    the Beneficiaries' Information.
+
+12. After two years from the date BCLC first declares the Beneficiaries' win publicly,
+    BCLC will, where feasible, remove or prevent further publication of the
+    Beneficiaries' Information on BCLC-controlled media. BCLC cannot control use by
+    third parties beyond the two-year period.
+
+13. The Beneficiaries hereby, jointly and severally, undertake to indemnify and save
+    BCLC and the ILC harmless from and against any liability, actions, claims,
+    demands, losses, payment and costs of any nature whatsoever related to the Ticket,
+    the Prize, publication of the Beneficiaries' Information and the prize claim process.
+
+14. This Agreement may be executed in counter-parts by the Group Trustee and
+    Beneficiaries and shall be binding upon the Group Trustee and Beneficiaries and
+    their respective heirs, executors, administrators and assigns.
+
+15. That each Beneficiary has completed, in full, the information required above and
+    by their signature below acknowledges he or she: (a) has read and accepts all
+    terms contained herein; (b) has been given the opportunity to obtain independent
+    legal advice; (c) confirms that all information provided is true and accurate.
+
+PRIVACY STATEMENT
+Your personal information is collected in accordance with the Freedom of Information
+and Protection of Privacy Act, British Columbia, and will be used by BCLC to administer
+and process lottery prizes (including verifying prize claims and fraud investigations);
+if you are a winner, publication of details for game integrity purposes; and to comply
+with applicable laws.
+
+Questions: BCLC Customer Support, 74 West Seymour Street, Kamloops, BC V2C 1E2 -
+1-866-815-0222 - bclc.com
+
+SIGNATURES & DECLARATIONS
+Group Trustee: {TRUSTEE["name"]} - Lotto Chee Group Trustee
+
+Beneficiary: {beneficiary_name}
+Digitally signed via Lotto Chee / Telegram - {signed_date}
+Declaration: {decl}
+
+- Lotto Chee - BC, Canada
 """
 
 
@@ -96,13 +199,13 @@ def build_round_agreement(
     share_pct: float | None,
     closed_at: str | None = None,
 ) -> str:
-    pct_line = f"{share_pct}%" if share_pct is not None else "—"
+    pct_line = f"{share_pct}%" if share_pct is not None else "-"
     closed_line = f"Entries closed: {closed_at}\n" if closed_at else ""
-    return f"""LOTTO CHEE — ROUND DRAW AGREEMENT (ADDENDUM)
+    return f"""LOTTO CHEE - ROUND DRAW AGREEMENT (AMENDMENT)
 Round #{round_id}
 
-This addendum supplements the Group Pool Trustee Agreement between you and the
-Group Trustee. In case of conflict on this round only, this addendum controls for
+This amendment supplements the Group Prize Agreement between you and Group Trustee
+{TRUSTEE["name"]}. In case of conflict on this round only, this amendment controls for
 Round #{round_id}.
 
 ROUND DETAILS
@@ -115,12 +218,8 @@ YOUR PARTICIPATION
   Stake:       ${stake_amount:.2f} CAD
   Pool share:  {pct_line} of round pool (${pool_amount:.2f} CAD total)
 
-BCLC REFERENCE
-  Official group release form (if prize ≥ $10,000 CAD):
-  {BCLC_GROUP_RELEASE_URL}
-
-By participating in this round you confirm you have read the master trustee agreement
+By participating in this round you confirm you have read the Group Prize Agreement
 and accept this round-specific share for the draw listed above.
 
-— Round #{round_id} · Lotto Chee
+- Round #{round_id} - Lotto Chee - Trustee: {TRUSTEE["name"]}
 """

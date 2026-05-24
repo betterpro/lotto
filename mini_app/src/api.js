@@ -32,6 +32,9 @@ export const api = {
     master: () => req('GET', '/api/agreement/master'),
     round:  (roundId) => req('GET', `/api/agreement/round/${roundId}`),
   },
+  beneficiary: {
+    save: (data) => req('POST', '/api/beneficiary', data),
+  },
   settings:     {
     get: ()      => req('GET', '/api/settings'),
     put: (body)  => req('PUT', '/api/settings', body),

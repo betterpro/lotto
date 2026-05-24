@@ -1,0 +1,8 @@
+-- Beneficiary profile fields (BCLC Group Prize Agreement)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS province TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS postal_code TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS declaration_category TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS agreement_accepted_at TEXT;

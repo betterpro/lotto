@@ -45,6 +45,14 @@ export default function App() {
     api.me().then(setUser).catch(e => setError(e.message))
   }, [])
 
+  useEffect(() => {
+    if (!user) return
+    try {
+      const raw = localStorage.getItem(ONB_KEY)
+      if (raw) api.beneficiary.save(JSON.parse(raw)).catch(() => {})
+    } catch { /* ignore */ }
+  }, [user])
+
   if (error) {
     const notInTelegram = error.includes('X-Init-Data') || error.includes('initData') || error.includes('bot first')
     if (notInTelegram) {
@@ -86,6 +94,7 @@ export default function App() {
   if (!onboarded) return (
     <Onboarding onAccept={(data) => {
       localStorage.setItem(ONB_KEY, JSON.stringify(data))
+      api.beneficiary.save(data).catch(() => {})
       setOnboarded(true)
     }} />
   )

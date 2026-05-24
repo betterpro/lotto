@@ -28,7 +28,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application
 
 import config
-from agreements import BCLC_GROUP_RELEASE_URL, build_master_agreement, build_round_agreement
+from agreements import TRUSTEE, build_master_agreement, build_round_agreement, lottery_label
+from agreement_pdf import build_agreement_pdf
 from bot import build_application
 from database import get_db
 
@@ -595,39 +596,102 @@ def _display_name(row) -> str:
     return row["full_name"] or row["username"] or f"User {row['telegram_id']}"
 
 
+def _beneficiary_agreement_kwargs(user: dict) -> dict:
+    return {
+        "beneficiary_name": user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        "beneficiary_id": user["telegram_id"],
+        "beneficiary_street": user.get("street"),
+        "beneficiary_city": user.get("city"),
+        "beneficiary_province": user.get("province"),
+        "beneficiary_postal": user.get("postal_code"),
+        "beneficiary_phone": user.get("phone"),
+        "beneficiary_email": user.get("email"),
+        "declaration_category": user.get("declaration_category"),
+        "accepted_at": user.get("agreement_accepted_at"),
+    }
+
+
+@app.post("/api/beneficiary")
+async def api_save_beneficiary(request: Request, x_init_data: str | None = Header(default=None)):
+    """Persist beneficiary profile from onboarding (BCLC Group Prize Agreement)."""
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    full_name = (body.get("fullName") or body.get("full_name") or user.get("full_name") or "").strip()
+    accepted = body.get("acceptedAt") or body.get("accepted_at")
+    await db.execute(
+        """UPDATE users SET
+            full_name = COALESCE(NULLIF(?, ''), full_name),
+            street = ?, city = ?, province = ?, postal_code = ?,
+            phone = ?, declaration_category = ?, agreement_accepted_at = ?
+           WHERE telegram_id = ?""",
+        (
+            full_name,
+            body.get("street"),
+            body.get("city"),
+            body.get("province"),
+            body.get("postal"),
+            body.get("phone"),
+            body.get("category"),
+            accepted,
+            user["telegram_id"],
+        ),
+    )
+    await db.commit()
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    await db.close()
+    return {"ok": True, "user": dict(row) if row else None}
+
+
 @app.get("/api/agreement/master")
 async def api_agreement_master(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    trustee = await _trustee_row(db)
-    body = build_master_agreement(
-        beneficiary_name=user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
-        beneficiary_id=user["telegram_id"],
-        trustee_name=_display_name(trustee),
-        trustee_id=trustee["telegram_id"] if trustee else config.TRUSTEE_ID,
-    )
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    u = dict(row) if row else dict(user)
+    body = build_master_agreement(**_beneficiary_agreement_kwargs(u))
     await db.close()
     return {
-        "title": "Group Pool Trustee Agreement",
+        "title": "Group Prize Agreement",
         "body": body,
-        "bclc_url": BCLC_GROUP_RELEASE_URL,
     }
 
 
 @app.get("/api/agreement/master/download")
 async def api_agreement_master_download(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    trustee = await _trustee_row(db)
-    body = build_master_agreement(
-        beneficiary_name=user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
-        beneficiary_id=user["telegram_id"],
-        trustee_name=_display_name(trustee),
-        trustee_id=trustee["telegram_id"] if trustee else config.TRUSTEE_ID,
-    )
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    u = dict(row) if row else dict(user)
+    kwargs = _beneficiary_agreement_kwargs(u)
+    body = build_master_agreement(**kwargs)
     await db.close()
+    ben = kwargs["beneficiary_name"]
+    addr = ", ".join(
+        p for p in [
+            u.get("street"),
+            u.get("city"),
+            u.get("province"),
+            u.get("postal_code"),
+        ] if p
+    ) or "—"
+    pdf_bytes = build_agreement_pdf(
+        title="Group Prize Agreement",
+        subtitle=f"Beneficiary: {ben} · Trustee: {TRUSTEE['name']}",
+        body=body,
+        highlights=[
+            ("Trustee", TRUSTEE["name"]),
+            ("Trustee email", TRUSTEE["email"]),
+            ("Beneficiary", ben),
+            ("Beneficiary address", addr),
+        ],
+        highlights_title="Parties",
+        skip_sections=["LOTTO CHEE — GROUP TRUSTEE", "BENEFICIARY"],
+    )
     return Response(
-        content=body,
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="lotto-chee-trustee-agreement.txt"'},
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="lotto-chee-group-prize-agreement.pdf"'},
     )
 
 
@@ -669,19 +733,63 @@ async def api_agreement_round(round_id: int, x_init_data: str | None = Header(de
     return {
         "title": f"Round #{round_id} Draw Agreement",
         "body": body,
-        "bclc_url": BCLC_GROUP_RELEASE_URL,
         "round_id": round_id,
     }
 
 
 @app.get("/api/agreement/round/{round_id}/download")
 async def api_agreement_round_download(round_id: int, x_init_data: str | None = Header(default=None)):
-    data = await api_agreement_round(round_id, x_init_data)
+    user, db = await _auth(x_init_data)
+    await _auto_close_round_if_due(db, round_id)
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    rd = dict(round_)
+    if not agreement_available(rd["status"], rd.get("draw_date")):
+        await db.close()
+        raise HTTPException(403, "Round agreement available after entries close (1 day before draw)")
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
+        (round_id, user["telegram_id"]),
+    )
+    part = await cur.fetchone()
+    if not part:
+        await db.close()
+        raise HTTPException(403, "Join this round to access your draw agreement")
+    pool = rd.get("pool") or 0
+    share_pct = round(part["amount"] / pool * 100, 1) if pool else None
+    beneficiary_name = user.get("full_name") or user.get("username") or f"User {user['telegram_id']}"
+    body = build_round_agreement(
+        round_id=round_id,
+        lottery_type=rd.get("lottery_type"),
+        draw_date=rd.get("draw_date"),
+        beneficiary_name=beneficiary_name,
+        shares=part.get("shares") or 1,
+        stake_amount=part["amount"],
+        pool_amount=pool,
+        share_pct=share_pct,
+        closed_at=rd.get("closed_at"),
+    )
+    await db.close()
+    pct_line = f"{share_pct}%" if share_pct is not None else "—"
+    pdf_bytes = build_agreement_pdf(
+        title=f"Round #{round_id} Draw Agreement",
+        subtitle=f"Addendum · {lottery_label(rd.get('lottery_type'))} · Draw {rd.get('draw_date') or 'TBD'}",
+        body=body,
+        highlights=[
+            ("Beneficiary", beneficiary_name),
+            ("Shares", str(part.get("shares") or 1)),
+            ("Stake", f"${part['amount']:.2f} CAD"),
+            ("Pool share", f"{pct_line} of ${pool:.2f}"),
+        ],
+    )
     return Response(
-        content=data["body"],
-        media_type="text/plain; charset=utf-8",
+        content=pdf_bytes,
+        media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="lotto-chee-round-{round_id}-agreement.txt"'
+            "Content-Disposition": f'attachment; filename="lotto-chee-round-{round_id}-agreement.pdf"'
         },
     )
 
