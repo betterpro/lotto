@@ -476,17 +476,7 @@ async def api_invite(x_init_data: str | None = Header(default=None)):
 # /api/round
 # ---------------------------------------------------------------------------
 
-@app.get("/api/round")
-async def api_round(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
-    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
-    round_ = await cur.fetchone()
-    if round_ is None:
-        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
-        round_ = await cur.fetchone()
-    if round_ is None:
-        await db.close()
-        return {"round": None}
+async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd = dict(round_)
     rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
     cur = await db.execute(
@@ -499,7 +489,7 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     for p in parts:
         p["pct"] = round(p["amount"] / pool * 100, 1) if pool else 0
         p["won"] = (rd.get("winner_id") == p["user_id"])
-    my = next((p for p in parts if p["user_id"] == user["telegram_id"]), None)
+    my = next((p for p in parts if p["user_id"] == user_id), None)
     rd["participants"] = parts
     rd["pool"] = pool
     rd["my_stake"]  = my["amount"] if my else None
@@ -509,7 +499,7 @@ async def api_round(x_init_data: str | None = Header(default=None)):
     rd["my_won"]    = my["won"]    if my else None
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
     rd["has_ticket_image"] = bool(rd.get("ticket_image"))
-    rd.pop("ticket_image", None)  # don't send full image in list response
+    rd.pop("ticket_image", None)
     if rd.get("winner_id"):
         cur = await db.execute(
             "SELECT full_name, username FROM users WHERE telegram_id=?", (rd["winner_id"],)
@@ -518,8 +508,42 @@ async def api_round(x_init_data: str | None = Header(default=None)):
         rd["winner_name"] = (w["full_name"] or w["username"]) if w else None
     else:
         rd["winner_name"] = None
+    return rd
+
+
+_OPEN_ROUNDS_ORDER = (
+    "CASE WHEN draw_date IS NULL THEN 1 ELSE 0 END, draw_date ASC, id ASC"
+)
+
+
+@app.get("/api/round")
+async def api_round(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+    )
+    round_ = await cur.fetchone()
+    if round_ is None:
+        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+        round_ = await cur.fetchone()
+    if round_ is None:
+        await db.close()
+        return {"round": None}
+    rd = await _build_round_detail(db, round_, user["telegram_id"])
     await db.close()
     return {"round": rd}
+
+
+@app.get("/api/rounds/open")
+async def api_open_rounds(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER}"
+    )
+    rows = await cur.fetchall()
+    rounds = [await _build_round_detail(db, r, user["telegram_id"]) for r in rows]
+    await db.close()
+    return {"rounds": rounds}
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +585,13 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
-    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
+    round_id = body.get("round_id")
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (int(round_id),))
+    else:
+        cur = await db.execute(
+            f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+        )
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No open round")
@@ -772,26 +802,35 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
     if round_ is None:
         await db.close()
         return {"round": None}
-    rd = dict(round_)
-    rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
-    cur = await db.execute(
-        "SELECT p.*, u.username, u.full_name FROM participations p "
-        "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
-        (rd["id"],),
-    )
-    parts = [dict(r) for r in await cur.fetchall()]
-    pool = rd.get("pool") or sum(p["amount"] for p in parts)
-    for p in parts:
-        p["pct"] = round(p["amount"] / pool * 100, 1) if pool else 0
-        p["won"] = (rd.get("winner_id") == p["user_id"])
-    rd["participants"] = parts
-    rd["pool"] = pool
-    rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
-    rd["has_ticket_image"] = bool(rd.get("ticket_image"))
-    if rd.get("ticket_image") and not rd["ticket_image"].startswith("http"):
-        rd["ticket_image"] = f"data:image/jpeg;base64,{rd['ticket_image']}"
+    rd = await _build_round_detail(db, round_, user["telegram_id"])
+    cur2 = await db.execute("SELECT ticket_image FROM rounds WHERE id=?", (rd["id"],))
+    img_row = await cur2.fetchone()
+    if img_row and img_row["ticket_image"]:
+        ti = img_row["ticket_image"]
+        rd["ticket_image"] = ti if ti.startswith("http") else f"data:image/jpeg;base64,{ti}"
     await db.close()
     return {"round": rd}
+
+
+@app.get("/api/admin/rounds")
+async def admin_rounds(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_trustee(x_init_data)
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE status IN ('open','closed','uploaded') "
+        f"ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 ELSE 2 END, {_OPEN_ROUNDS_ORDER}"
+    )
+    rows = await cur.fetchall()
+    rounds = []
+    for row in rows:
+        rd = await _build_round_detail(db, row, user["telegram_id"])
+        cur2 = await db.execute("SELECT ticket_image FROM rounds WHERE id=?", (rd["id"],))
+        img_row = await cur2.fetchone()
+        if img_row and img_row["ticket_image"]:
+            ti = img_row["ticket_image"]
+            rd["ticket_image"] = ti if ti.startswith("http") else f"data:image/jpeg;base64,{ti}"
+        rounds.append(rd)
+    await db.close()
+    return {"rounds": rounds}
 
 
 @app.post("/api/admin/round/new")
@@ -827,9 +866,20 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
 
 
 @app.post("/api/admin/round/close")
-async def admin_close_round(x_init_data: str | None = Header(default=None)):
+async def admin_close_round(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM rounds WHERE status='open' ORDER BY id DESC LIMIT 1")
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    round_id = body.get("round_id")
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND status='open'", (int(round_id),))
+    else:
+        cur = await db.execute(
+            f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+        )
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No open round")

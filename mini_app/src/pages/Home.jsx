@@ -4,6 +4,8 @@ import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
+import LiveRoundDeck from '../components/LiveRoundDeck.jsx'
+import { lotteryMeta } from '../lottery.js'
 import { GiftIcon, WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
@@ -276,7 +278,7 @@ function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToas
   async function confirm() {
     setBusy(true)
     try {
-      await api.participate(cost)
+      await api.participate(cost, round.id)
       onJoined(shares)
       onClose()
     } catch (e) { showToast(e.message, 'error') }
@@ -353,9 +355,108 @@ function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToas
   )
 }
 
+// ─── Live round card ─────────────────────────────────────────────────────────
+function LiveRoundCard({ round, onJoin, peek }) {
+  const isClosing = round.display_status === 'CLOSING'
+  const isLive    = round.display_status === 'OPEN' || isClosing
+  const jackpot   = round.jackpot || 0
+  const poolTarget  = (round.tickets_target || 25) * (round.price_per_share || 5)
+  const poolRaised  = round.pool || 0
+  const poolPct     = poolTarget > 0 ? Math.min(1, poolRaised / poolTarget) : 0
+  const lotto       = lotteryMeta(round.lottery_type)
+
+  return (
+    <div className="jackpot" style={peek ? { pointerEvents: 'none' } : undefined}>
+      <div className="row between" style={{ marginBottom: 14 }}>
+        <div className="row gap-8">
+          <span className="status-dot live" />
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
+            {isClosing ? 'CLOSING SOON' : 'LIVE ROUND'}
+          </span>
+        </div>
+        <span className="mono dim" style={{ fontSize: 12 }}>#{round.id}</span>
+      </div>
+
+      <div className="row gap-10" style={{ alignItems: 'center' }}>
+        <img src={lotto.logo} alt={lotto.name}
+          style={{ height: 44, width: 56, objectFit: 'contain', flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {jackpot > 0 ? (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+                Estimated jackpot
+              </div>
+              <div className="pool-display">
+                <span className="cur">$</span>
+                <span className="amt">{fmtBig(jackpot)}</span>
+                <span className="unit">CAD</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+                Current pool
+              </div>
+              <div className="pool-display">
+                <span className="cur">$</span>
+                <span className="amt">{fmtBig(poolRaised)}</span>
+                <span className="unit">CAD</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {round.draw_date && (
+        <div style={{ margin: '18px 0 14px' }}>
+          <Countdown to={round.draw_date + (round.draw_date.includes('T') ? '' : 'T22:30:00')} />
+          <div className="row between" style={{ marginTop: 6, fontSize: 11, color: 'var(--tx-3)', whiteSpace: 'nowrap' }}>
+            <span>Draw date</span>
+            <span>{round.draw_date}</span>
+          </div>
+        </div>
+      )}
+
+      {jackpot > 0 && (
+        <>
+          <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
+            <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+              Pool · {round.tickets_target || 25} tickets target
+            </span>
+            <span className="mono" style={{ fontSize: 12 }}>
+              <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
+              <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
+            </span>
+          </div>
+          <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
+        </>
+      )}
+
+      <div className="row between" style={{ marginTop: 14 }}>
+        <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+          {round.participants?.length ?? 0} participant{(round.participants?.length ?? 0) !== 1 ? 's' : ''}
+        </span>
+        {round.my_pct != null && (
+          <span className="chip chip-gold">
+            <BoltIcon width={11} height={11} />{round.my_pct}% share
+          </span>
+        )}
+      </div>
+
+      {!peek && isLive && (
+        <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} onClick={onJoin}>
+          <PlusIcon width={16} height={16} />
+          {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Home screen ─────────────────────────────────────────────────────────────
 export default function Home({ user, onUserUpdate }) {
-  const [round, setRound]   = useState(undefined)
+  const [liveRounds, setLiveRounds] = useState(undefined)
+  const [roundIndex, setRoundIndex] = useState(0)
   const [lastDrawn, setLastDrawn] = useState(null)
   const [sub, setSub]       = useState(null)
   const [topUp, setTopUp]           = useState(false)
@@ -363,6 +464,16 @@ export default function Home({ user, onUserUpdate }) {
   const [join, setJoin]             = useState(false)
   const [pendingJoin, setPendingJoin] = useState(null) // { shares }
   const showToast = useToast()
+
+  const round = liveRounds?.[roundIndex] ?? null
+
+  function reloadLive() {
+    return api.rounds.open().then(d => {
+      const list = d.rounds || []
+      setLiveRounds(list)
+      setRoundIndex(i => Math.min(i, Math.max(0, list.length - 1)))
+    }).catch(() => setLiveRounds([]))
+  }
 
   function openTopUpForJoin(shortfall, shares) {
     setPendingJoin({ shares })
@@ -372,20 +483,16 @@ export default function Home({ user, onUserUpdate }) {
   }
 
   useEffect(() => {
-    api.round().then(d => setRound(d.round)).catch(() => setRound(null))
-    api.rounds().then(d => {
+    reloadLive()
+    api.rounds.list().then(d => {
       const drawn = (d.rounds || []).find(r => r.display_status === 'DRAWN')
       setLastDrawn(drawn || null)
     }).catch(() => {})
     api.stripe.subscription().then(r => setSub(r.subscription)).catch(() => {})
   }, [])
 
-  const isLive    = round?.display_status === 'OPEN'
-  const isClosing = round?.display_status === 'CLOSING'
   const myShares  = round?.my_stake ? Math.round(round.my_stake / (round.price_per_share || 5)) : 0
-  const poolTarget = (round?.tickets_target || 25) * (round?.price_per_share || 5)
   const poolRaised = round?.pool || 0
-  const poolPct    = poolTarget > 0 ? Math.min(1, poolRaised / poolTarget) : 0
   const jackpot    = round?.jackpot || 0
   const winPot     = jackpot && poolRaised > 0 && round?.my_stake
     ? Math.round((round.my_stake / poolRaised) * (jackpot / (round.tickets_target || 25)))
@@ -406,10 +513,10 @@ export default function Home({ user, onUserUpdate }) {
         </div>
       </div>
 
-      {/* Live round hero */}
-      {round === undefined ? (
+      {/* Live rounds — swipe deck */}
+      {liveRounds === undefined ? (
         <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
-      ) : !round ? (
+      ) : liveRounds.length === 0 ? (
         <div style={{ padding: '8px 16px' }}>
           <div className="jackpot" style={{ textAlign: 'center', padding: '40px 18px' }}>
             <div style={{ fontSize: 40, marginBottom: 10 }}>🎰</div>
@@ -418,91 +525,14 @@ export default function Home({ user, onUserUpdate }) {
           </div>
         </div>
       ) : (
-        <div style={{ padding: '8px 16px 4px' }}>
-          <div className="jackpot">
-            {/* Status row */}
-            <div className="row between" style={{ marginBottom: 14 }}>
-              <div className="row gap-8">
-                <span className="status-dot live" />
-                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
-                  {isClosing ? 'CLOSING SOON' : 'LIVE ROUND'}
-                </span>
-              </div>
-              <span className="mono dim" style={{ fontSize: 12 }}>#{round.id}</span>
-            </div>
-
-            {/* Jackpot */}
-            {jackpot > 0 ? (
-              <>
-                <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
-                  Estimated jackpot
-                </div>
-                <div className="pool-display">
-                  <span className="cur">$</span>
-                  <span className="amt">{fmtBig(jackpot)}</span>
-                  <span className="unit">CAD</span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
-                  Current pool
-                </div>
-                <div className="pool-display">
-                  <span className="cur">$</span>
-                  <span className="amt">{fmtBig(poolRaised)}</span>
-                  <span className="unit">CAD</span>
-                </div>
-              </>
-            )}
-
-            {/* Countdown */}
-            {round.draw_date && (
-              <div style={{ margin: '18px 0 14px' }}>
-                <Countdown to={round.draw_date + (round.draw_date.includes('T') ? '' : 'T22:30:00')} />
-                <div className="row between" style={{ marginTop: 6, fontSize: 11, color: 'var(--tx-3)', whiteSpace: 'nowrap' }}>
-                  <span>Draw date</span>
-                  <span>{round.draw_date}</span>
-                </div>
-              </div>
-            )}
-
-            {/* Pool progress */}
-            {jackpot > 0 && (
-              <>
-                <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-                    Pool · {round.tickets_target || 25} tickets target
-                  </span>
-                  <span className="mono" style={{ fontSize: 12 }}>
-                    <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
-                    <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
-                  </span>
-                </div>
-                <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
-              </>
-            )}
-
-            {/* Participants */}
-            <div className="row between" style={{ marginTop: 14 }}>
-              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-                {round.participants?.length ?? 0} participant{(round.participants?.length ?? 0) !== 1 ? 's' : ''}
-              </span>
-              {round.my_pct != null && (
-                <span className="chip chip-gold">
-                  <BoltIcon width={11} height={11} />{round.my_pct}% share
-                </span>
-              )}
-            </div>
-
-            {(isLive || isClosing) && (
-              <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} onClick={() => setJoin(true)}>
-                <PlusIcon width={16} height={16} />
-                {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
-              </button>
-            )}
-          </div>
-        </div>
+        <LiveRoundDeck
+          rounds={liveRounds}
+          index={roundIndex}
+          onIndexChange={setRoundIndex}
+          renderCard={(r, peek) => (
+            <LiveRoundCard round={r} peek={peek} onJoin={() => setJoin(true)} />
+          )}
+        />
       )}
 
       {/* Your stake */}
@@ -680,7 +710,7 @@ export default function Home({ user, onUserUpdate }) {
         onJoined={(n) => {
           setPendingJoin(null)
           showToast(`Joined with ${n} share${n > 1 ? 's' : ''}!`, 'success')
-          api.round().then(d => setRound(d.round))
+          reloadLive()
           api.me().then(onUserUpdate)
         }}
       />

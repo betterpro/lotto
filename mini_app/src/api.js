@@ -38,8 +38,11 @@ export const api = {
     deposit: (amount) => req('POST', '/api/etransfer/deposit', { amount }),
   },
   round:        ()             => req('GET',  '/api/round'),
-  rounds:       ()             => req('GET',  '/api/rounds'),
-  participate:  (amount)       => req('POST', '/api/participate', { amount }),
+  rounds: {
+    list: ()     => req('GET',  '/api/rounds'),
+    open: ()     => req('GET',  '/api/rounds/open'),
+  },
+  participate:  (amount, round_id) => req('POST', '/api/participate', { amount, round_id }),
   transactions: ()             => req('GET',  '/api/transactions'),
   stripe: {
     config:              ()       => req('GET',  '/api/stripe/config'),
@@ -51,13 +54,14 @@ export const api = {
   },
   admin: {
     newRound:     (data)          => req('POST', '/api/admin/round/new', data),
-    closeRound:   ()              => req('POST', '/api/admin/round/close'),
+    closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
     scanTicket:   (round_id, image_b64) => req('POST', '/api/admin/round/scan-ticket', { round_id, image_b64 }),
     uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket', { round_id, numbers }),
     results:      (round_id, winning_numbers, bonus_number, total_prize) =>
                                      req('POST', '/api/admin/round/results', { round_id, winning_numbers, bonus_number, total_prize }),
     round:        ()              => req('GET',  '/api/admin/round'),
+    rounds:       ()              => req('GET',  '/api/admin/rounds'),
     deposits:     ()              => req('GET',  '/api/admin/deposits'),
     resolve:      (id, action)    => req('POST', `/api/admin/deposits/${id}`, { action }),
     members:      ()              => req('GET',  '/api/admin/members'),

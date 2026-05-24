@@ -41,15 +41,6 @@ async def cmd_newround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     conn = ctx.bot_data["db"]
-    existing = await db.get_open_round(conn)
-    if existing:
-        await _reply(
-            update,
-            f"⚠️ Round #{existing['id']} is already open. Close it first.",
-            keyboard=admin_menu(),
-        )
-        return
-
     round_id = await db.create_round(conn)
     await _reply(
         update,

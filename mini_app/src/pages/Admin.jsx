@@ -3,6 +3,7 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
+import { LOTTERY_TYPES, lotteryMeta } from '../lottery.js'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon,
@@ -62,15 +63,6 @@ function SummaryRow({ k, v, mono }) {
   )
 }
 
-const LOTTERY_TYPES = [
-  { id: 'lotto_max', name: 'Lotto Max', price: 6, logo: '/max.png' },
-  { id: '649',       name: '6/49',      price: 3, logo: '/649.png' },
-]
-
-function lotteryMeta(type) {
-  return LOTTERY_TYPES.find(t => t.id === type) || LOTTERY_TYPES[0]
-}
-
 // ── New Round Sheet ────────────────────────────────────────────────────────
 function NewRoundSheet({ onClose, onCreated, showToast }) {
   const [lotteryType, setLotteryType] = useState('lotto_max')
@@ -96,7 +88,7 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
         price_per_share: Number(price)   || 6,
       })
       showToast(`Round #${res.round_id} opened!`, 'success')
-      onCreated()
+      onCreated(res.round_id)
       onClose()
     } catch (err) { showToast(err.message, 'error') }
     finally { setBusy(false) }
@@ -414,7 +406,8 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
 // ── Main Admin page ────────────────────────────────────────────────────────
 export default function Admin() {
   const [tab,      setTab]      = useState('round')
-  const [round,    setRound]    = useState(undefined)
+  const [rounds,   setRounds]   = useState(undefined)
+  const [selectedId, setSelectedId] = useState(null)
   const [deposits, setDeposits] = useState(null)
   const [imapOk,   setImapOk]  = useState(false)
   const [members,  setMembers]  = useState(null)
@@ -424,11 +417,20 @@ export default function Admin() {
   const [showRes,  setShowRes]  = useState(false)
   const showToast = useToast()
 
-  const loadRound    = useCallback(() => api.admin.round().then(d => setRound(d.round)).catch(() => setRound(null)), [])
+  const round = rounds?.find(r => r.id === selectedId) ?? rounds?.[0] ?? null
+
+  const loadRounds = useCallback(() => api.admin.rounds().then(d => {
+    const list = d.rounds || []
+    setRounds(list)
+    setSelectedId(prev => {
+      if (prev && list.some(r => r.id === prev)) return prev
+      return list[0]?.id ?? null
+    })
+  }).catch(() => setRounds([])), [])
   const loadDeposits = useCallback(() => api.admin.deposits().then(d => { setDeposits(d.deposits); setImapOk(!!d.imap_configured) }).catch(() => setDeposits([])), [])
   const loadMembers  = useCallback(() => api.admin.members().then(d => setMembers(d.members)).catch(() => setMembers([])), [])
 
-  useEffect(() => { loadRound(); loadDeposits(); loadMembers() }, [])
+  useEffect(() => { loadRounds(); loadDeposits(); loadMembers() }, [])
 
   function setB(k, v) { setBusy(p => ({ ...p, [k]: v })) }
 
@@ -437,7 +439,7 @@ export default function Admin() {
     try {
       const res = await fn()
       showToast(label(res), 'success')
-      await loadRound()
+      await loadRounds()
     } catch (err) { showToast(err.message, 'error') }
     finally { setB(key, false) }
   }
@@ -454,8 +456,7 @@ export default function Admin() {
 
   const ds       = round?.display_status || round?.status
   const st       = round?.status
-  const canOpen  = !round || ['DRAWN','done','drawn'].includes(ds)
-  const canClose = st === 'open' || ds === 'OPEN'
+  const canClose = round && (st === 'open' || ds === 'OPEN')
   const canUpload = st === 'closed' || st === 'uploaded' || ds === 'UPLOADED' || ds === 'CLOSING'
   const canResults = canUpload || st === 'uploaded'
 
@@ -488,7 +489,7 @@ export default function Admin() {
         {[
           { Icon: UsersIcon,  label: 'Members', value: members?.length ?? '—',           color: 'var(--tg)'    },
           { Icon: WalletIcon, label: 'Pending', value: pendingCount || '—',              color: 'var(--warn)'  },
-          { Icon: TicketIcon, label: 'Pool',    value: round ? fmtCAD(round.pool) : '—', color: 'var(--money)' },
+          { Icon: TicketIcon, label: 'Pool',    value: round ? fmtCAD(round.pool) : (rounds?.filter(r => r.status === 'open').length ? `${rounds.filter(r => r.status === 'open').length} live` : '—'), color: 'var(--money)' },
         ].map(({ Icon, label, value, color }) => (
           <div key={label} className="card col gap-4" style={{ padding: '10px 12px' }}>
             <Icon width={14} height={14} style={{ color }} />
@@ -520,11 +521,35 @@ export default function Admin() {
       {/* ── Round tab ── */}
       {tab === 'round' && (
         <div style={{ padding: '12px 16px 24px' }}>
-          {round === undefined ? (
+          {rounds === undefined ? (
             <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 40 }}>
               <div className="spinner" />
             </div>
-          ) : round ? (
+          ) : (
+            <>
+          {rounds.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginBottom: 12, paddingBottom: 2 }}>
+              {rounds.map(r => {
+                const sel = r.id === round?.id
+                const meta = lotteryMeta(r.lottery_type)
+                return (
+                  <button key={r.id} onClick={() => setSelectedId(r.id)} style={{
+                    flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '8px 12px', borderRadius: 10, cursor: 'pointer', border: 'none',
+                    background: sel ? 'rgba(46,166,255,.16)' : 'var(--surface-2)',
+                    outline: sel ? '1.5px solid var(--tg)' : '1.5px solid transparent',
+                    fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+                    color: sel ? 'var(--tg)' : 'var(--tx-1)',
+                  }}>
+                    <img src={meta.logo} alt={meta.name} style={{ height: 18, objectFit: 'contain' }} />
+                    #{r.id}
+                    {r.draw_date && <span style={{ color: 'var(--tx-3)', fontWeight: 500 }}>{r.draw_date.slice(5)}</span>}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {round ? (
             <div className="card" style={{ marginBottom: 12 }}>
               <div className="row between" style={{ marginBottom: 12 }}>
                 <div className="row gap-8" style={{ alignItems: 'center' }}>
@@ -623,35 +648,40 @@ export default function Admin() {
           {/* Actions */}
           <div className="col" style={{ gap: 8 }}>
             <button className="btn btn-primary btn-block"
-              disabled={!canOpen || busy.new}
-              style={{ opacity: canOpen ? 1 : .4 }}
+              disabled={busy.new}
               onClick={() => setShowNew(true)}>
               <PlusIcon width={16} height={16} />
               Open new round
             </button>
-            <button className="btn btn-block"
-              style={{ background: 'var(--surface-2)', opacity: canClose ? 1 : .4 }}
-              disabled={!canClose || busy.close}
-              onClick={() => roundAction('close', api.admin.closeRound, r => `Round #${r.round_id} closed.`)}>
-              {busy.close ? 'Closing…' : 'Close round'}
-            </button>
-            <button className="btn btn-block"
-              style={{ background: canUpload ? 'rgba(46,166,255,.12)' : 'var(--surface-2)',
-                       color: canUpload ? 'var(--tg)' : undefined, opacity: canUpload ? 1 : .4 }}
-              disabled={!canUpload || !round}
-              onClick={() => setShowUp(true)}>
-              <UploadIcon width={16} height={16} />
-              Upload ticket numbers
-            </button>
-            <button className="btn btn-block"
-              style={{ background: canResults ? 'rgba(245,199,59,.12)' : 'var(--surface-2)',
-                       color: canResults ? 'var(--gold)' : undefined, opacity: canResults ? 1 : .4 }}
-              disabled={!canResults || !round}
-              onClick={() => setShowRes(true)}>
-              <TrophyIcon width={16} height={16} />
-              Enter results
-            </button>
+            {round && (
+              <>
+                <button className="btn btn-block"
+                  style={{ background: 'var(--surface-2)', opacity: canClose ? 1 : .4 }}
+                  disabled={!canClose || busy.close}
+                  onClick={() => roundAction('close', () => api.admin.closeRound(round.id), r => `Round #${r.round_id} closed.`)}>
+                  {busy.close ? 'Closing…' : `Close round #${round.id}`}
+                </button>
+                <button className="btn btn-block"
+                  style={{ background: canUpload ? 'rgba(46,166,255,.12)' : 'var(--surface-2)',
+                           color: canUpload ? 'var(--tg)' : undefined, opacity: canUpload ? 1 : .4 }}
+                  disabled={!canUpload}
+                  onClick={() => setShowUp(true)}>
+                  <UploadIcon width={16} height={16} />
+                  Upload ticket numbers
+                </button>
+                <button className="btn btn-block"
+                  style={{ background: canResults ? 'rgba(245,199,59,.12)' : 'var(--surface-2)',
+                           color: canResults ? 'var(--gold)' : undefined, opacity: canResults ? 1 : .4 }}
+                  disabled={!canResults}
+                  onClick={() => setShowRes(true)}>
+                  <TrophyIcon width={16} height={16} />
+                  Enter results
+                </button>
+              </>
+            )}
           </div>
+            </>
+          )}
         </div>
       )}
 
@@ -779,7 +809,7 @@ export default function Admin() {
       {showNew && (
         <NewRoundSheet
           onClose={() => setShowNew(false)}
-          onCreated={loadRound}
+          onCreated={(id) => loadRounds().then(() => id && setSelectedId(id))}
           showToast={showToast}
         />
       )}
@@ -787,7 +817,7 @@ export default function Admin() {
         <UploadTicketSheet
           round={round}
           onClose={() => setShowUp(false)}
-          onUploaded={loadRound}
+          onUploaded={loadRounds}
           showToast={showToast}
         />
       )}
@@ -795,7 +825,7 @@ export default function Admin() {
         <ResultsSheet
           round={round}
           onClose={() => setShowRes(false)}
-          onResults={loadRound}
+          onResults={loadRounds}
           showToast={showToast}
         />
       )}

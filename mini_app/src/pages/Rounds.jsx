@@ -171,7 +171,7 @@ export default function Rounds() {
   const [filter, setFilter] = useState('All')
 
   useEffect(() => {
-    api.rounds().then(d => setRounds(d.rounds || [])).catch(() => setRounds([]))
+    api.rounds.list().then(d => setRounds(d.rounds || [])).catch(() => setRounds([]))
   }, [])
 
   if (rounds === null) return (
