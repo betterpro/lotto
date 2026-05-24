@@ -8,7 +8,7 @@ import History   from './pages/History.jsx'
 import Profile   from './pages/Profile.jsx'
 import Admin     from './pages/Admin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
-import { LOGO_SRC } from './brand.js'
+import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
 
 const ONB_KEY = 'lottoo_beneficiary'
 
@@ -20,10 +20,11 @@ const TITLE = {
   admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
 }
 
-function TGHeader() {
+function TGHeader({ page }) {
+  const logoSrc = page === 'home' ? HOME_LOGO_SRC : LOGO_SRC
   return (
     <header className="tg-header">
-      <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
+      <img src={logoSrc} alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
       <div className="col" style={{ marginLeft: 10, gap: 1 }}>
         <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
         <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
@@ -94,7 +95,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TGHeader />
+      <TGHeader page={page} />
       <div className="scroll">
         <Page user={user} onUserUpdate={setUser} />
       </div>
