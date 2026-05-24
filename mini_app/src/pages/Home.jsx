@@ -59,7 +59,12 @@ function PaymentForm({ onSuccess, onError }) {
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
 const PRESETS = [3, 6, 9, 12]
 
-function TopUpSheet({ open, onClose, onSuccess, showToast }) {
+function suggestTopUpAmount(shortfall) {
+  const needed = Math.max(3, Math.ceil(shortfall))
+  return PRESETS.find(p => p >= needed) ?? needed
+}
+
+function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
   const [tab, setTab]           = useState('once')
   const [amount, setAmount]     = useState(18)
   const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
@@ -70,8 +75,9 @@ function TopUpSheet({ open, onClose, onSuccess, showToast }) {
 
   useEffect(() => {
     if (!open) { setCS(null); setEtxInfo(null); setStep('select'); return }
+    if (initialAmount != null) setAmount(suggestTopUpAmount(initialAmount))
     api.stripe.config().then(cfg => setSP(loadStripe(cfg.publishable_key))).catch(() => {})
-  }, [open])
+  }, [open, initialAmount])
 
   function resetMethod() { setCS(null); setStep('select') }
 
@@ -254,12 +260,18 @@ function TopUpSheet({ open, onClose, onSuccess, showToast }) {
 }
 
 // ─── Join sheet ──────────────────────────────────────────────────────────────
-function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
+function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToast, initialShares }) {
   const PRICE = round?.price_per_share || 5
   const [shares, setShares] = useState(1)
   const [busy, setBusy] = useState(false)
   const cost = shares * PRICE
-  const after = (user?.credit ?? 0) - cost
+  const credit = user?.credit ?? 0
+  const after = credit - cost
+  const shortfall = Math.max(0, cost - credit)
+
+  useEffect(() => {
+    if (open && initialShares) setShares(initialShares)
+  }, [open, initialShares])
 
   async function confirm() {
     setBusy(true)
@@ -318,12 +330,23 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
               </div>
             ))}
           </div>
-          {after < 0
-            ? <button className="btn btn-money btn-block" onClick={() => { onClose() }}>Top up to continue</button>
-            : <button className="btn btn-primary btn-block" disabled={busy} onClick={confirm}>
+          {after < 0 ? (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 10, lineHeight: 1.5, textAlign: 'center' }}>
+                You need {fmtCAD(shortfall)} more to join with {shares} share{shares !== 1 ? 's' : ''}.
+              </p>
+              <button
+                className="btn btn-money btn-block"
+                onClick={() => onNeedTopUp(shortfall, shares)}
+              >
+                Top up {fmtCAD(suggestTopUpAmount(shortfall))} to continue
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-primary btn-block" disabled={busy} onClick={confirm}>
                 {busy ? 'Processing…' : `Confirm · ${fmtCAD(cost)}`}
               </button>
-          }
+          )}
         </div>
       </div>
     </div>
@@ -335,9 +358,18 @@ export default function Home({ user, onUserUpdate }) {
   const [round, setRound]   = useState(undefined)
   const [lastDrawn, setLastDrawn] = useState(null)
   const [sub, setSub]       = useState(null)
-  const [topUp, setTopUp]   = useState(false)
-  const [join, setJoin]     = useState(false)
+  const [topUp, setTopUp]           = useState(false)
+  const [topUpInitial, setTopUpInitial] = useState(null)
+  const [join, setJoin]             = useState(false)
+  const [pendingJoin, setPendingJoin] = useState(null) // { shares }
   const showToast = useToast()
+
+  function openTopUpForJoin(shortfall, shares) {
+    setPendingJoin({ shares })
+    setJoin(false)
+    setTopUpInitial(shortfall)
+    setTopUp(true)
+  }
 
   useEffect(() => {
     api.round().then(d => setRound(d.round)).catch(() => setRound(null))
@@ -613,18 +645,45 @@ export default function Home({ user, onUserUpdate }) {
         </>
       )}
 
-      <TopUpSheet open={topUp} onClose={() => setTopUp(false)} showToast={showToast}
+      <TopUpSheet
+        open={topUp}
+        onClose={() => { setTopUp(false); setTopUpInitial(null) }}
+        showToast={showToast}
+        initialAmount={topUpInitial}
         onSuccess={(amt, plan) => {
-          showToast(plan === 'once' ? `Added $${amt} credit` : `Subscribed · $${amt}/mo`, 'success')
+          setTopUpInitial(null)
+          if (plan === 'once') {
+            showToast(`Added $${amt} credit`, 'success')
+            api.me().then(u => {
+              onUserUpdate(u)
+              if (pendingJoin) setJoin(true)
+            })
+          } else if (plan === 'etransfer') {
+            setPendingJoin(null)
+            showToast('After approval, return to join the round', 'info')
+          } else {
+            setPendingJoin(null)
+            showToast(`Subscribed · $${amt}/mo`, 'success')
+          }
           setTimeout(() => api.me().then(onUserUpdate), 3000)
-        }} />
+        }}
+      />
 
-      <JoinSheet open={join} onClose={() => setJoin(false)} round={round} user={user} showToast={showToast}
+      <JoinSheet
+        open={join}
+        onClose={() => { setJoin(false); setPendingJoin(null) }}
+        round={round}
+        user={user}
+        showToast={showToast}
+        initialShares={pendingJoin?.shares}
+        onNeedTopUp={openTopUpForJoin}
         onJoined={(n) => {
+          setPendingJoin(null)
           showToast(`Joined with ${n} share${n > 1 ? 's' : ''}!`, 'success')
           api.round().then(d => setRound(d.round))
           api.me().then(onUserUpdate)
-        }} />
+        }}
+      />
     </div>
   )
 }

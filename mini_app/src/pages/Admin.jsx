@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
+import TelegramAvatar from '../components/TelegramAvatar.jsx'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon,
@@ -62,9 +63,13 @@ function SummaryRow({ k, v, mono }) {
 }
 
 const LOTTERY_TYPES = [
-  { id: 'lotto_max', name: 'Lotto Max', price: 6, tag: '6/49 + Max' },
-  { id: '649',       name: '6/49',      price: 3, tag: '3$/share'   },
+  { id: 'lotto_max', name: 'Lotto Max', price: 6, logo: '/max.png' },
+  { id: '649',       name: '6/49',      price: 3, logo: '/649.png' },
 ]
+
+function lotteryMeta(type) {
+  return LOTTERY_TYPES.find(t => t.id === type) || LOTTERY_TYPES[0]
+}
 
 // ── New Round Sheet ────────────────────────────────────────────────────────
 function NewRoundSheet({ onClose, onCreated, showToast }) {
@@ -108,23 +113,33 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
         <div className="body">
           <div className="col" style={{ gap: 12, marginBottom: 16 }}>
             <FieldLabel label="Lottery type">
-              <div style={{ display: 'flex', gap: 8 }}>
-                {LOTTERY_TYPES.map(lt => (
-                  <button key={lt.id} onClick={() => selectType(lt)} style={{
-                    flex: 1, padding: '10px 8px', borderRadius: 10, cursor: 'pointer',
-                    border: `.5px solid ${lotteryType === lt.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
-                    background: lotteryType === lt.id ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
-                    color: lotteryType === lt.id ? 'var(--tg)' : 'var(--tx-1)',
-                    fontWeight: 700, fontSize: 14, fontFamily: 'inherit',
-                  }}>
-                    {lt.name}
-                    <div style={{ fontSize: 10, fontWeight: 400, color: lotteryType === lt.id ? 'var(--tg)' : 'var(--tx-3)', marginTop: 2 }}>
-                      ${lt.price}/share
-                    </div>
-                  </button>
-                ))}
+              <div style={{ display: 'flex', gap: 10 }}>
+                {LOTTERY_TYPES.map(lt => {
+                  const selected = lotteryType === lt.id
+                  return (
+                    <button key={lt.id} onClick={() => selectType(lt)} style={{
+                      flex: 1, padding: '12px 10px 10px', borderRadius: 12, cursor: 'pointer',
+                      border: `.5px solid ${selected ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                      background: selected ? 'rgba(46,166,255,.12)' : 'var(--bg-3)',
+                      color: selected ? 'var(--tg)' : 'var(--tx-1)',
+                      fontFamily: 'inherit', display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', gap: 8,
+                    }}>
+                      <img src={lt.logo} alt={lt.name}
+                        style={{ height: 40, width: '100%', objectFit: 'contain' }} />
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{lt.name}</div>
+                      <div style={{
+                        fontSize: 10, fontWeight: 500,
+                        color: selected ? 'var(--tg)' : 'var(--tx-3)',
+                      }}>
+                        ${lt.price}/share
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </FieldLabel>
+
             <FieldLabel label="Estimated jackpot (CAD)">
               <input className="input mono" type="number" value={jackpot}
                 onChange={e => setJackpot(e.target.value)} placeholder="70000000" />
@@ -512,7 +527,14 @@ export default function Admin() {
           ) : round ? (
             <div className="card" style={{ marginBottom: 12 }}>
               <div className="row between" style={{ marginBottom: 12 }}>
-                <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.id}</span>
+                <div className="row gap-8" style={{ alignItems: 'center' }}>
+                  <img
+                    src={lotteryMeta(round.lottery_type).logo}
+                    alt={lotteryMeta(round.lottery_type).name}
+                    style={{ height: 28, objectFit: 'contain' }}
+                  />
+                  <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.id}</span>
+                </div>
                 <StatusPill status={ds} />
               </div>
 
@@ -728,15 +750,11 @@ export default function Admin() {
                   padding: '12px 14px',
                   borderBottom: idx < members.length - 1 ? '.5px solid var(--hairline)' : 'none',
                 }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 50, flexShrink: 0,
-                    background: m.is_trustee ? 'rgba(245,199,59,.14)' : 'var(--surface-2)',
-                    color: m.is_trustee ? 'var(--gold)' : 'var(--tx-2)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, fontWeight: 700,
-                  }}>
-                    {m.is_trustee ? <ShieldIcon width={16} height={16} /> : (m.full_name || '?')[0].toUpperCase()}
-                  </div>
+                  <TelegramAvatar
+                    user={m}
+                    size={36}
+                    style={m.is_trustee ? { boxShadow: '0 0 0 2px var(--gold)' } : undefined}
+                  />
                   <div className="col grow gap-4" style={{ minWidth: 0 }}>
                     <span style={{ fontWeight: 500, fontSize: 14 }}>
                       {m.full_name}
