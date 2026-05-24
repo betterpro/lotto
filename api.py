@@ -28,6 +28,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application
 
 import config
+from agreements import BCLC_GROUP_RELEASE_URL, build_master_agreement, build_round_agreement
 from bot import build_application
 from database import get_db
 
@@ -42,23 +43,128 @@ if config.STRIPE_SECRET_KEY:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def display_status(status: str, draw_date_str=None) -> str:
-    if status == 'drawn':
-        return 'DRAWN'
-    if status in ('uploaded', 'closed'):
-        return 'UPLOADED'
-    if status != 'open':
-        return 'DRAWN'
+def _days_until_draw(draw_date_str: str | None) -> int | None:
     if not draw_date_str:
-        return 'OPEN'
+        return None
     try:
-        draw = date.fromisoformat(draw_date_str)
+        return (date.fromisoformat(draw_date_str) - date.today()).days
     except ValueError:
-        return 'OPEN'
-    today = date.today()
-    if (draw - today).days <= 1:
-        return 'CLOSING'
-    return 'OPEN'
+        return None
+
+
+def entries_open(status: str, draw_date_str: str | None = None) -> bool:
+    """Stakes accepted only while round is open and more than one day before draw."""
+    if status != "open":
+        return False
+    days = _days_until_draw(draw_date_str)
+    if days is None:
+        return True
+    return days > 1
+
+
+def agreement_available(status: str, draw_date_str: str | None = None) -> bool:
+    """Round draw agreement visible once entry window has closed."""
+    if status != "open":
+        return True
+    days = _days_until_draw(draw_date_str)
+    if days is None:
+        return False
+    return days <= 1
+
+
+def draw_date_passed(draw_date_str: str | None) -> bool:
+    """True on the draw date or after (calendar day has arrived)."""
+    days = _days_until_draw(draw_date_str)
+    return days is not None and days <= 0
+
+
+def _parse_winning_numbers(winning_numbers) -> list | None:
+    if winning_numbers is None:
+        return None
+    if isinstance(winning_numbers, str):
+        try:
+            parsed = json.loads(winning_numbers)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    else:
+        parsed = winning_numbers
+    return parsed if isinstance(parsed, list) and len(parsed) > 0 else None
+
+
+def results_finalized(
+    status: str,
+    winning_numbers=None,
+    drawn_at: str | None = None,
+) -> bool:
+    """Admin has entered official winning numbers (and prizes were applied)."""
+    if status != "drawn" or not drawn_at:
+        return False
+    return _parse_winning_numbers(winning_numbers) is not None
+
+
+def display_status(
+    status: str,
+    draw_date_str: str | None = None,
+    *,
+    my_prize: float | None = None,
+    my_stake: float | None = None,
+    winning_numbers=None,
+    drawn_at: str | None = None,
+) -> str:
+    """
+    User-facing round phase (labels in StatusPill):
+      RALLY    — open for entries
+      LOCKED   — closed, waiting for draw (before draw day)
+      REVEALED — draw day passed or results pending (no win/loss yet)
+      WON/LOST — only after admin imports winning numbers and prize
+    """
+    if results_finalized(status, winning_numbers, drawn_at):
+        if my_stake:
+            if (my_prize or 0) > 0:
+                return "WON"
+            return "LOST"
+        return "REVEALED"
+
+    if status == "drawn":
+        return "REVEALED"
+
+    if status in ("uploaded", "closed"):
+        if draw_date_passed(draw_date_str):
+            return "REVEALED"
+        return "LOCKED"
+
+    if status != "open":
+        return "REVEALED"
+
+    if entries_open(status, draw_date_str):
+        return "RALLY"
+    return "LOCKED"
+
+
+async def _auto_close_round_if_due(db, round_id: int) -> None:
+    """Close open rounds one calendar day before draw so the trustee can buy tickets."""
+    cur = await db.execute(
+        "SELECT id, status, draw_date FROM rounds WHERE id=? AND status='open'",
+        (round_id,),
+    )
+    row = await cur.fetchone()
+    if not row or not row["draw_date"]:
+        return
+    days = _days_until_draw(row["draw_date"])
+    if days is not None and days <= 1:
+        await db.execute(
+            "UPDATE rounds SET status='closed', closed_at=datetime('now') WHERE id=? AND status='open'",
+            (round_id,),
+        )
+        await db.commit()
+
+
+async def _auto_close_all_due_rounds(db) -> None:
+    cur = await db.execute(
+        "SELECT id FROM rounds WHERE status='open' AND draw_date IS NOT NULL"
+    )
+    for row in await cur.fetchall():
+        await _auto_close_round_if_due(db, row["id"])
 
 
 def _validate_init_data(init_data: str) -> dict | None:
@@ -473,12 +579,124 @@ async def api_invite(x_init_data: str | None = Header(default=None)):
 
 
 # ---------------------------------------------------------------------------
+# /api/agreement
+# ---------------------------------------------------------------------------
+
+async def _trustee_row(db):
+    cur = await db.execute(
+        "SELECT telegram_id, full_name, username FROM users WHERE is_trustee=1 LIMIT 1"
+    )
+    return await cur.fetchone()
+
+
+def _display_name(row) -> str:
+    if not row:
+        return "Group Trustee"
+    return row["full_name"] or row["username"] or f"User {row['telegram_id']}"
+
+
+@app.get("/api/agreement/master")
+async def api_agreement_master(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    trustee = await _trustee_row(db)
+    body = build_master_agreement(
+        beneficiary_name=user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        beneficiary_id=user["telegram_id"],
+        trustee_name=_display_name(trustee),
+        trustee_id=trustee["telegram_id"] if trustee else config.TRUSTEE_ID,
+    )
+    await db.close()
+    return {
+        "title": "Group Pool Trustee Agreement",
+        "body": body,
+        "bclc_url": BCLC_GROUP_RELEASE_URL,
+    }
+
+
+@app.get("/api/agreement/master/download")
+async def api_agreement_master_download(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    trustee = await _trustee_row(db)
+    body = build_master_agreement(
+        beneficiary_name=user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        beneficiary_id=user["telegram_id"],
+        trustee_name=_display_name(trustee),
+        trustee_id=trustee["telegram_id"] if trustee else config.TRUSTEE_ID,
+    )
+    await db.close()
+    return Response(
+        content=body,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="lotto-chee-trustee-agreement.txt"'},
+    )
+
+
+@app.get("/api/agreement/round/{round_id}")
+async def api_agreement_round(round_id: int, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    await _auto_close_round_if_due(db, round_id)
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    rd = dict(round_)
+    if not agreement_available(rd["status"], rd.get("draw_date")):
+        await db.close()
+        raise HTTPException(403, "Round agreement available after entries close (1 day before draw)")
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
+        (round_id, user["telegram_id"]),
+    )
+    part = await cur.fetchone()
+    if not part:
+        await db.close()
+        raise HTTPException(403, "Join this round to access your draw agreement")
+    pool = rd.get("pool") or 0
+    share_pct = round(part["amount"] / pool * 100, 1) if pool else None
+    body = build_round_agreement(
+        round_id=round_id,
+        lottery_type=rd.get("lottery_type"),
+        draw_date=rd.get("draw_date"),
+        beneficiary_name=user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        shares=part.get("shares") or 1,
+        stake_amount=part["amount"],
+        pool_amount=pool,
+        share_pct=share_pct,
+        closed_at=rd.get("closed_at"),
+    )
+    await db.close()
+    return {
+        "title": f"Round #{round_id} Draw Agreement",
+        "body": body,
+        "bclc_url": BCLC_GROUP_RELEASE_URL,
+        "round_id": round_id,
+    }
+
+
+@app.get("/api/agreement/round/{round_id}/download")
+async def api_agreement_round_download(round_id: int, x_init_data: str | None = Header(default=None)):
+    data = await api_agreement_round(round_id, x_init_data)
+    return Response(
+        content=data["body"],
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="lotto-chee-round-{round_id}-agreement.txt"'
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # /api/round
 # ---------------------------------------------------------------------------
 
 async def _build_round_detail(db, round_, user_id: int) -> dict:
+    await _auto_close_round_if_due(db, round_["id"])
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_["id"],))
+    refreshed = await cur.fetchone()
+    if refreshed:
+        round_ = refreshed
     rd = dict(round_)
-    rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
     cur = await db.execute(
         "SELECT p.*, u.username, u.full_name FROM participations p "
         "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
@@ -501,6 +719,16 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
     rd["has_ticket_image"] = bool(rd.get("ticket_image"))
     rd.pop("ticket_image", None)
+    rd["display_status"] = display_status(
+        rd["status"], rd.get("draw_date"),
+        my_prize=rd.get("my_prize"), my_stake=rd.get("my_stake"),
+        winning_numbers=rd.get("winning_numbers"), drawn_at=rd.get("drawn_at"),
+    )
+    rd["entries_open"] = entries_open(rd["status"], rd.get("draw_date"))
+    rd["agreement_available"] = agreement_available(rd["status"], rd.get("draw_date"))
+    rd["results_finalized"] = results_finalized(
+        rd["status"], rd.get("winning_numbers"), rd.get("drawn_at")
+    )
     if rd.get("winner_id"):
         cur = await db.execute(
             "SELECT full_name, username FROM users WHERE telegram_id=?", (rd["winner_id"],)
@@ -520,6 +748,7 @@ _OPEN_ROUNDS_ORDER = (
 @app.get("/api/round")
 async def api_round(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    await _auto_close_all_due_rounds(db)
     cur = await db.execute(
         f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
     )
@@ -538,6 +767,7 @@ async def api_round(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds/open")
 async def api_open_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    await _auto_close_all_due_rounds(db)
     cur = await db.execute(
         f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER}"
     )
@@ -554,6 +784,7 @@ async def api_open_rounds(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds")
 async def api_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    await _auto_close_all_due_rounds(db)
     cur = await db.execute("""
         SELECT r.*,
           p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
@@ -565,7 +796,16 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
     rounds = []
     for row in await cur.fetchall():
         rd = dict(row)
-        rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
+        rd["display_status"] = display_status(
+            rd["status"], rd.get("draw_date"),
+            my_prize=rd.get("my_prize"), my_stake=rd.get("my_stake"),
+            winning_numbers=rd.get("winning_numbers"), drawn_at=rd.get("drawn_at"),
+        )
+        rd["entries_open"] = entries_open(rd["status"], rd.get("draw_date"))
+        rd["agreement_available"] = agreement_available(rd["status"], rd.get("draw_date"))
+        rd["results_finalized"] = results_finalized(
+            rd["status"], rd.get("winning_numbers"), rd.get("drawn_at")
+        )
         rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
         rd["participants_count"] = int(rd.get("participants_count") or 0)
         rd["participants"] = rd["participants_count"]
@@ -598,8 +838,15 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No open round")
-    if display_status(dict(round_)["status"], dict(round_).get("draw_date")) not in ('OPEN', 'CLOSING'):
-        raise HTTPException(400, "Round is not accepting entries right now")
+    round_d = dict(round_)
+    await _auto_close_round_if_due(db, round_d["id"])
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_d["id"],))
+    round_ = await cur.fetchone()
+    if round_ is None:
+        raise HTTPException(400, "Round not found")
+    round_d = dict(round_)
+    if not entries_open(round_d["status"], round_d.get("draw_date")):
+        raise HTTPException(400, "Entries closed — draw agreement is available in Rounds")
     if user["credit"] < amount:
         raise HTTPException(400, "Insufficient balance")
     price_per_share = dict(round_).get("price_per_share") or 5.0
@@ -1087,27 +1334,30 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
     parts = await cur.fetchall()
     pool = round_["pool"] or sum(p["amount"] for p in parts)
 
-    # Distribute prize proportionally
-    if total_prize > 0 and pool > 0:
-        for p in parts:
-            share = p["amount"] / pool
-            prize = round(share * total_prize, 2)
+    if not winning_numbers:
+        await db.close()
+        raise HTTPException(400, "Winning numbers are required")
+
+    # Distribute prize proportionally (always set participation.prize so WON/LOST is accurate)
+    for p in parts:
+        share = p["amount"] / pool if pool else 0
+        prize = round(share * total_prize, 2) if total_prize > 0 and pool > 0 else 0.0
+        await db.execute(
+            "UPDATE participations SET prize=? WHERE round_id=? AND user_id=?",
+            (prize, round_["id"], p["user_id"]),
+        )
+        if prize > 0:
             await db.execute(
-                "UPDATE participations SET prize=? WHERE round_id=? AND user_id=?",
-                (prize, round_["id"], p["user_id"])
+                "UPDATE users SET credit=credit+? WHERE telegram_id=?", (prize, p["user_id"])
             )
-            if prize > 0:
-                await db.execute(
-                    "UPDATE users SET credit=credit+? WHERE telegram_id=?", (prize, p["user_id"])
-                )
-                await db.execute(
-                    "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                    (p["user_id"], "win", prize, f"Prize Round #{round_['id']}")
-                )
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+                (p["user_id"], "win", prize, f"Prize Round #{round_['id']}"),
+            )
 
     await db.execute(
         "UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?, drawn_at=datetime('now') WHERE id=?",
-        (json.dumps(winning_numbers), bonus_number, round_["id"])
+        (json.dumps(winning_numbers), bonus_number, round_["id"]),
     )
     await db.commit()
 

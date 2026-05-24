@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
+import { AgreementLink } from '../components/AgreementSheet.jsx'
 
 function TicketPhotoModal({ roundId, onClose }) {
   const [src, setSrc] = useState(null)
@@ -74,15 +75,16 @@ function playerCount(round) {
 function RoundCard({ round }) {
   const [showPhoto, setShowPhoto] = useState(false)
   const ds = round.display_status || round.status
-  const isOpen     = ['OPEN','live','open'].includes(ds)
-  const isUploaded = ['UPLOADED','CLOSING','uploaded','closed'].includes(ds)
-  const isDrawn    = ['DRAWN','done','drawn'].includes(ds)
-  const hasWon     = (round.my_prize || 0) > 0
+  const isRally    = ['RALLY','OPEN','live','open'].includes(ds)
+  const isLocked   = ds === 'LOCKED'
+  const isRevealed = ds === 'REVEALED'
+  const isWon      = ds === 'WON'
+  const isLost     = ds === 'LOST'
 
-  const iconBg    = isOpen ? 'rgba(78,208,122,.14)' : isUploaded ? 'rgba(242,163,59,.14)' :
-    hasWon ? 'rgba(245,199,59,.14)' : 'var(--bg-3)'
-  const iconColor = isOpen ? 'var(--money)' : isUploaded ? 'var(--warn)' :
-    hasWon ? 'var(--gold)' : 'var(--tx-2)'
+  const iconBg    = isWon ? 'rgba(245,199,59,.2)' : isRally ? 'rgba(78,208,122,.14)' :
+    isLocked ? 'rgba(242,163,59,.14)' : isLost ? 'var(--bg-3)' : 'rgba(46,166,255,.12)'
+  const iconColor = isWon ? '#ffe566' : isRally ? 'var(--money)' :
+    isLocked ? 'var(--warn)' : isLost ? 'var(--tx-3)' : 'var(--tg)'
 
   return (
     <div className="round-card">
@@ -93,7 +95,7 @@ function RoundCard({ round }) {
             background: iconBg, color: iconColor,
             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}>
-            {isDrawn && hasWon
+            {isWon
               ? <TrophyIcon width={20} height={20} />
               : <TicketIcon width={20} height={20} />}
           </div>
@@ -137,9 +139,9 @@ function RoundCard({ round }) {
           </div>
         </div>
 
-        {isDrawn && (
+        {(isRevealed || isWon || isLost) && (
           <div className="col" style={{ alignItems: 'flex-end', gap: 2 }}>
-            {hasWon ? (
+            {isWon ? (
               <>
                 <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--money)' }}>
                   +{fmtCAD(round.my_prize)}
@@ -152,12 +154,24 @@ function RoundCard({ round }) {
           </div>
         )}
 
-        {isOpen && !round.my_shares && (
+        {isRally && !round.my_shares && (
           <div className="col" style={{ alignItems: 'flex-end' }}>
-            <span className="chip chip-tg" style={{ padding: '4px 10px' }}>LIVE ›</span>
+            <span className="chip chip-tg" style={{ padding: '4px 10px' }}>JOIN ›</span>
           </div>
         )}
       </div>
+
+      {(round.my_shares > 0 || round.my_stake) && (
+        <div style={{ marginTop: 10 }}>
+          <AgreementLink
+            kind="round"
+            roundId={round.id}
+            label="Round draw agreement"
+            disabled={!round.agreement_available}
+            disabledHint="Available when entries close (1 day before draw)"
+          />
+        </div>
+      )}
 
       {round.has_ticket_image && (
         <>
@@ -208,9 +222,9 @@ export default function Rounds() {
   const filtered = rounds.filter(r => {
     const ds = r.display_status || r.status
     if (filter === 'All')   return true
-    if (filter === 'Live')  return ['OPEN','CLOSING','UPLOADED','live','open','uploaded','closed'].includes(ds)
-    if (filter === 'Drawn') return ['DRAWN','done','drawn'].includes(ds)
-    if (filter === 'Won')   return (r.my_prize || 0) > 0
+    if (filter === 'Live')     return ['RALLY','LOCKED','OPEN','CLOSING','UPLOADED','live','open','uploaded','closed'].includes(ds)
+    if (filter === 'Drawn') return ds === 'REVEALED'
+    if (filter === 'Won')   return ds === 'WON'
     return true
   })
 

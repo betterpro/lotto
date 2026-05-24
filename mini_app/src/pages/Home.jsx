@@ -364,8 +364,11 @@ function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToas
 
 // ─── Live round card ─────────────────────────────────────────────────────────
 function LiveRoundCard({ round, onJoin, peek }) {
-  const isClosing = round.display_status === 'CLOSING'
-  const isLive    = round.display_status === 'OPEN' || isClosing
+  const ds = round.display_status
+  const isRally   = ['RALLY', 'OPEN'].includes(ds)
+  const isLocked  = ds === 'LOCKED'
+  const isDrawn   = ds === 'REVEALED'
+  const isLive    = isRally || isLocked || isDrawn
   const jackpot   = round.jackpot || 0
   const poolTarget  = (round.tickets_target || 25) * (round.price_per_share || 5)
   const poolRaised  = round.pool || 0
@@ -378,7 +381,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
         <div className="row gap-8">
           <span className="status-dot live" />
           <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
-            {isClosing ? 'CLOSING SOON' : 'LIVE ROUND'}
+            {isLocked ? 'WAITING FOR DRAW' : isDrawn ? 'DRAWN' : isRally ? 'OPEN' : 'LIVE ROUND'}
           </span>
         </div>
         <span className="mono dim" style={{ fontSize: 12 }}>#{round.id}</span>
@@ -451,10 +454,16 @@ function LiveRoundCard({ round, onJoin, peek }) {
       </div>
 
       {!peek && isLive && (
-        <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} onClick={onJoin}>
-          <PlusIcon width={16} height={16} />
-          {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
-        </button>
+        round.entries_open !== false ? (
+          <button className="btn btn-primary btn-block" style={{ marginTop: 16 }} onClick={onJoin}>
+            <PlusIcon width={16} height={16} />
+            {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
+          </button>
+        ) : (
+          <p style={{ marginTop: 14, fontSize: 12, color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.5 }}>
+            Entries closed — trustee is buying tickets. Your draw agreement is in Rounds.
+          </p>
+        )
       )}
     </div>
   )
@@ -492,7 +501,8 @@ export default function Home({ user, onUserUpdate }) {
   useEffect(() => {
     reloadLive()
     api.rounds.list().then(d => {
-      const drawn = (d.rounds || []).find(r => r.display_status === 'DRAWN')
+      const drawn = (d.rounds || []).find(r =>
+        ['REVEALED', 'WON', 'LOST', 'DRAWN'].includes(r.display_status))
       setLastDrawn(drawn || null)
     }).catch(() => {})
     api.stripe.subscription().then(r => setSub(r.subscription)).catch(() => {})
@@ -661,7 +671,9 @@ export default function Home({ user, onUserUpdate }) {
                 <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
                   Round #{lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
                 </span>
-                <span className="status-pill drawn">DRAWN</span>
+                <span className={`status-pill ${lastDrawn.display_status === 'WON' ? 'won' : 'revealed'}`}>
+                  {lastDrawn.display_status === 'WON' ? 'Won' : 'Drawn'}
+                </span>
               </div>
               <div className="row between">
                 {lastDrawn.my_prize > 0 ? (

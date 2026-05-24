@@ -456,8 +456,8 @@ export default function Admin() {
 
   const ds       = round?.display_status || round?.status
   const st       = round?.status
-  const canClose = round && (st === 'open' || ds === 'OPEN')
-  const canUpload = st === 'closed' || st === 'uploaded' || ds === 'UPLOADED' || ds === 'CLOSING'
+  const canClose = round && (st === 'open' || ds === 'RALLY' || ds === 'OPEN')
+  const canUpload = st === 'closed' || st === 'uploaded' || ds === 'LOCKED' || ds === 'UPLOADED' || ds === 'CLOSING'
   const canResults = canUpload || st === 'uploaded'
 
   const pendingCount = deposits ? deposits.filter(d => d.status === 'pending').length : 0

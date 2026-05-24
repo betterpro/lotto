@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api.js'
 import { StatusPill } from '../components/StatusPill.jsx'
+import { AgreementLink } from '../components/AgreementSheet.jsx'
 import { TrophyIcon, TicketIcon } from '../components/Icon.jsx'
 
 function fmtCAD(n) {
@@ -20,7 +21,7 @@ function drawLabel(s) {
 
 function RoundDetail({ round, onClose }) {
   const ds = round.display_status
-  const isDone = ds === 'done'
+  const isDone = ['REVEALED', 'WON', 'LOST'].includes(ds)
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
@@ -41,11 +42,23 @@ function RoundDetail({ round, onClose }) {
             <StatusPill status={ds} />
           </div>
 
-          {isDone && round.winner_name && (
+          {ds === 'WON' && round.winner_name && (
             <div className="card" style={{ marginBottom: 12, textAlign: 'center', borderColor: 'rgba(245,199,59,.3)' }}>
               <div style={{ fontSize: 32, marginBottom: 6 }}>🏆</div>
               <div style={{ fontWeight: 700, fontSize: 18 }}>{round.winner_name}</div>
               <div style={{ fontSize: 12, color: 'var(--tx-2)', marginTop: 4 }}>Winner · took the pool</div>
+            </div>
+          )}
+
+          {round.my_stake != null && (
+            <div style={{ marginBottom: 12 }}>
+              <AgreementLink
+                kind="round"
+                roundId={round.id}
+                label="View round draw agreement"
+                disabled={!round.agreement_available}
+                disabledHint="Available when entries close (1 day before draw)"
+              />
             </div>
           )}
 
@@ -56,8 +69,8 @@ function RoundDetail({ round, onClose }) {
                 {[
                   ['Invested',    fmtCAD(round.my_stake),    null],
                   ['Win chance',  `${round.my_pct}%`,         null],
-                  isDone ? ['Result', round.my_won ? `🏆 Winner!` : 'No prize',
-                            round.my_won ? 'var(--money)' : 'var(--tx-3)'] : null,
+                  ds === 'WON' || ds === 'LOST' ? ['Result', ds === 'WON' ? '🏆 Won' : 'No prize',
+                            ds === 'WON' ? '#ffe566' : 'var(--tx-3)'] : null,
                 ].filter(Boolean).map(([k, v, c]) => (
                   <div key={k} className="sum-row">
                     <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
@@ -112,8 +125,9 @@ export default function Round() {
   )
 
   const { id, display_status: ds, pool, draw_date, participants, my_stake, my_pct, my_won, winner_name } = data
-  const isDone   = ds === 'done'
-  const isLive   = ds === 'live'
+  const isDone   = ['REVEALED', 'WON', 'LOST'].includes(ds)
+  const isLive   = ['RALLY', 'OPEN'].includes(ds)
+  const isWon    = ds === 'WON'
   const myShares = my_stake ? Math.round(my_stake / 5) : 0
 
   return (
@@ -145,11 +159,11 @@ export default function Round() {
             <div className="row gap-10">
               <div style={{
                 width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-                background: isDone && my_won ? 'rgba(245,199,59,.14)' : isLive ? 'rgba(78,208,122,.14)' : 'var(--bg-3)',
-                color: isDone && my_won ? 'var(--gold)' : isLive ? 'var(--money)' : 'var(--tx-2)',
+                background: isWon ? 'rgba(245,199,59,.2)' : isLive ? 'rgba(78,208,122,.14)' : 'var(--bg-3)',
+                color: isWon ? '#ffe566' : isLive ? 'var(--money)' : 'var(--tx-2)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                {isDone && my_won ? <TrophyIcon width={20} height={20} /> : <TicketIcon width={20} height={20} />}
+                {isWon ? <TrophyIcon width={20} height={20} /> : <TicketIcon width={20} height={20} />}
               </div>
               <div className="col">
                 <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{id}</span>
@@ -179,8 +193,8 @@ export default function Round() {
               )}
             </div>
             {isDone
-              ? my_won
-                ? <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--money)' }}>🏆 Won!</span>
+              ? isWon
+                ? <span style={{ fontSize: 14, fontWeight: 700, color: '#ffe566' }}>🏆 Won</span>
                 : winner_name
                   ? <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Won by {winner_name}</span>
                   : <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Drawn</span>

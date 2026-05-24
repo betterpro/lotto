@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
+import { AgreementLink } from '../components/AgreementSheet.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
 function fmtCAD(n) {
@@ -301,6 +302,17 @@ export default function Profile({ user, onUserUpdate }) {
                   settings.preferred_day === 1 ? 'Tuesdays only' : 'Fridays only'}
               </div>
             )}
+
+            {/* ── Legal ── */}
+            <SectionHead icon={TicketIcon} label="Agreements" />
+            <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Trustee agreement</div>
+              <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
+                Master agreement between you and the group trustee. References the official BCLC
+                Group Release Form.
+              </p>
+              <AgreementLink kind="master" label="View & download" />
+            </div>
 
             {/* ── Notifications ── */}
             <SectionHead icon={BellIcon} label="Notifications" />

@@ -172,12 +172,19 @@ html, body {
   padding: 4px 9px; border-radius: 20px;
   font-size: 11px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase;
 }
-.status-pill.live     { background: rgba(78,208,122,.14); color: var(--money); }
-.status-pill.closing  { background: rgba(242,163,59,.14); color: var(--warn); }
-.status-pill.done     { background: rgba(255,255,255,.07); color: var(--tx-2); }
-.status-pill.open     { background: rgba(78,208,122,.14); color: var(--money); }
-.status-pill.uploaded { background: rgba(242,163,59,.14); color: var(--warn); }
-.status-pill.drawn    { background: rgba(46,166,255,.14); color: var(--tg); }
+.status-pill.rally     { background: rgba(78,208,122,.14); color: var(--money); }
+.status-pill.locked    { background: rgba(242,163,59,.14); color: var(--warn); }
+.status-pill.revealed  { background: rgba(46,166,255,.14); color: var(--tg); }
+.status-pill.won       {
+  background: linear-gradient(135deg, rgba(255,215,80,.28), rgba(245,199,59,.18));
+  color: #ffe566;
+  box-shadow: 0 0 12px rgba(245,199,59,.25);
+}
+.status-pill.lost      { background: rgba(255,255,255,.06); color: var(--tx-3); }
+/* legacy aliases */
+.status-pill.live, .status-pill.open     { background: rgba(78,208,122,.14); color: var(--money); }
+.status-pill.closing, .status-pill.uploaded { background: rgba(242,163,59,.14); color: var(--warn); }
+.status-pill.done, .status-pill.drawn    { background: rgba(46,166,255,.14); color: var(--tg); }
 
 /* ── Lotto ball — white by default ──────────────────────────────────────── */
 .ball {
