@@ -30,6 +30,13 @@ function getInitials(name) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
 }
 
+function playerCount(round) {
+  if (!round) return 0
+  if (Array.isArray(round.participants)) return round.participants.length
+  const n = round.participants_count ?? round.participants
+  return typeof n === 'number' ? n : 0
+}
+
 // ─── Stripe payment form ────────────────────────────────────────────────────
 function PaymentForm({ onSuccess, onError }) {
   const stripe = useStripe(), elements = useElements()
@@ -434,7 +441,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
 
       <div className="row between" style={{ marginTop: 14 }}>
         <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-          {round.participants?.length ?? 0} participant{(round.participants?.length ?? 0) !== 1 ? 's' : ''}
+          {playerCount(round)} player{playerCount(round) !== 1 ? 's' : ''} in pool
         </span>
         {round.my_pct != null && (
           <span className="chip chip-gold">
@@ -547,7 +554,7 @@ export default function Home({ user, onUserUpdate }) {
                   <div className="row gap-8" style={{ alignItems: 'baseline' }}>
                     <span className="mono" style={{ fontSize: 26, fontWeight: 700 }}>{myShares}</span>
                     <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>
-                      / {round.participants?.length || '—'}
+                      share{myShares !== 1 ? 's' : ''} · {playerCount(round)} players
                     </span>
                   </div>
                   <span style={{ fontSize: 11, color: 'var(--money)' }}>

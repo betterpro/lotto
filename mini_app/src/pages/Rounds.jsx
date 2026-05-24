@@ -64,6 +64,13 @@ function fmtDate(s) {
 
 const FILTERS = ['All', 'Live', 'Drawn', 'Won']
 
+function playerCount(round) {
+  if (!round) return 0
+  if (Array.isArray(round.participants)) return round.participants.length
+  const n = round.participants_count ?? round.participants
+  return typeof n === 'number' ? n : 0
+}
+
 function RoundCard({ round }) {
   const [showPhoto, setShowPhoto] = useState(false)
   const ds = round.display_status || round.status
@@ -71,7 +78,6 @@ function RoundCard({ round }) {
   const isUploaded = ['UPLOADED','CLOSING','uploaded','closed'].includes(ds)
   const isDrawn    = ['DRAWN','done','drawn'].includes(ds)
   const hasWon     = (round.my_prize || 0) > 0
-  const myStake    = (round.my_shares || 0) * (round.price_per_share || 5)
 
   const iconBg    = isOpen ? 'rgba(78,208,122,.14)' : isUploaded ? 'rgba(242,163,59,.14)' :
     hasWon ? 'rgba(245,199,59,.14)' : 'var(--bg-3)'
@@ -106,15 +112,21 @@ function RoundCard({ round }) {
       <div className="row between">
         <div className="row gap-12">
           <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>STAKE</span>
+            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR STAKE</span>
             <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {round.my_shares ? fmtCAD(myStake) : '—'}
+              {round.my_stake ? fmtCAD(round.my_stake) : '—'}
             </span>
           </div>
           <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>SHARES</span>
+            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>
             <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
-              {round.my_shares ?? '—'} / {round.participants ?? 0}
+              {round.my_shares ?? '—'}
+            </span>
+          </div>
+          <div className="col gap-4">
+            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>PLAYERS</span>
+            <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+              {playerCount(round)}
             </span>
           </div>
           <div className="col gap-4">
@@ -190,7 +202,7 @@ export default function Rounds() {
 
   const myRounds    = rounds.filter(r => r.my_shares)
   const totalWon    = rounds.reduce((a, r) => a + (r.my_prize || 0), 0)
-  const totalStaked = myRounds.reduce((a, r) => a + (r.my_shares || 0) * (r.price_per_share || 5), 0)
+  const totalStaked = myRounds.reduce((a, r) => a + (r.my_stake || 0), 0)
   const net = totalWon - totalStaked
 
   const filtered = rounds.filter(r => {

@@ -491,9 +491,10 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
         p["won"] = (rd.get("winner_id") == p["user_id"])
     my = next((p for p in parts if p["user_id"] == user_id), None)
     rd["participants"] = parts
+    rd["participants_count"] = len(parts)
     rd["pool"] = pool
     rd["my_stake"]  = my["amount"] if my else None
-    rd["my_shares"] = round(my["amount"] / (rd.get("price_per_share") or 5)) if my else None
+    rd["my_shares"] = (my.get("shares") if my else None) or (round(my["amount"] / (rd.get("price_per_share") or 5)) if my else None)
     rd["my_prize"]  = my["prize"]  if my else None
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
@@ -566,6 +567,8 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
         rd = dict(row)
         rd["display_status"] = display_status(rd["status"], rd.get("draw_date"))
         rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+        rd["participants_count"] = int(rd.get("participants_count") or 0)
+        rd["participants"] = rd["participants_count"]
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
         rd["has_ticket_image"] = bool(rd.get("ticket_image"))
         rd.pop("ticket_image", None)
