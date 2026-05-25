@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { api } from './api.js'
 import BottomNav       from './components/BottomNav.jsx'
 import TelegramAvatar  from './components/TelegramAvatar.jsx'
@@ -39,11 +39,19 @@ export default function App() {
   const [error, setError] = useState(null)
   const [onboarded, setOnboarded] = useState(() => !!localStorage.getItem(ONB_KEY))
 
+  const loadUser = useCallback(() => {
+    setError(null)
+    setUser(null)
+    api.me()
+      .then(setUser)
+      .catch(e => setError(e.message || 'Could not load app'))
+  }, [])
+
   useEffect(() => {
     window.Telegram?.WebApp?.ready()
     window.Telegram?.WebApp?.expand()
-    api.me().then(setUser).catch(e => setError(e.message))
-  }, [])
+    loadUser()
+  }, [loadUser])
 
   useEffect(() => {
     if (!user) return
@@ -80,6 +88,9 @@ export default function App() {
       <div className="center-screen" style={{ padding: 24 }}>
         <span style={{ fontSize: 48 }}>⚠️</span>
         <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
+        <button className="primary" onClick={loadUser} style={{ marginTop: 12 }}>
+          Try again
+        </button>
       </div>
     )
   }

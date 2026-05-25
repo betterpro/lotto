@@ -1,20 +1,36 @@
 const BASE = import.meta.env.VITE_API_BASE ?? ''
+const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 20000)
 
 function initData() {
   return window.Telegram?.WebApp?.initData ?? ''
 }
 
 async function req(method, path, body) {
-  const res = await fetch(BASE + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData() },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  })
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+  let res
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData() },
+      signal: controller.signal,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('API request timed out. Please reopen the app or try again.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
+
   const text = await res.text()
   if (!res.ok) {
     let msg = text
     try { msg = JSON.parse(text).detail ?? text } catch {}
-    throw new Error(msg)
+    throw new Error(msg || 'API request failed')
   }
   try {
     return JSON.parse(text)
