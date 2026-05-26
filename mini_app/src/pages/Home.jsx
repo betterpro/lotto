@@ -515,8 +515,31 @@ export default function Home({ user, onUserUpdate }) {
     ? Math.round((round.my_stake / poolRaised) * (jackpot / (round.tickets_target || 25)))
     : null
 
+  const trusteeName = user.trustee?.full_name || user.trustee?.username
+  const groupName = user.group?.name
+
   return (
     <div className="tab-content">
+      {trusteeName && (
+        <div style={{
+          margin: '8px 16px 0', padding: '12px 14px', borderRadius: 12,
+          background: 'linear-gradient(135deg, rgba(245,199,59,.12), rgba(46,166,255,.08))',
+          border: '.5px solid var(--hairline-2)',
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <TelegramAvatar user={user.trustee} size={44} />
+          <div className="col gap-2 grow" style={{ minWidth: 0 }}>
+            <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+              Your trustee
+            </span>
+            <span style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.2 }}>{trusteeName}</span>
+            {groupName && (
+              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{groupName}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Greeting + balance */}
       <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <TelegramAvatar user={user} size={40} />
@@ -605,7 +628,7 @@ export default function Home({ user, onUserUpdate }) {
         </div>
         <div className="stat">
           <span className="k">Status</span>
-          <span className="v" style={{ fontSize: 16 }}>{user.is_trustee ? 'Trustee' : 'Member'}</span>
+          <span className="v" style={{ fontSize: 16 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
           <span className="delta">ID: {user.telegram_id}</span>
         </div>
         {sub && (

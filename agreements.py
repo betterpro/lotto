@@ -4,7 +4,7 @@ BCLC_GROUP_RELEASE_URL = (
     "https://corporate.bclc.com/content/dam/bclccorporate/documents/forms/group-release-form.pdf"
 )
 
-TRUSTEE = {
+DEFAULT_TRUSTEE = {
     "name": "Reza Heidari",
     "street": "2039 Westview Dr.",
     "city": "North Vancouver",
@@ -12,6 +12,22 @@ TRUSTEE = {
     "phone": "236-999-7878",
     "email": "rezaheidari@gmail.com",
 }
+
+# Legacy alias
+TRUSTEE = DEFAULT_TRUSTEE
+
+
+def build_trustee_from_user(user: dict) -> dict:
+    """Build trustee dict from a users row (group trustee beneficiary profile)."""
+    name = user.get("full_name") or user.get("username") or "Group Trustee"
+    return {
+        "name": name,
+        "street": user.get("street") or DEFAULT_TRUSTEE["street"],
+        "city": user.get("city") or DEFAULT_TRUSTEE["city"],
+        "province": user.get("province") or DEFAULT_TRUSTEE["province"],
+        "phone": user.get("phone") or DEFAULT_TRUSTEE["phone"],
+        "email": user.get("email") or DEFAULT_TRUSTEE["email"],
+    }
 
 _LOTTERY_LABELS = {
     "lotto_max": "Lotto Max",
@@ -46,14 +62,16 @@ def build_master_agreement(
     beneficiary_email: str | None = None,
     declaration_category: str | None = None,
     accepted_at: str | None = None,
+    trustee: dict | None = None,
     **_kwargs,
 ) -> str:
-    """Full Group Prize Agreement (BCLC form content) with Lotto Chee parties and round addendum notice."""
+    """Full Group Prize Agreement (BCLC form content) with group trustee and round addendum notice."""
+    t = trustee or DEFAULT_TRUSTEE
     ben_address = _format_address(
         beneficiary_street, beneficiary_city, beneficiary_province, beneficiary_postal
     )
     trustee_address = _format_address(
-        TRUSTEE["street"], TRUSTEE["city"], TRUSTEE["province"], None
+        t["street"], t["city"], t["province"], None
     )
     decl = (declaration_category or "e").lower()
     signed_date = accepted_at[:10] if accepted_at and len(accepted_at) >= 10 else "See Lotto Chee account"
@@ -66,11 +84,11 @@ $10,000.00 CAD or greater and must be completed by all group members entitled to
 share of the prize won. Lotto Chee uses this agreement for pooled play and registers
 each member as a Beneficiary with the Group Trustee named below.
 
-LOTTO CHEE - GROUP TRUSTEE
-  Name:     {TRUSTEE["name"]}
+GROUP TRUSTEE
+  Name:     {t["name"]}
   Address:  {trustee_address}
-  Phone:    {TRUSTEE["phone"]}
-  Email:    {TRUSTEE["email"]}
+  Phone:    {t["phone"]}
+  Email:    {t["email"]}
 
 BENEFICIARY
   Name:     {beneficiary_name}
@@ -111,7 +129,7 @@ as follows:
    Beneficiaries has any interest in the Ticket or any right to payment or delivery of
    any portion of the Prize.
 
-3. That the Group Trustee ({TRUSTEE["name"]}) has been authorized by the Beneficiaries
+3. That the Group Trustee ({t["name"]}) has been authorized by the Beneficiaries
    to accept from BCLC, for and on behalf of all Beneficiaries, the Prize.
 
 4. That the Group Trustee is: (a) a Beneficiary and member of the group entitled to
@@ -177,7 +195,7 @@ Questions: BCLC Customer Support, 74 West Seymour Street, Kamloops, BC V2C 1E2 -
 1-866-815-0222 - bclc.com
 
 SIGNATURES & DECLARATIONS
-Group Trustee: {TRUSTEE["name"]} - Lotto Chee Group Trustee
+Group Trustee: {t["name"]}
 
 Beneficiary: {beneficiary_name}
 Digitally signed via Lotto Chee / Telegram - {signed_date}
@@ -198,14 +216,16 @@ def build_round_agreement(
     pool_amount: float,
     share_pct: float | None,
     closed_at: str | None = None,
+    trustee: dict | None = None,
 ) -> str:
+    t = trustee or DEFAULT_TRUSTEE
     pct_line = f"{share_pct}%" if share_pct is not None else "-"
     closed_line = f"Entries closed: {closed_at}\n" if closed_at else ""
-    return f"""LOTTO CHEE - ROUND DRAW AGREEMENT (AMENDMENT)
+    return f"""ROUND DRAW AGREEMENT (AMENDMENT)
 Round #{round_id}
 
 This amendment supplements the Group Prize Agreement between you and Group Trustee
-{TRUSTEE["name"]}. In case of conflict on this round only, this amendment controls for
+{t["name"]}. In case of conflict on this round only, this amendment controls for
 Round #{round_id}.
 
 ROUND DETAILS
@@ -221,5 +241,5 @@ YOUR PARTICIPATION
 By participating in this round you confirm you have read the Group Prize Agreement
 and accept this round-specific share for the draw listed above.
 
-- Round #{round_id} - Lotto Chee - Trustee: {TRUSTEE["name"]}
+- Round #{round_id} - Trustee: {t["name"]}
 """

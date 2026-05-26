@@ -7,7 +7,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler
 
 import database as db
-from config import CURRENCY, TRUSTEE_ID
+from config import CURRENCY
 from keyboards import main_menu, back_button
 
 AWAITING_DEPOSIT_AMOUNT = 1
@@ -58,13 +58,13 @@ async def receive_deposit_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Please enter a valid positive number.")
         return AWAITING_DEPOSIT_AMOUNT
 
-    req_id = await db.create_deposit_request(conn, user.id, amount)
-
     user_record = await db.get_user(conn, user.id)
+    group_id = user_record.get("group_id") if user_record else None
+    req_id = await db.create_deposit_request(conn, user.id, amount, group_id=group_id)
+
     name = user_record["full_name"]
     uname = f"@{user_record['username']}" if user_record["username"] else "no username"
 
-    # Notify trustee
     from keyboards import deposit_approval
     trustee_msg = (
         f"💵 *Deposit Request #{req_id}*\n\n"
@@ -72,15 +72,21 @@ async def receive_deposit_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         f"Amount: *{amount:.2f} {CURRENCY}*\n\n"
         "Approve or reject this request:"
     )
-    try:
-        await ctx.bot.send_message(
-            chat_id=TRUSTEE_ID,
-            text=trustee_msg,
-            parse_mode="Markdown",
-            reply_markup=deposit_approval(req_id),
-        )
-    except Exception:
-        pass  # trustee may not have started the bot yet
+    trustee_chat_id = None
+    if group_id:
+        group = await db.get_group(conn, group_id)
+        if group:
+            trustee_chat_id = group["trustee_user_id"]
+    if trustee_chat_id:
+        try:
+            await ctx.bot.send_message(
+                chat_id=trustee_chat_id,
+                text=trustee_msg,
+                parse_mode="Markdown",
+                reply_markup=deposit_approval(req_id),
+            )
+        except Exception:
+            pass
 
     await update.message.reply_text(
         f"✅ Deposit request of *{amount:.2f} {CURRENCY}* sent to the trustee.\n"
@@ -104,8 +110,8 @@ async def handle_deposit_decision(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     conn = ctx.bot_data["db"]
-    trustee = await db.get_user(conn, query.from_user.id)
-    if not trustee or not trustee["is_trustee"]:
+    trustee_group = await db.get_group_for_trustee(conn, query.from_user.id)
+    if not trustee_group:
         await query.answer("Not authorised.", show_alert=True)
         return
 
@@ -116,6 +122,9 @@ async def handle_deposit_decision(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     req = await db.get_deposit_request(conn, req_id)
     if not req:
         await query.edit_message_text("Request not found.")
+        return
+    if req.get("group_id") and req["group_id"] != trustee_group["id"]:
+        await query.answer("Deposit belongs to another group.", show_alert=True)
         return
     if req["status"] != "pending":
         await query.edit_message_text(

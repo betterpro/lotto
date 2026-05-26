@@ -2,7 +2,7 @@
 Group Lottery Telegram Bot
 --------------------------
 Start:   python bot.py
-Requires .env with BOT_TOKEN and TRUSTEE_TELEGRAM_ID set.
+Requires .env with BOT_TOKEN, DATABASE_URL, and PLATFORM_ADMIN_TELEGRAM_IDS set.
 """
 
 import logging
@@ -116,7 +116,8 @@ async def _show_main(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = ctx.bot_data["db"]
     user = update.effective_user
     record = await db.get_user(conn, user.id)
-    keyboard = admin_menu() if (record and record["is_trustee"]) else main_menu()
+    trustee_group = await db.get_group_for_trustee(conn, user.id) if record else None
+    keyboard = admin_menu() if trustee_group else main_menu()
     await update.callback_query.message.reply_text(
         "Main menu:", reply_markup=keyboard
     )

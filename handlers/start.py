@@ -7,7 +7,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import database as db
-from config import TRUSTEE_ID, CURRENCY
+from config import CURRENCY, PLATFORM_ADMIN_IDS
+from group_context import parse_invite_slug
 from keyboards import main_menu, admin_menu
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     conn = ctx.bot_data["db"]
 
-    # Parse referral: /start ref_<inviter_id>
     invited_by: int | None = None
+    group_id = None
+    group_name = None
     if ctx.args:
         arg = ctx.args[0]
         if arg.startswith("ref_"):
@@ -46,8 +48,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 invited_by = int(arg[4:])
             except ValueError:
                 pass
+        slug = parse_invite_slug(arg) if arg.startswith(("g_", "join_")) else None
+        if slug:
+            g = await db.get_group_by_slug(conn, slug)
+            if g and g["status"] == "active":
+                group_id = g["id"]
+                group_name = g["name"]
 
-    is_trustee = 1 if user.id == TRUSTEE_ID else 0
+    is_platform = 1 if user.id in PLATFORM_ADMIN_IDS else 0
     existing = await db.get_user(conn, user.id)
 
     if not existing:
@@ -57,15 +65,33 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             username=user.username,
             full_name=user.full_name,
             invited_by=invited_by,
-            is_trustee=is_trustee,
+            is_trustee=0,
+            group_id=group_id,
+            is_platform_admin=is_platform,
         )
-        welcome = (
-            f"👋 Welcome, *{user.first_name}*!\n\n"
-            "You've been registered in the *Group Lottery*.\n"
-            "Deposit credits, join weekly rounds, and win big! 🎉"
-        )
+        if group_name:
+            welcome = (
+                f"👋 Welcome, *{user.first_name}*!\n\n"
+                f"You've joined the *{group_name}* group lottery.\n"
+                "Open the app to complete setup and play! 🎉"
+            )
+        else:
+            welcome = (
+                f"👋 Welcome, *{user.first_name}*!\n\n"
+                "Ask your trustee for a group invite link to join.\n"
+                "Open the Mini App when you have one."
+            )
     else:
         welcome = f"👋 Welcome back, *{user.first_name}*!"
+        if group_id and not existing.get("group_id"):
+            await conn.execute(
+                "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, user.id)
+            )
+            await conn.commit()
+            if group_name:
+                welcome = f"👋 Welcome! You've joined *{group_name}*."
+        elif group_id and existing.get("group_id") and existing["group_id"] != group_id:
+            welcome += "\n\n⚠️ You already belong to another group."
 
     record = await db.get_user(conn, user.id)
     credit = record["credit"] if record else 0.0
@@ -80,7 +106,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "Use the menu below to get started."
     )
 
-    keyboard = admin_menu() if is_trustee else main_menu()
+    trustee_group = await db.get_group_for_trustee(conn, user.id)
+    keyboard = admin_menu() if trustee_group else main_menu()
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=keyboard)
 
 
@@ -95,7 +122,8 @@ async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    keyboard = admin_menu() if record["is_trustee"] else main_menu()
+    trustee_group = await db.get_group_for_trustee(conn, user.id)
+    keyboard = admin_menu() if trustee_group else main_menu()
     await update.message.reply_text(
         "Choose an option:", reply_markup=keyboard
     )

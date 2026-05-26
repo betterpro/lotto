@@ -221,14 +221,19 @@ async def show_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def show_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    conn = ctx.bot_data["db"]
+    record = await db.get_user(conn, user.id)
     bot_info = await ctx.bot.get_me()
-    link = f"https://t.me/{bot_info.username}?start=ref_{user.id}"
+    group = await db.get_group(conn, record["group_id"]) if record and record.get("group_id") else None
+    if not group:
+        await _reply(update, "Join a group in the app before inviting friends.", keyboard=main_menu())
+        return
+    link = f"https://t.me/{bot_info.username}?start=g_{group['slug']}"
     await _reply(
         update,
         f"🔗 *Invite a Friend*\n\n"
-        f"Share this link to invite friends to join the group lottery:\n\n"
-        f"`{link}`\n\n"
-        "_Anyone who joins via your link will be linked to you._",
+        f"Share this link to invite friends to *{group['name']}*:\n\n"
+        f"`{link}`",
         keyboard=main_menu(),
     )
 

@@ -11,25 +11,22 @@ from telegram.ext import (
 )
 
 import database as db
-from config import CURRENCY, TRUSTEE_ID
+from config import CURRENCY
 from keyboards import admin_menu, main_menu
 
 AWAITING_TICKET_REF = 20
 AWAITING_WINNER_CONFIRM = 21
 
 
-def _is_trustee(record) -> bool:
-    return record is not None and record["is_trustee"]
-
-
 async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     conn = ctx.bot_data["db"]
     user = update.effective_user
     record = await db.get_user(conn, user.id)
-    if not _is_trustee(record):
-        await _reply(update, "⛔ Trustee only.")
+    group = await db.get_group_for_trustee(conn, user.id)
+    if not group:
+        await _reply(update, "⛔ Group trustee only.")
         return None
-    return record
+    return record, group
 
 
 # ──────────────────────────────────────────────
@@ -37,11 +34,13 @@ async def _auth(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_newround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
-    round_id = await db.create_round(conn)
+    round_id = await db.create_round(conn, group_id=group["id"])
     await _reply(
         update,
         f"✅ *Round #{round_id} opened!*\n\nMembers can now participate.",
@@ -54,11 +53,13 @@ async def cmd_newround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_closeround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
-    round_ = await db.get_open_round(conn)
+    round_ = await db.get_open_round(conn, group_id=group["id"])
     if not round_:
         await _reply(update, "No open round to close.", keyboard=admin_menu())
         return
@@ -80,19 +81,21 @@ async def cmd_closeround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_draw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
 
-    # Find the most recent closed round
     async with conn.execute(
-        "SELECT * FROM rounds WHERE status='closed' ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM rounds WHERE status='closed' AND group_id=? ORDER BY id DESC LIMIT 1",
+        (group["id"],),
     ) as cur:
         round_ = await cur.fetchone()
 
     if not round_:
-        open_round = await db.get_open_round(conn)
+        open_round = await db.get_open_round(conn, group_id=group["id"])
         if open_round:
             await _reply(
                 update,
@@ -230,16 +233,18 @@ async def cancel_draw(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_roundinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
-    round_ = await db.get_open_round(conn)
+    round_ = await db.get_open_round(conn, group_id=group["id"])
 
     if not round_:
-        # Show latest closed/drawn
         async with conn.execute(
-            "SELECT * FROM rounds ORDER BY id DESC LIMIT 1"
+            "SELECT * FROM rounds WHERE group_id=? ORDER BY id DESC LIMIT 1",
+            (group["id"],),
         ) as cur:
             round_ = await cur.fetchone()
 
@@ -268,11 +273,13 @@ async def cmd_roundinfo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_deposits(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
-    pending = await db.pending_deposits(conn)
+    pending = await db.pending_deposits(conn, group_id=group["id"])
 
     if not pending:
         await _reply(update, "✅ No pending deposits.", keyboard=admin_menu())
@@ -306,15 +313,17 @@ async def cmd_deposits(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def cmd_members(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _auth(update, ctx):
+    auth = await _auth(update, ctx)
+    if not auth:
         return
+    record, group = auth
 
     conn = ctx.bot_data["db"]
-    users = await db.all_users(conn)
+    users = await db.all_users(conn, group_id=group["id"])
 
     lines = [f"👥 *Members ({len(users)})*\n"]
     for u in users:
-        trustee_tag = " 👑" if u["is_trustee"] else ""
+        trustee_tag = " 👑" if u["telegram_id"] == group["trustee_user_id"] else ""
         uname = f"@{u['username']}" if u["username"] else "no username"
         lines.append(
             f"• *{u['full_name']}*{trustee_tag} ({uname})\n"

@@ -16,6 +16,7 @@ import random
 import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from email.utils import parseaddr
 from urllib.parse import parse_qsl
 
 import stripe
@@ -28,7 +29,23 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application
 
 import config
-from agreements import TRUSTEE, build_master_agreement, build_round_agreement, lottery_label
+from agreements import (
+    build_master_agreement,
+    build_round_agreement,
+    build_trustee_from_user,
+    lottery_label,
+)
+from group_context import (
+    enrich_user_context,
+    get_group,
+    get_group_by_slug,
+    get_trustee_user,
+    group_public,
+    parse_invite_slug,
+    slugify,
+    trustee_group_id,
+    trustee_public,
+)
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
 from database import get_db
@@ -181,6 +198,28 @@ def _validate_init_data(init_data: str) -> dict | None:
     return params
 
 
+def _init_start_param(params: dict) -> str | None:
+    return params.get("start_param") or None
+
+
+async def _assign_group_from_slug(db, telegram_id: int, slug: str) -> str | None:
+    """Assign group_id if user has none. Returns error message or None on success."""
+    group = await get_group_by_slug(db, slug)
+    if not group:
+        return "Invalid invite link"
+    if group["status"] != "active":
+        return "This group is not accepting members"
+    cur = await db.execute("SELECT group_id FROM users WHERE telegram_id=?", (telegram_id,))
+    row = await cur.fetchone()
+    if row and row["group_id"]:
+        if row["group_id"] != group["id"]:
+            return "You already belong to another group"
+        return None
+    await db.execute("UPDATE users SET group_id=? WHERE telegram_id=?", (group["id"], telegram_id))
+    await db.commit()
+    return None
+
+
 async def _get_user(init_data: str, db):
     params = _validate_init_data(init_data)
     if params is None:
@@ -189,6 +228,8 @@ async def _get_user(init_data: str, db):
     if not user_json:
         raise HTTPException(401, "No user in initData")
     tg = json.loads(user_json)
+    start_param = _init_start_param(params)
+    invite_slug = parse_invite_slug(start_param)
     row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
     user = await row.fetchone()
     if user is None:
@@ -196,10 +237,17 @@ async def _get_user(init_data: str, db):
         full_name = " ".join(filter(None, [
             tg.get("first_name", ""), tg.get("last_name", "")
         ])).strip() or tg.get("username") or f"user_{tg['id']}"
-        is_trustee = 1 if tg["id"] == config.TRUSTEE_ID else 0
+        is_platform = 1 if tg["id"] in config.PLATFORM_ADMIN_IDS else 0
+        group_id = None
+        if invite_slug:
+            g = await get_group_by_slug(db, invite_slug)
+            if g and g["status"] == "active":
+                group_id = g["id"]
         await db.execute(
-            "INSERT OR IGNORE INTO users (telegram_id, username, full_name, is_trustee) VALUES (?,?,?,?)",
-            (tg["id"], tg.get("username"), full_name, is_trustee),
+            """INSERT OR IGNORE INTO users
+               (telegram_id, username, full_name, is_trustee, is_platform_admin, group_id)
+               VALUES (?,?,?,?,?,?)""",
+            (tg["id"], tg.get("username"), full_name, 0, is_platform, group_id),
         )
         await db.execute(
             "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (tg["id"],)
@@ -207,7 +255,21 @@ async def _get_user(init_data: str, db):
         await db.commit()
         row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
         user = await row.fetchone()
+    elif invite_slug:
+        err = await _assign_group_from_slug(db, tg["id"], invite_slug)
+        if err:
+            user = dict(user)
+            user["_invite_error"] = err
+        else:
+            row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
+            user = await row.fetchone()
     user = dict(user)
+    if user["telegram_id"] in config.PLATFORM_ADMIN_IDS and not user.get("is_platform_admin"):
+        await db.execute(
+            "UPDATE users SET is_platform_admin=1 WHERE telegram_id=?", (tg["id"],)
+        )
+        await db.commit()
+        user["is_platform_admin"] = 1
     # Sync photo_url from Telegram initData if present and changed
     photo_url = tg.get("photo_url")
     if photo_url and user.get("photo_url") != photo_url:
@@ -292,35 +354,59 @@ async def _upload_ticket_to_storage(round_id: int, image_bytes: bytes, media_typ
     return f"{config.SUPABASE_URL}/storage/v1/object/public/tickets/{path}"
 
 
-async def _notify_all(db, text: str, setting_col: str | None = None):
-    """Notify all users, optionally filtering by a user_settings boolean column."""
+async def _notify_all(db, text: str, setting_col: str | None = None, group_id: int | None = None):
+    """Notify users in a group, optionally filtering by a user_settings boolean column."""
     if setting_col:
-        cur = await db.execute(f"""
-            SELECT u.telegram_id FROM users u
-            LEFT JOIN user_settings s ON s.user_id = u.telegram_id
-            WHERE COALESCE(s.{setting_col}, 1) = 1
-        """)
+        if group_id is not None:
+            cur = await db.execute(f"""
+                SELECT u.telegram_id FROM users u
+                LEFT JOIN user_settings s ON s.user_id = u.telegram_id
+                WHERE u.group_id = ? AND COALESCE(s.{setting_col}, 1) = 1
+            """, (group_id,))
+        else:
+            cur = await db.execute(f"""
+                SELECT u.telegram_id FROM users u
+                LEFT JOIN user_settings s ON s.user_id = u.telegram_id
+                WHERE COALESCE(s.{setting_col}, 1) = 1
+            """)
     else:
-        cur = await db.execute("SELECT telegram_id FROM users")
+        if group_id is not None:
+            cur = await db.execute(
+                "SELECT telegram_id FROM users WHERE group_id = ?", (group_id,)
+            )
+        else:
+            cur = await db.execute("SELECT telegram_id FROM users")
     for row in await cur.fetchall():
         await _notify(row["telegram_id"], text)
 
 
-async def _auto_join_round(db, round_id: int, price_per_share: float):
+async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: int | None = None):
     """Auto-enter users who opted in, have balance, and haven't hit their monthly limit."""
     from datetime import date as _date
     month_start = _date.today().replace(day=1).isoformat()
 
-    cur = await db.execute("""
-        SELECT u.telegram_id, u.credit, u.full_name,
-               COALESCE(s.shares_per_round, 1)        AS shares,
-               COALESCE(s.max_rounds_per_month, 4)    AS max_mo,
-               COALESCE(s.lottery_preference, 'both') AS lottery_preference,
-               s.preferred_day
-        FROM users u
-        JOIN user_settings s ON s.user_id = u.telegram_id
-        WHERE s.auto_participate = 1
-    """)
+    if group_id is not None:
+        cur = await db.execute("""
+            SELECT u.telegram_id, u.credit, u.full_name,
+                   COALESCE(s.shares_per_round, 1)        AS shares,
+                   COALESCE(s.max_rounds_per_month, 4)    AS max_mo,
+                   COALESCE(s.lottery_preference, 'both') AS lottery_preference,
+                   s.preferred_day
+            FROM users u
+            JOIN user_settings s ON s.user_id = u.telegram_id
+            WHERE s.auto_participate = 1 AND u.group_id = ?
+        """, (group_id,))
+    else:
+        cur = await db.execute("""
+            SELECT u.telegram_id, u.credit, u.full_name,
+                   COALESCE(s.shares_per_round, 1)        AS shares,
+                   COALESCE(s.max_rounds_per_month, 4)    AS max_mo,
+                   COALESCE(s.lottery_preference, 'both') AS lottery_preference,
+                   s.preferred_day
+            FROM users u
+            JOIN user_settings s ON s.user_id = u.telegram_id
+            WHERE s.auto_participate = 1
+        """)
     # Determine the round's lottery type for filtering
     round_cur = await db.execute("SELECT lottery_type FROM rounds WHERE id=?", (round_id,))
     round_row = await round_cur.fetchone()
@@ -401,29 +487,88 @@ def _email_text(msg) -> str:
         return ""
 
 
-def _imap_find_lotto_refs() -> list[int]:
-    """Synchronous IMAP scan. Returns deposit IDs referenced in Interac e-transfer emails."""
+def _email_addr(value: str | None) -> str:
+    return (parseaddr(value or "")[1] or "").strip().lower()
+
+
+def _parse_etransfer_amount(text: str) -> float | None:
+    patterns = [
+        r"sent\s+you\s+\$?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)",
+        r"you\s+have\s+\$?\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*\(CAD\)",
+        r"\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(?:CAD|waiting)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                return round(float(match.group(1).replace(",", "")), 2)
+            except ValueError:
+                return None
+    return None
+
+
+def _is_interac_message(msg, text: str) -> bool:
+    from_addr = _email_addr(msg.get("From"))
+    return_path = _email_addr(msg.get("Return-Path"))
+    subject = msg.get("Subject") or ""
+    is_interac_domain = (
+        from_addr.endswith("@payments.interac.ca")
+        or return_path.endswith("@payments.interac.ca")
+    )
+    mentions_etransfer = (
+        "interac e-transfer" in subject.lower()
+        or "interac e-transfer" in text.lower()
+        or "autodeposit" in subject.lower()
+        or "autodeposit" in text.lower()
+    )
+    return is_interac_domain and mentions_etransfer
+
+
+def _imap_find_etransfer_receipts() -> list[dict]:
+    """Synchronous IMAP scan. Returns recent Interac e-transfer email receipts."""
     if not all([config.IMAP_HOST, config.IMAP_USER, config.IMAP_PASS]):
         return []
-    found: list[int] = []
+    found: list[dict] = []
+    seen_ids: set[bytes] = set()
     try:
         mail = imaplib.IMAP4_SSL(config.IMAP_HOST, config.IMAP_PORT)
         mail.login(config.IMAP_USER, config.IMAP_PASS)
         mail.select("INBOX")
-        for term in ['SUBJECT "Interac"', 'SUBJECT "interac"', 'SUBJECT "e-Transfer"', 'SUBJECT "etransfer"']:
+        for term in [
+            'FROM "payments.interac.ca"',
+            'SUBJECT "Interac"',
+            'SUBJECT "interac"',
+            'SUBJECT "e-Transfer"',
+            'SUBJECT "etransfer"',
+            'SUBJECT "Autodeposit"',
+        ]:
             _, msg_ids = mail.search(None, term)
             if not msg_ids[0]:
                 continue
             for mid in msg_ids[0].split()[-100:]:
+                if mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
                 _, data = mail.fetch(mid, "(RFC822)")
                 if not data[0]:
                     continue
                 msg = _email_lib.message_from_bytes(data[0][1])
-                text = _email_text(msg) + " " + (msg.get("Subject") or "")
-                for m in re.finditer(r"LOTTO-(\d+)", text, re.IGNORECASE):
-                    dep_id = int(m.group(1))
-                    if dep_id not in found:
-                        found.append(dep_id)
+                text = _email_text(msg)
+                subject = msg.get("Subject") or ""
+                searchable = f"{text} {subject}"
+                if not _is_interac_message(msg, searchable):
+                    continue
+                ref_ids = [
+                    int(m.group(1))
+                    for m in re.finditer(r"LOTTO-(\d+)", searchable, re.IGNORECASE)
+                ]
+                found.append({
+                    "message_id": (msg.get("Message-ID") or "").strip(),
+                    "payment_notification": (msg.get("X-Payment-Notification") or "").strip(),
+                    "sender_email": _email_addr(msg.get("Reply-To")),
+                    "amount": _parse_etransfer_amount(searchable),
+                    "ref_ids": ref_ids,
+                })
         mail.close()
         mail.logout()
     except Exception as exc:
@@ -431,38 +576,114 @@ def _imap_find_lotto_refs() -> list[int]:
     return found
 
 
-async def _check_etransfer_emails(db) -> dict:
-    """Check IMAP and auto-approve pending e-transfer deposit requests whose ref code was found."""
-    dep_ids = await asyncio.to_thread(_imap_find_lotto_refs)
-    approved = 0
-    for dep_id in dep_ids:
+async def _receipt_was_used(db, receipt: dict) -> bool:
+    keys = [receipt.get("message_id"), receipt.get("payment_notification")]
+    keys = [key for key in keys if key]
+    if not keys:
+        return False
+    if len(keys) == 1:
+        cur = await db.execute(
+            "SELECT id FROM etransfer_email_receipts WHERE message_id=? OR payment_notification=? LIMIT 1",
+            (keys[0], keys[0]),
+        )
+    else:
+        cur = await db.execute(
+            "SELECT id FROM etransfer_email_receipts WHERE message_id=? OR payment_notification=? LIMIT 1",
+            (keys[0], keys[1]),
+        )
+    return await cur.fetchone() is not None
+
+
+async def _claim_receipt(db, receipt: dict, dep_id: int) -> bool:
+    cur = await db.execute(
+        """INSERT INTO etransfer_email_receipts
+             (message_id, payment_notification, sender_email, amount, deposit_request_id)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT DO NOTHING
+           RETURNING id""",
+        (
+            receipt.get("message_id") or None,
+            receipt.get("payment_notification") or None,
+            receipt.get("sender_email") or None,
+            receipt.get("amount"),
+            dep_id,
+        ),
+    )
+    return await cur.fetchone() is not None
+
+
+async def _pending_deposit_by_receipt(db, receipt: dict):
+    for dep_id in receipt.get("ref_ids") or []:
         cur = await db.execute(
             "SELECT * FROM deposit_requests WHERE id=? AND status='pending' AND payment_method='etransfer'",
             (dep_id,),
         )
         dep = await cur.fetchone()
+        if dep:
+            return dep
+
+    sender_email = receipt.get("sender_email")
+    amount = receipt.get("amount")
+    if not sender_email or amount is None:
+        return None
+
+    cur = await db.execute(
+        """SELECT dr.*
+           FROM deposit_requests dr
+           JOIN users u ON u.telegram_id=dr.user_id
+           WHERE dr.status='pending'
+             AND dr.payment_method='etransfer'
+             AND LOWER(COALESCE(u.email, ''))=?
+             AND ABS(dr.amount - ?) < 0.01
+           ORDER BY dr.created_at
+           LIMIT 2""",
+        (sender_email, amount),
+    )
+    matches = await cur.fetchall()
+    return matches[0] if len(matches) == 1 else None
+
+
+async def _approve_etransfer_deposit(db, dep: dict, receipt: dict) -> bool:
+    note = f"Auto-approved via IMAP ({receipt.get('sender_email') or 'unknown sender'})"
+    cur = await db.execute(
+        "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now'), trustee_note=? "
+        "WHERE id=? AND status='pending' RETURNING id",
+        (note, dep["id"]),
+    )
+    if await cur.fetchone() is None:
+        return False
+
+    await db.execute(
+        "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
+    )
+    await db.execute(
+        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
+        (dep["user_id"], "deposit", dep["amount"], f"E-transfer deposit #{dep['id']}"),
+    )
+    await db.commit()
+    await _notify(
+        dep["user_id"],
+        f"✅ <b>E-transfer received — ${dep['amount']:.2f}</b>\n"
+        f"Your account has been credited.",
+    )
+    return True
+
+
+async def _check_etransfer_emails(db) -> dict:
+    """Check IMAP and auto-approve pending e-transfer deposits matched by ref or sender/amount."""
+    receipts = await asyncio.to_thread(_imap_find_etransfer_receipts)
+    approved = 0
+    for receipt in receipts:
+        if await _receipt_was_used(db, receipt):
+            continue
+        dep = await _pending_deposit_by_receipt(db, receipt)
         if not dep:
             continue
-        await db.execute(
-            "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
-        )
-        await db.execute(
-            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-            (dep["user_id"], "deposit", dep["amount"], f"E-transfer LOTTO-{dep_id}"),
-        )
-        await db.execute(
-            "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now'), "
-            "trustee_note='Auto-approved via IMAP' WHERE id=?",
-            (dep_id,),
-        )
-        await db.commit()
-        await _notify(
-            dep["user_id"],
-            f"✅ <b>E-transfer received — ${dep['amount']:.2f}</b>\n"
-            f"Your account has been credited. Reference: LOTTO-{dep_id}",
-        )
-        approved += 1
-    return {"checked": len(dep_ids), "approved": approved}
+        if not await _claim_receipt(db, receipt, dep["id"]):
+            continue
+        if await _approve_etransfer_deposit(db, dep, receipt):
+            approved += 1
+    return {"checked": len(receipts), "approved": approved}
 
 
 async def _auth(x_init_data: str | None):
@@ -473,10 +694,27 @@ async def _auth(x_init_data: str | None):
     return user, db
 
 
-async def _require_trustee(x_init_data):
+async def _require_group_trustee(x_init_data):
     user, db = await _auth(x_init_data)
-    if not user["is_trustee"]:
-        raise HTTPException(403, "Trustee only")
+    gid = await trustee_group_id(db, user)
+    if not gid:
+        raise HTTPException(403, "Group trustee only")
+    group = await get_group(db, gid)
+    if not group or group["trustee_user_id"] != user["telegram_id"]:
+        raise HTTPException(403, "Group trustee only")
+    return user, db, group
+
+
+async def _require_platform_admin(x_init_data):
+    user, db = await _auth(x_init_data)
+    if not user.get("is_platform_admin") and user["telegram_id"] not in config.PLATFORM_ADMIN_IDS:
+        raise HTTPException(403, "Platform admin only")
+    return user, db
+
+
+# Backward-compatible alias
+async def _require_trustee(x_init_data):
+    user, db, _group = await _require_group_trustee(x_init_data)
     return user, db
 
 
@@ -500,11 +738,29 @@ async def _get_or_create_customer(user: dict, db) -> str:
 
 _ptb_app: Application | None = None
 _bot_username: str | None = None
+_etransfer_task: asyncio.Task | None = None
+
+
+async def _etransfer_poll_loop():
+    while True:
+        try:
+            db = await get_db()
+            try:
+                result = await _check_etransfer_emails(db)
+                if result.get("approved"):
+                    log.info("Auto-approved %s e-transfer deposit(s)", result["approved"])
+            finally:
+                await db.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Background e-transfer check failed")
+        await asyncio.sleep(max(30, config.ETRANSFER_CHECK_INTERVAL_SECONDS))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ptb_app, _bot_username
+    global _ptb_app, _bot_username, _etransfer_task
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url and not config.MINI_APP_URL:
         os.environ["MINI_APP_URL"] = render_url
@@ -518,7 +774,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     log.info("PTB started (webhook mode), bot=@%s", _bot_username)
+    if all([config.IMAP_HOST, config.IMAP_USER, config.IMAP_PASS]):
+        _etransfer_task = asyncio.create_task(_etransfer_poll_loop())
+        log.info("Background e-transfer checker started")
     yield
+    if _etransfer_task:
+        _etransfer_task.cancel()
+        try:
+            await _etransfer_task
+        except asyncio.CancelledError:
+            pass
     await _ptb_app.stop()
     await _ptb_app.shutdown()
 
@@ -545,13 +810,14 @@ async def telegram_webhook(request: Request):
 @app.get("/api/me")
 async def api_me(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    # Compute lifetime won and spent from transactions
     cur = await db.execute(
         "SELECT type, amount FROM transactions WHERE user_id=?", (user["telegram_id"],)
     )
     txs = await cur.fetchall()
     lifetime_won   = sum(t["amount"] for t in txs if t["type"] == "win")
     lifetime_spent = sum(abs(t["amount"]) for t in txs if t["type"] == "participate")
+    ctx = await enrich_user_context(db, user)
+    invite_error = user.pop("_invite_error", None)
     await db.close()
     u = dict(user)
     return {
@@ -562,7 +828,42 @@ async def api_me(x_init_data: str | None = Header(default=None)):
         "stripe_enabled": bool(config.STRIPE_SECRET_KEY),
         "lifetime_won": lifetime_won,
         "lifetime_spent": lifetime_spent,
+        **ctx,
+        "invite_error": invite_error,
     }
+
+
+@app.get("/api/group/preview")
+async def api_group_preview(slug: str):
+    db = await get_db()
+    group = await get_group_by_slug(db, slug)
+    if not group:
+        await db.close()
+        raise HTTPException(404, "Group not found")
+    trustee = await get_trustee_user(db, group["trustee_user_id"])
+    await db.close()
+    return {
+        "group": group_public(group),
+        "trustee": trustee_public(trustee),
+    }
+
+
+@app.post("/api/group/join")
+async def api_group_join(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    slug = (body.get("slug") or "").strip().lower()
+    if not slug:
+        raise HTTPException(400, "slug required")
+    err = await _assign_group_from_slug(db, user["telegram_id"], slug)
+    if err:
+        await db.close()
+        raise HTTPException(400, err)
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    ctx = await enrich_user_context(db, dict(row))
+    await db.close()
+    return {"ok": True, **ctx}
 
 
 # ---------------------------------------------------------------------------
@@ -572,22 +873,38 @@ async def api_me(x_init_data: str | None = Header(default=None)):
 @app.get("/api/invite")
 async def api_invite(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    group = await get_group(db, user.get("group_id"))
     await db.close()
     if not _bot_username:
         raise HTTPException(500, "Bot not available")
-    link = f"https://t.me/{_bot_username}?start=ref_{user['telegram_id']}"
-    return {"link": link}
+    if not group:
+        raise HTTPException(400, "Join a group before inviting friends")
+    slug = group["slug"]
+    link = f"https://t.me/{_bot_username}?start=g_{slug}"
+    app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}"
+    return {"link": link, "app_link": app_link, "slug": slug}
 
 
 # ---------------------------------------------------------------------------
 # /api/agreement
 # ---------------------------------------------------------------------------
 
-async def _trustee_row(db):
-    cur = await db.execute(
-        "SELECT telegram_id, full_name, username FROM users WHERE is_trustee=1 LIMIT 1"
-    )
-    return await cur.fetchone()
+async def _trustee_for_user(db, user: dict):
+    group = await get_group(db, user.get("group_id"))
+    if not group:
+        return None
+    return await get_trustee_user(db, group["trustee_user_id"])
+
+
+async def _trustee_dict_for_user(db, user: dict) -> dict:
+    row = await _trustee_for_user(db, user)
+    if row:
+        return build_trustee_from_user(dict(row))
+    return build_trustee_from_user({
+        "full_name": "Group Trustee",
+        "street": None, "city": None, "province": None,
+        "phone": None, "email": None,
+    })
 
 
 def _display_name(row) -> str:
@@ -617,15 +934,23 @@ async def api_save_beneficiary(request: Request, x_init_data: str | None = Heade
     user, db = await _auth(x_init_data)
     body = await request.json()
     full_name = (body.get("fullName") or body.get("full_name") or user.get("full_name") or "").strip()
+    email_addr = (body.get("email") or user.get("email") or "").strip().lower()
     accepted = body.get("acceptedAt") or body.get("accepted_at")
     await db.execute(
         """UPDATE users SET
             full_name = COALESCE(NULLIF(?, ''), full_name),
-            street = ?, city = ?, province = ?, postal_code = ?,
-            phone = ?, declaration_category = ?, agreement_accepted_at = ?
+            email = COALESCE(NULLIF(?, ''), email),
+            street = COALESCE(?, street),
+            city = COALESCE(?, city),
+            province = COALESCE(?, province),
+            postal_code = COALESCE(?, postal_code),
+            phone = COALESCE(?, phone),
+            declaration_category = COALESCE(?, declaration_category),
+            agreement_accepted_at = COALESCE(?, agreement_accepted_at)
            WHERE telegram_id = ?""",
         (
             full_name,
+            email_addr,
             body.get("street"),
             body.get("city"),
             body.get("province"),
@@ -649,7 +974,8 @@ async def api_agreement_master(x_init_data: str | None = Header(default=None)):
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     u = dict(row) if row else dict(user)
-    body = build_master_agreement(**_beneficiary_agreement_kwargs(u))
+    trustee = await _trustee_dict_for_user(db, u)
+    body = build_master_agreement(**_beneficiary_agreement_kwargs(u), trustee=trustee)
     await db.close()
     return {
         "title": "Group Prize Agreement",
@@ -664,7 +990,8 @@ async def api_agreement_master_download(x_init_data: str | None = Header(default
     row = await cur.fetchone()
     u = dict(row) if row else dict(user)
     kwargs = _beneficiary_agreement_kwargs(u)
-    body = build_master_agreement(**kwargs)
+    trustee = await _trustee_dict_for_user(db, u)
+    body = build_master_agreement(**kwargs, trustee=trustee)
     await db.close()
     ben = kwargs["beneficiary_name"]
     addr = ", ".join(
@@ -677,11 +1004,11 @@ async def api_agreement_master_download(x_init_data: str | None = Header(default
     ) or "—"
     pdf_bytes = build_agreement_pdf(
         title="Group Prize Agreement",
-        subtitle=f"Beneficiary: {ben} · Trustee: {TRUSTEE['name']}",
+        subtitle=f"Beneficiary: {ben} · Trustee: {trustee['name']}",
         body=body,
         highlights=[
-            ("Trustee", TRUSTEE["name"]),
-            ("Trustee email", TRUSTEE["email"]),
+            ("Trustee", trustee["name"]),
+            ("Trustee email", trustee["email"]),
             ("Beneficiary", ben),
             ("Beneficiary address", addr),
         ],
@@ -699,7 +1026,9 @@ async def api_agreement_master_download(x_init_data: str | None = Header(default
 async def api_agreement_round(round_id: int, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     await _auto_close_round_if_due(db, round_id)
-    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
+    )
     round_ = await cur.fetchone()
     if not round_:
         await db.close()
@@ -718,6 +1047,7 @@ async def api_agreement_round(round_id: int, x_init_data: str | None = Header(de
         raise HTTPException(403, "Join this round to access your draw agreement")
     pool = rd.get("pool") or 0
     share_pct = round(part["amount"] / pool * 100, 1) if pool else None
+    trustee = await _trustee_dict_for_user(db, user)
     body = build_round_agreement(
         round_id=round_id,
         lottery_type=rd.get("lottery_type"),
@@ -728,6 +1058,7 @@ async def api_agreement_round(round_id: int, x_init_data: str | None = Header(de
         pool_amount=pool,
         share_pct=share_pct,
         closed_at=rd.get("closed_at"),
+        trustee=trustee,
     )
     await db.close()
     return {
@@ -741,7 +1072,9 @@ async def api_agreement_round(round_id: int, x_init_data: str | None = Header(de
 async def api_agreement_round_download(round_id: int, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
     await _auto_close_round_if_due(db, round_id)
-    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
+    )
     round_ = await cur.fetchone()
     if not round_:
         await db.close()
@@ -761,6 +1094,7 @@ async def api_agreement_round_download(round_id: int, x_init_data: str | None = 
     pool = rd.get("pool") or 0
     share_pct = round(part["amount"] / pool * 100, 1) if pool else None
     beneficiary_name = user.get("full_name") or user.get("username") or f"User {user['telegram_id']}"
+    trustee = await _trustee_dict_for_user(db, user)
     body = build_round_agreement(
         round_id=round_id,
         lottery_type=rd.get("lottery_type"),
@@ -771,6 +1105,7 @@ async def api_agreement_round_download(round_id: int, x_init_data: str | None = 
         pool_amount=pool,
         share_pct=share_pct,
         closed_at=rd.get("closed_at"),
+        trustee=trustee,
     )
     await db.close()
     pct_line = f"{share_pct}%" if share_pct is not None else "—"
@@ -853,16 +1188,27 @@ _OPEN_ROUNDS_ORDER = (
 )
 
 
+def _require_member_group(user: dict) -> int:
+    gid = user.get("group_id")
+    if not gid:
+        raise HTTPException(403, "Join a group to play")
+    return gid
+
+
 @app.get("/api/round")
 async def api_round(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
-        f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+        f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1",
+        (gid,),
     )
     round_ = await cur.fetchone()
     if round_ is None:
-        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE group_id=? ORDER BY id DESC LIMIT 1", (gid,)
+        )
         round_ = await cur.fetchone()
     if round_ is None:
         await db.close()
@@ -875,9 +1221,11 @@ async def api_round(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds/open")
 async def api_open_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
-        f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER}"
+        f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER}",
+        (gid,),
     )
     rows = await cur.fetchall()
     rounds = [await _build_round_detail(db, r, user["telegram_id"]) for r in rows]
@@ -892,6 +1240,7 @@ async def api_open_rounds(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds")
 async def api_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute("""
         SELECT r.*,
@@ -899,8 +1248,9 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
           (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count
         FROM rounds r
         LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
+        WHERE r.group_id = ?
         ORDER BY r.id DESC LIMIT 20
-    """, (user["telegram_id"],))
+    """, (user["telegram_id"], gid))
     rounds = []
     for row in await cur.fetchall():
         rd = dict(row)
@@ -932,16 +1282,20 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
 @app.post("/api/participate")
 async def api_participate(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     round_id = body.get("round_id")
     if round_id:
-        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (int(round_id),))
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE id=? AND group_id=?", (int(round_id), gid)
+        )
     else:
         cur = await db.execute(
-            f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+            f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1",
+            (gid,),
         )
     round_ = await cur.fetchone()
     if round_ is None:
@@ -979,8 +1333,8 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (amount, round_["id"]))
     await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (amount, user["telegram_id"]))
     await db.execute(
-        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (user["telegram_id"], "participate", -amount, f"Round #{round_['id']}"),
+        "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+        (user["telegram_id"], "participate", -amount, f"Round #{round_['id']}", gid),
     )
     await db.commit()
     cur = await db.execute("SELECT pool FROM rounds WHERE id=?", (round_["id"],))
@@ -1018,13 +1372,14 @@ async def api_transactions(x_init_data: str | None = Header(default=None)):
 @app.post("/api/deposit")
 async def api_deposit(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     await db.execute(
-        "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?)",
-        (user["telegram_id"], amount),
+        "INSERT INTO deposit_requests (user_id, amount, group_id) VALUES (?,?,?)",
+        (user["telegram_id"], amount, gid),
     )
     await db.commit()
     await db.close()
@@ -1116,23 +1471,31 @@ async def put_settings(request: Request, x_init_data: str | None = Header(defaul
 
 @app.get("/api/etransfer/info")
 async def etransfer_info(x_init_data: str | None = Header(default=None)):
-    await _auth(x_init_data)
+    user, db = await _auth(x_init_data)
+    group = await get_group(db, user.get("group_id"))
+    await db.close()
+    email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
     return {
-        "enabled": bool(config.ADMIN_ETRANSFER_EMAIL),
-        "email": config.ADMIN_ETRANSFER_EMAIL,
+        "enabled": bool(email),
+        "email": email,
     }
 
 
 @app.post("/api/etransfer/deposit")
 async def etransfer_deposit(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
+    gid = _require_member_group(user)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
+    if not user.get("email"):
+        raise HTTPException(400, "Add your e-transfer email in Profile before sending a deposit")
+    group = await get_group(db, gid)
+    admin_email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
     cur = await db.execute(
-        "INSERT INTO deposit_requests (user_id, amount, payment_method) VALUES (?,?,'etransfer') RETURNING id",
-        (user["telegram_id"], amount),
+        "INSERT INTO deposit_requests (user_id, amount, payment_method, group_id) VALUES (?,?,'etransfer',?) RETURNING id",
+        (user["telegram_id"], amount, gid),
     )
     dep_id = cur.lastrowid
     ref_code = f"LOTTO-{dep_id}"
@@ -1144,18 +1507,64 @@ async def etransfer_deposit(request: Request, x_init_data: str | None = Header(d
         "deposit_id": dep_id,
         "ref_code": ref_code,
         "amount": amount,
-        "admin_email": config.ADMIN_ETRANSFER_EMAIL,
+        "admin_email": admin_email,
     }
 
 
 # ---------------------------------------------------------------------------
-# Admin endpoints
+# Trustee application
+# ---------------------------------------------------------------------------
+
+@app.get("/api/trustee/application")
+async def api_trustee_application_status(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    cur = await db.execute(
+        """SELECT * FROM trustee_applications
+           WHERE applicant_user_id = ? ORDER BY id DESC LIMIT 1""",
+        (user["telegram_id"],),
+    )
+    app_row = await cur.fetchone()
+    await db.close()
+    return {"application": dict(app_row) if app_row else None}
+
+
+@app.post("/api/trustee/apply")
+async def api_trustee_apply(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    if await trustee_group_id(db, user):
+        await db.close()
+        raise HTTPException(400, "You already manage a group")
+    cur = await db.execute(
+        "SELECT id FROM trustee_applications WHERE applicant_user_id=? AND status='pending'",
+        (user["telegram_id"],),
+    )
+    if await cur.fetchone():
+        await db.close()
+        raise HTTPException(400, "Application already pending")
+    body = await request.json()
+    name = (body.get("proposed_group_name") or body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Group name required")
+    await db.execute(
+        "INSERT INTO trustee_applications (applicant_user_id, proposed_group_name) VALUES (?,?)",
+        (user["telegram_id"], name),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin endpoints (group trustee)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/admin/round")
 async def admin_round(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE group_id=? ORDER BY id DESC LIMIT 1", (gid,)
+    )
     round_ = await cur.fetchone()
     if round_ is None:
         await db.close()
@@ -1172,10 +1581,12 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
 
 @app.get("/api/admin/rounds")
 async def admin_rounds(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     cur = await db.execute(
-        "SELECT * FROM rounds WHERE status IN ('open','closed','uploaded') "
-        f"ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 ELSE 2 END, {_OPEN_ROUNDS_ORDER}"
+        "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed','uploaded') "
+        f"ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 ELSE 2 END, {_OPEN_ROUNDS_ORDER}",
+        (gid,),
     )
     rows = await cur.fetchall()
     rounds = []
@@ -1193,7 +1604,8 @@ async def admin_rounds(x_init_data: str | None = Header(default=None)):
 
 @app.post("/api/admin/round/new")
 async def admin_new_round(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     body = await request.json()
     jackpot = body.get("jackpot") or 0
     tickets_target = body.get("tickets_target") or 25
@@ -1201,22 +1613,23 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     draw_date = body.get("draw_date") or None
     lottery_type = body.get("lottery_type") or "lotto_max"
     cur = await db.execute(
-        "INSERT INTO rounds (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type) VALUES ('open', ?, ?, ?, ?, ?) RETURNING id",
-        (draw_date, jackpot, tickets_target, price_per_share, lottery_type)
+        """INSERT INTO rounds
+           (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type, group_id)
+           VALUES ('open', ?, ?, ?, ?, ?, ?) RETURNING id""",
+        (draw_date, jackpot, tickets_target, price_per_share, lottery_type, gid),
     )
     round_id = cur.lastrowid
     await db.commit()
 
-    # Auto-join eligible users
-    await _auto_join_round(db, round_id, price_per_share)
+    await _auto_join_round(db, round_id, price_per_share, group_id=gid)
 
-    # Notify all users who want new-round alerts
     draw_str = f" · Draw {draw_date}" if draw_date else ""
     jackpot_str = f" · ${jackpot/1_000_000:.0f}M jackpot" if jackpot else ""
     await _notify_all(db,
         f"🎟 <b>New round opened — #{round_id}</b>{draw_str}{jackpot_str}\n"
         f"${price_per_share:.0f}/share · target {tickets_target} tickets",
         setting_col="notif_new_round",
+        group_id=gid,
     )
 
     await db.close()
@@ -1225,7 +1638,8 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
 
 @app.post("/api/admin/round/close")
 async def admin_close_round(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     body = {}
     try:
         body = await request.json()
@@ -1233,10 +1647,14 @@ async def admin_close_round(request: Request, x_init_data: str | None = Header(d
         pass
     round_id = body.get("round_id")
     if round_id:
-        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND status='open'", (int(round_id),))
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE id=? AND status='open' AND group_id=?",
+            (int(round_id), gid),
+        )
     else:
         cur = await db.execute(
-            f"SELECT * FROM rounds WHERE status='open' ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1"
+            f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1",
+            (gid,),
         )
     round_ = await cur.fetchone()
     if round_ is None:
@@ -1253,15 +1671,19 @@ async def admin_close_round(request: Request, x_init_data: str | None = Header(d
 @app.post("/api/admin/round/upload-ticket")
 async def admin_upload_ticket(request: Request, x_init_data: str | None = Header(default=None)):
     """Admin uploads ticket numbers for a round (sets status to 'uploaded')."""
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
     numbers = body.get("numbers", [])  # list of 7 ints
 
     if round_id:
-        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
     else:
-        cur = await db.execute("SELECT * FROM rounds WHERE status IN ('open','closed') ORDER BY id DESC LIMIT 1")
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed') ORDER BY id DESC LIMIT 1",
+            (gid,),
+        )
     round_ = await cur.fetchone()
     if not round_:
         raise HTTPException(400, "No suitable round found")
@@ -1304,7 +1726,8 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
 @app.post("/api/admin/round/scan-ticket")
 async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(default=None)):
     """Scan a ticket photo with Claude Vision to extract numbers and draw date."""
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
 
     if not config.ANTHROPIC_API_KEY:
         await db.close()
@@ -1328,9 +1751,11 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
             media_type = "image/webp"
 
     if round_id:
-        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
     else:
-        cur = await db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT 1")
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE group_id=? ORDER BY id DESC LIMIT 1", (gid,)
+        )
     round_ = await cur.fetchone()
     if not round_:
         await db.close()
@@ -1422,7 +1847,8 @@ async def round_ticket_image(round_id: int, x_init_data: str | None = Header(def
 @app.post("/api/admin/round/results")
 async def admin_enter_results(request: Request, x_init_data: str | None = Header(default=None)):
     """Admin enters winning numbers and total prize; prizes distributed proportionally."""
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
     winning_numbers = body.get("winning_numbers", [])
@@ -1430,9 +1856,12 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
     total_prize = float(body.get("total_prize", 0))
 
     if round_id:
-        cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
     else:
-        cur = await db.execute("SELECT * FROM rounds WHERE status='uploaded' ORDER BY id DESC LIMIT 1")
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE group_id=? AND status='uploaded' ORDER BY id DESC LIMIT 1",
+            (gid,),
+        )
     round_ = await cur.fetchone()
     if not round_:
         raise HTTPException(400, "No uploaded round found")
@@ -1459,8 +1888,8 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
                 "UPDATE users SET credit=credit+? WHERE telegram_id=?", (prize, p["user_id"])
             )
             await db.execute(
-                "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                (p["user_id"], "win", prize, f"Prize Round #{round_['id']}"),
+                "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+                (p["user_id"], "win", prize, f"Prize Round #{round_['id']}", gid),
             )
 
     await db.execute(
@@ -1509,8 +1938,12 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
     New flow: use /api/admin/round/upload-ticket then /api/admin/round/results.
     Kept for backward compatibility only — calls results with total_prize=0.
     """
-    user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM rounds WHERE status IN ('closed','uploaded') ORDER BY id DESC LIMIT 1")
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE group_id=? AND status IN ('closed','uploaded') ORDER BY id DESC LIMIT 1",
+        (gid,),
+    )
     round_ = await cur.fetchone()
     if round_ is None:
         raise HTTPException(400, "No closed round to draw from")
@@ -1548,11 +1981,13 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
 
 @app.get("/api/admin/deposits")
 async def admin_deposits(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     cur = await db.execute(
         "SELECT dr.*, u.full_name, u.username FROM deposit_requests dr "
         "JOIN users u ON u.telegram_id=dr.user_id "
-        "WHERE dr.status='pending' ORDER BY dr.created_at"
+        "WHERE dr.status='pending' AND dr.group_id=? ORDER BY dr.created_at",
+        (gid,),
     )
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
@@ -1563,10 +1998,13 @@ async def admin_deposits(x_init_data: str | None = Header(default=None)):
 async def admin_resolve_deposit(
     req_id: int, request: Request, x_init_data: str | None = Header(default=None)
 ):
-    user, db = await _require_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
     body = await request.json()
     action = body.get("action")
-    cur = await db.execute("SELECT * FROM deposit_requests WHERE id=?", (req_id,))
+    cur = await db.execute(
+        "SELECT * FROM deposit_requests WHERE id=? AND group_id=?", (req_id, gid)
+    )
     dep = await cur.fetchone()
     if dep is None:
         raise HTTPException(404, "Deposit request not found")
@@ -1577,8 +2015,8 @@ async def admin_resolve_deposit(
             "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
         )
         await db.execute(
-            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-            (dep["user_id"], "deposit", dep["amount"], f"Approved deposit #{req_id}"),
+            "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+            (dep["user_id"], "deposit", dep["amount"], f"Approved deposit #{req_id}", gid),
         )
         await db.execute(
             "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now') WHERE id=?",
@@ -1598,9 +2036,16 @@ async def admin_resolve_deposit(
 
 @app.get("/api/admin/members")
 async def admin_members(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_trustee(x_init_data)
-    cur = await db.execute("SELECT * FROM users ORDER BY created_at")
-    rows = [dict(r) for r in await cur.fetchall()]
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
+    cur = await db.execute(
+        "SELECT * FROM users WHERE group_id=? ORDER BY created_at", (gid,)
+    )
+    rows = []
+    for r in await cur.fetchall():
+        d = dict(r)
+        d["is_group_trustee"] = d["telegram_id"] == group["trustee_user_id"]
+        rows.append(d)
     await db.close()
     return {"members": rows}
 
@@ -1608,13 +2053,195 @@ async def admin_members(x_init_data: str | None = Header(default=None)):
 @app.post("/api/admin/etransfer/check")
 async def admin_check_etransfer(x_init_data: str | None = Header(default=None)):
     """Manually trigger IMAP check to auto-approve matched e-transfer deposits."""
-    user, db = await _require_trustee(x_init_data)
+    user, db, _group = await _require_group_trustee(x_init_data)
     if not config.IMAP_HOST:
         await db.close()
         raise HTTPException(400, "IMAP not configured (set IMAP_HOST, IMAP_USER, IMAP_PASS)")
     result = await _check_etransfer_emails(db)
     await db.close()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Platform admin
+# ---------------------------------------------------------------------------
+
+@app.get("/api/platform/overview")
+async def platform_overview(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_platform_admin(x_init_data)
+    counts = {}
+    for key, sql in [
+        ("users", "SELECT COUNT(*) AS c FROM users"),
+        ("groups", "SELECT COUNT(*) AS c FROM groups"),
+        ("open_rounds", "SELECT COUNT(*) AS c FROM rounds WHERE status='open'"),
+        ("pending_applications", "SELECT COUNT(*) AS c FROM trustee_applications WHERE status='pending'"),
+        ("pending_deposits", "SELECT COUNT(*) AS c FROM deposit_requests WHERE status='pending'"),
+    ]:
+        cur = await db.execute(sql)
+        row = await cur.fetchone()
+        counts[key] = int(row["c"]) if row else 0
+    await db.close()
+    return counts
+
+
+@app.get("/api/platform/groups")
+async def platform_groups(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_platform_admin(x_init_data)
+    cur = await db.execute("""
+        SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
+               (SELECT COUNT(*) FROM users WHERE group_id = g.id) AS member_count
+        FROM groups g
+        JOIN users u ON u.telegram_id = g.trustee_user_id
+        ORDER BY g.id DESC
+    """)
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"groups": rows}
+
+
+@app.get("/api/platform/users")
+async def platform_users(x_init_data: str | None = Header(default=None), limit: int = 100):
+    user, db = await _require_platform_admin(x_init_data)
+    cur = await db.execute("""
+        SELECT u.*, g.name AS group_name, g.slug AS group_slug
+        FROM users u
+        LEFT JOIN groups g ON g.id = u.group_id
+        ORDER BY u.created_at DESC LIMIT ?
+    """, (min(limit, 500),))
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"users": rows}
+
+
+@app.get("/api/platform/rounds")
+async def platform_rounds(
+    x_init_data: str | None = Header(default=None),
+    group_id: int | None = None,
+    status: str | None = None,
+    limit: int = 50,
+):
+    user, db = await _require_platform_admin(x_init_data)
+    sql = """
+        SELECT r.*, g.name AS group_name,
+               (SELECT COUNT(*) FROM participations WHERE round_id = r.id) AS participants_count
+        FROM rounds r
+        JOIN groups g ON g.id = r.group_id
+        WHERE 1=1
+    """
+    params: list = []
+    if group_id is not None:
+        sql += " AND r.group_id = ?"
+        params.append(group_id)
+    if status:
+        sql += " AND r.status = ?"
+        params.append(status)
+    sql += " ORDER BY r.id DESC LIMIT ?"
+    params.append(min(limit, 200))
+    cur = await db.execute(sql, tuple(params))
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"rounds": rows}
+
+
+@app.get("/api/platform/applications")
+async def platform_applications(x_init_data: str | None = Header(default=None)):
+    user, db = await _require_platform_admin(x_init_data)
+    cur = await db.execute("""
+        SELECT a.*, u.full_name, u.username
+        FROM trustee_applications a
+        JOIN users u ON u.telegram_id = a.applicant_user_id
+        WHERE a.status = 'pending'
+        ORDER BY a.created_at
+    """)
+    rows = [dict(r) for r in await cur.fetchall()]
+    await db.close()
+    return {"applications": rows}
+
+
+@app.post("/api/platform/applications/{app_id}/approve")
+async def platform_approve_application(
+    app_id: int, x_init_data: str | None = Header(default=None)
+):
+    admin, db = await _require_platform_admin(x_init_data)
+    cur = await db.execute("SELECT * FROM trustee_applications WHERE id=?", (app_id,))
+    app_row = await cur.fetchone()
+    if not app_row or app_row["status"] != "pending":
+        await db.close()
+        raise HTTPException(404, "Pending application not found")
+    applicant_id = app_row["applicant_user_id"]
+    base_slug = slugify(app_row["proposed_group_name"])
+    slug = base_slug
+    n = 0
+    while True:
+        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
+        if not await cur.fetchone():
+            break
+        n += 1
+        slug = f"{base_slug}-{n}"
+    cur = await db.execute(
+        """INSERT INTO groups (name, slug, trustee_user_id, status)
+           VALUES (?,?,?, 'active') RETURNING id""",
+        (app_row["proposed_group_name"], slug, applicant_id),
+    )
+    group_id = cur.lastrowid
+    await db.execute(
+        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
+    )
+    await db.execute(
+        """UPDATE trustee_applications SET status='approved', reviewed_by=?,
+           reviewed_at=datetime('now') WHERE id=?""",
+        (admin["telegram_id"], app_id),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "group_id": group_id, "slug": slug}
+
+
+@app.post("/api/platform/applications/{app_id}/reject")
+async def platform_reject_application(
+    app_id: int, request: Request, x_init_data: str | None = Header(default=None)
+):
+    admin, db = await _require_platform_admin(x_init_data)
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    notes = body.get("review_notes") or body.get("notes")
+    cur = await db.execute(
+        """UPDATE trustee_applications SET status='rejected', reviewed_by=?,
+           review_notes=?, reviewed_at=datetime('now')
+           WHERE id=? AND status='pending'""",
+        (admin["telegram_id"], notes, app_id),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+@app.patch("/api/platform/groups/{group_id}")
+async def platform_patch_group(
+    group_id: int, request: Request, x_init_data: str | None = Header(default=None)
+):
+    await _require_platform_admin(x_init_data)
+    db = await get_db()
+    body = await request.json()
+    status = body.get("status")
+    etransfer_email = body.get("etransfer_email")
+    if status in ("active", "suspended"):
+        await db.execute("UPDATE groups SET status=? WHERE id=?", (status, group_id))
+    if etransfer_email is not None:
+        await db.execute(
+            "UPDATE groups SET etransfer_email=? WHERE id=?",
+            (etransfer_email or None, group_id),
+        )
+    await db.commit()
+    cur = await db.execute("SELECT * FROM groups WHERE id=?", (group_id,))
+    row = await cur.fetchone()
+    await db.close()
+    if not row:
+        raise HTTPException(404, "Group not found")
+    return {"ok": True, "group": dict(row)}
 
 
 # ---------------------------------------------------------------------------

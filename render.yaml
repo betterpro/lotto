@@ -9,7 +9,7 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: TRUSTEE_TELEGRAM_ID
+      - key: PLATFORM_ADMIN_TELEGRAM_IDS
         sync: false
       - key: CURRENCY
         value: CAD
@@ -37,3 +37,5 @@ services:
         sync: false
       - key: IMAP_PORT
         value: "993"
+      - key: ETRANSFER_CHECK_INTERVAL_SECONDS
+        value: "120"

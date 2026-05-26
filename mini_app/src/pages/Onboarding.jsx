@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { CheckIcon, ShieldIcon, ArrowDownIcon } from '../components/Icon.jsx'
+import TelegramAvatar from '../components/TelegramAvatar.jsx'
+import { api } from '../api.js'
 import { LOGO_SRC } from '../brand.js'
 
 function Section({ title, children }) {
@@ -44,19 +46,33 @@ function Field({ label, required, children, flex }) {
   )
 }
 
-export default function Onboarding({ onAccept }) {
+export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
   const [step, setStep] = useState(1)
   const [scrolled, setScrolled] = useState(false)
+  const [preview, setPreview] = useState(group && trustee ? { group, trustee } : null)
+  const [confirmLoading, setConfirmLoading] = useState(false)
+  const [confirmError, setConfirmError] = useState(null)
+
+  useEffect(() => {
+    if (preview || !inviteSlug) return
+    api.group.preview(inviteSlug)
+      .then(setPreview)
+      .catch(() => setConfirmError('Could not load group. Check your invite link.'))
+  }, [inviteSlug, preview])
+
+  const trusteeName = preview?.trustee?.full_name || preview?.trustee?.username || 'your trustee'
+  const groupName = preview?.group?.name || 'this group'
 
   const [info, setInfo] = useState({
-    fullName: '', street: '', city: '', province: 'BC', postal: '', phone: '',
+    fullName: '', email: '', street: '', city: '', province: 'BC', postal: '', phone: '',
     age19: false, category: 'e',
   })
 
   const upd = (k, v) => setInfo(prev => ({ ...prev, [k]: v }))
 
   const infoValid = info.fullName.trim() && info.street.trim() && info.city.trim() &&
-    info.province && info.postal.trim() && info.phone.trim() && info.age19
+    info.province && info.postal.trim() && info.phone.trim() &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(info.email.trim()) && info.age19
 
   const [agree, setAgree] = useState({ terms: false, privacy: false, accuracy: false })
   const allChecked = agree.terms && agree.privacy && agree.accuracy
@@ -72,16 +88,64 @@ export default function Onboarding({ onAccept }) {
       <div className="ob-top">
         <div className="row gap-10" style={{ alignItems: 'center' }}>
           <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
-          <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 2</span>
+          <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 3</span>
         </div>
         <div className="ob-steps">
           <span className={'dot' + (step >= 1 ? ' on' : '')} />
           <span className={'dash' + (step >= 2 ? ' on' : '')} />
           <span className={'dot' + (step >= 2 ? ' on' : '')} />
+          <span className={'dash' + (step >= 3 ? ' on' : '')} />
+          <span className={'dot' + (step >= 3 ? ' on' : '')} />
         </div>
       </div>
 
       {step === 1 && (
+        <>
+          <div className="ob-scroll">
+            <div className="ob-intro" style={{ textAlign: 'center' }}>
+              <span className="ob-eyebrow">Confirm your group</span>
+              <h2 className="ob-h2">Is this the right group?</h2>
+              <p className="ob-p">
+                You are joining <strong>{groupName}</strong>. Your trustee holds pooled tickets
+                on behalf of the group.
+              </p>
+            </div>
+            <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+              <TelegramAvatar user={preview?.trustee || {}} size={64} />
+              <span style={{ fontSize: 18, fontWeight: 800 }}>{trusteeName}</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Group trustee · {groupName}</span>
+            </div>
+            {confirmError && (
+              <p style={{ color: 'var(--danger)', fontSize: 13, textAlign: 'center' }}>{confirmError}</p>
+            )}
+          </div>
+          <div className="ob-foot">
+            <button
+              className="btn btn-primary"
+              style={{ width: '100%' }}
+              disabled={confirmLoading || (!preview && !!inviteSlug)}
+              onClick={async () => {
+                setConfirmError(null)
+                setConfirmLoading(true)
+                try {
+                  if (inviteSlug && !group) {
+                    await api.group.join(inviteSlug)
+                  }
+                  setStep(2)
+                } catch (e) {
+                  setConfirmError(e.message || 'Could not join group')
+                } finally {
+                  setConfirmLoading(false)
+                }
+              }}
+            >
+              {confirmLoading ? 'Joining…' : `Yes — join ${groupName}`}
+            </button>
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
         <>
           <div className="ob-scroll">
             <div className="ob-intro">
@@ -98,6 +162,11 @@ export default function Onboarding({ onAccept }) {
               <Field label="Full legal name" required>
                 <input className="input" value={info.fullName}
                   onChange={e => upd('fullName', e.target.value)} placeholder="Liam Park" />
+              </Field>
+              <Field label="Email used for e-Transfer" required>
+                <input className="input mono" type="email" value={info.email}
+                  onChange={e => upd('email', e.target.value.trim().toLowerCase())}
+                  placeholder="you@example.com" />
               </Field>
               <Field label="Street address (include Unit #)" required>
                 <input className="input" value={info.street}
@@ -165,7 +234,7 @@ export default function Onboarding({ onAccept }) {
           <div className="ob-foot">
             <button className="btn btn-primary btn-block"
               disabled={!infoValid} style={{ opacity: infoValid ? 1 : .45 }}
-              onClick={() => { setStep(2); setScrolled(false) }}>
+              onClick={() => { setStep(3); setScrolled(false) }}>
               Continue to agreement
             </button>
             <div className="ob-foot-note">
@@ -176,16 +245,15 @@ export default function Onboarding({ onAccept }) {
         </>
       )}
 
-      {step === 2 && (
+      {step === 3 && (
         <>
           <div className="ob-scroll" onScroll={onScroll}>
             <div className="ob-intro">
               <span className="ob-eyebrow">Legal · BCLC Group Prize Agreement</span>
               <h2 className="ob-h2">Group Prize Agreement</h2>
               <p className="ob-p">
-                The Group Prize Agreement is required when a group lottery ticket wins a prize
-                of <strong>$10,000.00 or greater</strong> and must be completed by all group
-                members entitled to a share of the prize won.
+                Agreement with your trustee <strong>{trusteeName}</strong> for {groupName}.
+                Required when a pooled ticket wins <strong>$10,000 CAD or more</strong>.
               </p>
             </div>
 
@@ -199,8 +267,8 @@ export default function Onboarding({ onAccept }) {
                   <span className="mono" style={{ fontSize: 12 }}>Auto-assigned per round</span></div>
               </div>
               <p className="ob-p" style={{ fontSize: 12 }}>
-                Lotto Chee is your <strong>Group Trustee</strong> — we hold each pooled ticket on
-                behalf of all beneficiaries who joined that round.
+                <strong>{trusteeName}</strong> is your <strong>Group Trustee</strong> — they hold each
+                pooled ticket on behalf of all beneficiaries who joined that round.
               </p>
             </Section>
 
@@ -217,7 +285,7 @@ export default function Onboarding({ onAccept }) {
               <Clause n={2}>The Group Trustee is the lawful holder of the Ticket and no person other than
                 the Beneficiaries has any interest in the Ticket or any right to payment or delivery
                 of any portion of the Prize.</Clause>
-              <Clause n={3}>That <strong>Lotto Chee Operations Inc.</strong> ("Group Trustee") has been authorized
+              <Clause n={3}>That <strong>{trusteeName}</strong> ("Group Trustee") has been authorized
                 by the Beneficiaries to accept from BCLC, for and on behalf of all Beneficiaries, the Prize.</Clause>
               <Clause n={4}>That the Group Trustee is: (a) a Beneficiary and member of the group entitled to
                 receive a share of the Prize; (b) the holder of the ticket as trustee for the Beneficiaries;
@@ -317,7 +385,7 @@ export default function Onboarding({ onAccept }) {
               </div>
             )}
             <div className="row gap-8">
-              <button className="btn btn-ghost btn-sm" onClick={() => setStep(1)}>Back</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setStep(2)}>Back</button>
               <button className="btn btn-primary" style={{ flex: 1, opacity: scrolled && allChecked ? 1 : .45 }}
                 disabled={!(scrolled && allChecked)}
                 onClick={() => onAccept({ ...info, acceptedAt: new Date().toISOString() })}>

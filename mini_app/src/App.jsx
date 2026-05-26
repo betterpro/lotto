@@ -7,17 +7,29 @@ import Rounds    from './pages/Rounds.jsx'
 import History   from './pages/History.jsx'
 import Profile   from './pages/Profile.jsx'
 import Admin     from './pages/Admin.jsx'
+import PlatformAdmin from './pages/PlatformAdmin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
+import NeedsInvite from './pages/NeedsInvite.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
 
 const ONB_KEY = 'lottoo_beneficiary'
+const INVITE_SLUG_KEY = 'lottoo_pending_invite_slug'
+
+function parseInviteSlug() {
+  const sp = window.Telegram?.WebApp?.initDataUnsafe?.start_param
+  if (!sp) return localStorage.getItem(INVITE_SLUG_KEY) || null
+  if (sp.startsWith('join_')) return sp.slice(5)
+  if (sp.startsWith('g_')) return sp.slice(2)
+  return null
+}
 
 const TITLE = {
   home:    { t: 'Lotto Chee',   s: 'Group lotto · live'  },
   rounds:  { t: 'Rounds',   s: 'All draws'           },
   history: { t: 'Activity', s: 'Your account'        },
   profile: { t: 'Profile',  s: 'Settings & prefs'    },
-  admin:   { t: 'Admin',    s: 'Trustee dashboard'   },
+  admin:    { t: 'Admin',    s: 'Your group dashboard' },
+  platform: { t: 'Platform', s: 'App administration'   },
 }
 
 function TGHeader({ page }) {
@@ -38,6 +50,7 @@ export default function App() {
   const [user, setUser]   = useState(null)
   const [error, setError] = useState(null)
   const [onboarded, setOnboarded] = useState(() => !!localStorage.getItem(ONB_KEY))
+  const [inviteSlug] = useState(() => parseInviteSlug())
 
   const loadUser = useCallback(() => {
     setError(null)
@@ -48,10 +61,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    if (inviteSlug) localStorage.setItem(INVITE_SLUG_KEY, inviteSlug)
     window.Telegram?.WebApp?.ready()
     window.Telegram?.WebApp?.expand()
     loadUser()
-  }, [loadUser])
+  }, [loadUser, inviteSlug])
 
   useEffect(() => {
     if (!user) return
@@ -102,15 +116,29 @@ export default function App() {
     </div>
   )
 
-  if (!onboarded) return (
-    <Onboarding onAccept={(data) => {
-      localStorage.setItem(ONB_KEY, JSON.stringify(data))
-      api.beneficiary.save(data).catch(() => {})
-      setOnboarded(true)
-    }} />
+  if (user.needs_invite) {
+    return <NeedsInvite />
+  }
+
+  const serverOnboarded = user.onboarded || !!user.agreement_accepted_at
+  if (!onboarded && !serverOnboarded) return (
+    <Onboarding
+      group={user.group}
+      trustee={user.trustee}
+      inviteSlug={inviteSlug}
+      onAccept={(data) => {
+        localStorage.setItem(ONB_KEY, JSON.stringify(data))
+        localStorage.removeItem(INVITE_SLUG_KEY)
+        api.beneficiary.save(data).then(() => loadUser()).catch(() => {})
+        setOnboarded(true)
+      }}
+    />
   )
 
-  const PAGES = { home: Home, rounds: Rounds, history: History, profile: Profile, admin: Admin }
+  const PAGES = {
+    home: Home, rounds: Rounds, history: History, profile: Profile,
+    admin: Admin, platform: PlatformAdmin,
+  }
   const Page  = PAGES[page] ?? Home
 
   return (
@@ -119,7 +147,12 @@ export default function App() {
       <div className="scroll">
         <Page user={user} onUserUpdate={setUser} />
       </div>
-      <BottomNav page={page} setPage={setPage} isTrustee={!!user.is_trustee} />
+      <BottomNav
+        page={page}
+        setPage={setPage}
+        isGroupTrustee={!!user.is_group_trustee}
+        isPlatformAdmin={!!user.is_platform_admin}
+      />
     </div>
   )
 }

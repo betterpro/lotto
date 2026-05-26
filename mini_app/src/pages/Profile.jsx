@@ -118,12 +118,23 @@ export default function Profile({ user, onUserUpdate }) {
   const [settings, setSettings] = useState(null)
   const [saved,    setSaved]    = useState(false)
   const [busy,     setBusy]     = useState(false)
+  const [email,    setEmail]    = useState(user?.email ?? '')
+  const [trusteeApp, setTrusteeApp] = useState(null)
+  const [groupName, setGroupName] = useState('')
+  const [applyBusy, setApplyBusy] = useState(false)
 
   useEffect(() => {
     api.settings.get()
       .then(s => setSettings(s))
       .catch(() => setSettings({ ...DEFAULTS }))
-  }, [])
+    if (!user?.is_group_trustee) {
+      api.trustee.application().then(r => setTrusteeApp(r.application)).catch(() => {})
+    }
+  }, [user?.is_group_trustee])
+
+  useEffect(() => {
+    setEmail(user?.email ?? '')
+  }, [user?.email])
 
   const set = useCallback((key, val) =>
     setSettings(prev => ({ ...prev, [key]: val })), [])
@@ -131,7 +142,9 @@ export default function Profile({ user, onUserUpdate }) {
   async function save() {
     setBusy(true)
     try {
+      const profile = await api.beneficiary.save({ email })
       await api.settings.put(settings)
+      if (profile?.user) onUserUpdate(profile.user)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
@@ -174,6 +187,18 @@ export default function Profile({ user, onUserUpdate }) {
           </div>
         ) : (
           <>
+            {/* ── Contact ── */}
+            <SectionHead icon={PersonIcon} label="Contact" />
+            <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>E-transfer email</div>
+              <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
+                Use the same email address that appears as the sender on your Interac e-Transfer.
+              </p>
+              <input className="input mono" type="email" value={email}
+                onChange={e => setEmail(e.target.value.trim().toLowerCase())}
+                placeholder="you@example.com" />
+            </div>
+
             {/* ── Round participation ── */}
             <SectionHead icon={TicketIcon} label="Round participation" />
 
@@ -303,12 +328,62 @@ export default function Profile({ user, onUserUpdate }) {
               </div>
             )}
 
+            {!user.is_group_trustee && (
+              <>
+                <SectionHead icon={PersonIcon} label="Become a trustee" />
+                <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+                  {trusteeApp?.status === 'pending' ? (
+                    <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>
+                      Application pending for <strong>{trusteeApp.proposed_group_name}</strong>.
+                    </p>
+                  ) : trusteeApp?.status === 'rejected' ? (
+                    <p style={{ fontSize: 13, color: 'var(--danger)', margin: '0 0 10px' }}>
+                      Application rejected{trusteeApp.review_notes ? `: ${trusteeApp.review_notes}` : '.'}
+                    </p>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: 12, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                        Request your own group to manage rounds and invite friends.
+                      </p>
+                      <input
+                        className="input"
+                        placeholder="Your group name"
+                        value={groupName}
+                        onChange={e => setGroupName(e.target.value)}
+                        style={{ marginBottom: 10 }}
+                      />
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={applyBusy || !groupName.trim()}
+                        onClick={async () => {
+                          setApplyBusy(true)
+                          try {
+                            await api.trustee.apply(groupName.trim())
+                            const r = await api.trustee.application()
+                            setTrusteeApp(r.application)
+                            showToast('Application submitted', 'success')
+                          } catch (e) {
+                            showToast(e.message, 'error')
+                          } finally {
+                            setApplyBusy(false)
+                          }
+                        }}
+                      >
+                        {applyBusy ? 'Submitting…' : 'Request trustee access'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
             {/* ── Legal ── */}
             <SectionHead icon={TicketIcon} label="Agreements" />
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Group Prize Agreement</div>
               <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
-                BCLC Group Prize Agreement with your beneficiary details and trustee Reza Heidari.
+                BCLC Group Prize Agreement with your beneficiary details and trustee{' '}
+                <strong>{user.trustee?.full_name || user.trustee?.username || 'your group trustee'}</strong>.
                 Each round has a separate amendment with your share and draw info.
               </p>
               <AgreementLink kind="master" label="View & download PDF" />

@@ -154,24 +154,60 @@ async def get_user(db, telegram_id):
     async with db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)) as c:
         return await c.fetchone()
 
-async def create_user(db, telegram_id, username, full_name, invited_by=None, is_trustee=0):
+async def create_user(db, telegram_id, username, full_name, invited_by=None, is_trustee=0,
+                      group_id=None, is_platform_admin=0):
     await db.execute(
-        "INSERT OR IGNORE INTO users (telegram_id, username, full_name, invited_by, is_trustee) VALUES (?,?,?,?,?)",
-        (telegram_id, username, full_name, invited_by, is_trustee))
+        """INSERT OR IGNORE INTO users
+           (telegram_id, username, full_name, invited_by, is_trustee, group_id, is_platform_admin)
+           VALUES (?,?,?,?,?,?,?)""",
+        (telegram_id, username, full_name, invited_by, is_trustee, group_id, is_platform_admin))
     await db.commit()
+
+
+# ── Groups ────────────────────────────────────────────────────────────────────
+
+async def get_group(db, group_id):
+    async with db.execute("SELECT * FROM groups WHERE id = ?", (group_id,)) as c:
+        return await c.fetchone()
+
+async def get_group_by_slug(db, slug):
+    async with db.execute("SELECT * FROM groups WHERE slug = ?", (slug,)) as c:
+        return await c.fetchone()
+
+async def get_group_for_trustee(db, trustee_user_id):
+    async with db.execute(
+        "SELECT * FROM groups WHERE trustee_user_id = ? AND status = 'active' LIMIT 1",
+        (trustee_user_id,),
+    ) as c:
+        return await c.fetchone()
+
+async def get_trustee_user(db, trustee_user_id):
+    async with db.execute("SELECT * FROM users WHERE telegram_id = ?", (trustee_user_id,)) as c:
+        return await c.fetchone()
 
 async def update_credit(db, telegram_id, delta):
     await db.execute("UPDATE users SET credit = credit + ? WHERE telegram_id = ?", (delta, telegram_id))
     await db.commit()
 
-async def all_users(db):
+async def all_users(db, group_id=None):
+    if group_id is not None:
+        async with db.execute(
+            "SELECT * FROM users WHERE group_id = ? ORDER BY created_at", (group_id,)
+        ) as c:
+            return await c.fetchall()
     async with db.execute("SELECT * FROM users ORDER BY created_at") as c:
         return await c.fetchall()
 
 
 # ── Rounds ────────────────────────────────────────────────────────────────────
 
-async def get_open_round(db):
+async def get_open_round(db, group_id=None):
+    if group_id is not None:
+        async with db.execute(
+            "SELECT * FROM rounds WHERE status = 'open' AND group_id = ? ORDER BY id DESC LIMIT 1",
+            (group_id,),
+        ) as c:
+            return await c.fetchone()
     async with db.execute("SELECT * FROM rounds WHERE status = 'open' ORDER BY id DESC LIMIT 1") as c:
         return await c.fetchone()
 
@@ -179,9 +215,10 @@ async def get_round(db, round_id):
     async with db.execute("SELECT * FROM rounds WHERE id = ?", (round_id,)) as c:
         return await c.fetchone()
 
-async def create_round(db, draw_date=None):
+async def create_round(db, draw_date=None, group_id=None):
     async with db.execute(
-        "INSERT INTO rounds (status, draw_date) VALUES ('open', ?) RETURNING id", (draw_date,)
+        "INSERT INTO rounds (status, draw_date, group_id) VALUES ('open', ?, ?) RETURNING id",
+        (draw_date, group_id),
     ) as c:
         await db.commit()
         return c.lastrowid
@@ -196,11 +233,29 @@ async def set_round_winner(db, round_id, winner_id, ticket_ref):
         (winner_id, ticket_ref, round_id))
     await db.commit()
 
-async def recent_rounds(db, limit=10):
+async def recent_rounds(db, limit=10, group_id=None):
+    if group_id is not None:
+        async with db.execute(
+            "SELECT * FROM rounds WHERE group_id = ? ORDER BY id DESC LIMIT ?",
+            (group_id, limit),
+        ) as c:
+            return await c.fetchall()
     async with db.execute("SELECT * FROM rounds ORDER BY id DESC LIMIT ?", (limit,)) as c:
         return await c.fetchall()
 
-async def all_rounds_with_participation(db, user_id, limit=20):
+async def all_rounds_with_participation(db, user_id, limit=20, group_id=None):
+    if group_id is not None:
+        async with db.execute(
+            """SELECT r.*,
+                 p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
+                 (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count
+               FROM rounds r
+               LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
+               WHERE r.group_id = ?
+               ORDER BY r.id DESC LIMIT ?""",
+            (user_id, group_id, limit),
+        ) as c:
+            return await c.fetchall()
     async with db.execute(
         """SELECT r.*,
              p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
@@ -208,7 +263,7 @@ async def all_rounds_with_participation(db, user_id, limit=20):
            FROM rounds r
            LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
            ORDER BY r.id DESC LIMIT ?""",
-        (user_id, limit)
+        (user_id, limit),
     ) as c:
         return await c.fetchall()
 
@@ -249,9 +304,11 @@ async def user_participations(db, user_id, limit=10):
 
 # ── Transactions ──────────────────────────────────────────────────────────────
 
-async def add_transaction(db, user_id, tx_type, amount, note=None):
-    await db.execute("INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                     (user_id, tx_type, amount, note))
+async def add_transaction(db, user_id, tx_type, amount, note=None, group_id=None):
+    await db.execute(
+        "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+        (user_id, tx_type, amount, note, group_id),
+    )
     await db.commit()
 
 async def user_transactions(db, user_id, limit=15):
@@ -262,9 +319,10 @@ async def user_transactions(db, user_id, limit=15):
 
 # ── Deposit requests ──────────────────────────────────────────────────────────
 
-async def create_deposit_request(db, user_id, amount):
+async def create_deposit_request(db, user_id, amount, group_id=None):
     async with db.execute(
-        "INSERT INTO deposit_requests (user_id, amount) VALUES (?,?) RETURNING id", (user_id, amount)
+        "INSERT INTO deposit_requests (user_id, amount, group_id) VALUES (?,?,?) RETURNING id",
+        (user_id, amount, group_id),
     ) as c:
         await db.commit()
         return c.lastrowid
@@ -279,7 +337,15 @@ async def resolve_deposit(db, req_id, status, note=None):
         (status, note, req_id))
     await db.commit()
 
-async def pending_deposits(db):
+async def pending_deposits(db, group_id=None):
+    if group_id is not None:
+        async with db.execute(
+            """SELECT dr.*, u.full_name, u.username
+               FROM deposit_requests dr JOIN users u ON u.telegram_id = dr.user_id
+               WHERE dr.status='pending' AND dr.group_id = ? ORDER BY dr.created_at""",
+            (group_id,),
+        ) as c:
+            return await c.fetchall()
     async with db.execute(
         """SELECT dr.*, u.full_name, u.username
            FROM deposit_requests dr JOIN users u ON u.telegram_id = dr.user_id

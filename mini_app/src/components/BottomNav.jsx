@@ -8,8 +8,11 @@ const TABS = [
   { id: 'admin',   Icon: ShieldIcon, label: 'Admin'   },
 ]
 
-export default function BottomNav({ page, setPage, isTrustee }) {
-  const tabs = isTrustee ? TABS : TABS.filter(t => t.id !== 'admin')
+const PLATFORM_TAB = { id: 'platform', Icon: ShieldIcon, label: 'Platform' }
+
+export default function BottomNav({ page, setPage, isGroupTrustee, isPlatformAdmin }) {
+  let tabs = TABS.filter(t => t.id !== 'admin' || isGroupTrustee)
+  if (isPlatformAdmin) tabs = [...tabs, PLATFORM_TAB]
   return (
     <nav className="tabbar">
       {tabs.map(t => (

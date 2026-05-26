@@ -41,9 +41,51 @@ async function req(method, path, body) {
   }
 }
 
+async function reqPublic(method, path) {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  let res
+  try {
+    res = await fetch(BASE + path, { method, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timeout)
+  }
+  const text = await res.text()
+  if (!res.ok) {
+    let msg = text
+    try { msg = JSON.parse(text).detail ?? text } catch {}
+    throw new Error(msg || 'Request failed')
+  }
+  return JSON.parse(text)
+}
+
 export const api = {
   me:           ()             => req('GET',  '/api/me'),
   invite:       ()             => req('GET',  '/api/invite'),
+  group: {
+    preview: (slug) => reqPublic('GET', `/api/group/preview?slug=${encodeURIComponent(slug)}`),
+    join:    (slug) => req('POST', '/api/group/join', { slug }),
+  },
+  trustee: {
+    application: () => req('GET', '/api/trustee/application'),
+    apply:       (proposed_group_name) => req('POST', '/api/trustee/apply', { proposed_group_name }),
+  },
+  platform: {
+    overview:      () => req('GET', '/api/platform/overview'),
+    groups:        () => req('GET', '/api/platform/groups'),
+    users:         () => req('GET', '/api/platform/users'),
+    rounds:        (params = {}) => {
+      const q = new URLSearchParams()
+      if (params.group_id) q.set('group_id', params.group_id)
+      if (params.status) q.set('status', params.status)
+      const s = q.toString()
+      return req('GET', `/api/platform/rounds${s ? `?${s}` : ''}`)
+    },
+    applications:  () => req('GET', '/api/platform/applications'),
+    approveApp:    (id) => req('POST', `/api/platform/applications/${id}/approve`),
+    rejectApp:     (id, review_notes) => req('POST', `/api/platform/applications/${id}/reject`, { review_notes }),
+    patchGroup:    (id, body) => req('PATCH', `/api/platform/groups/${id}`, body),
+  },
   agreement: {
     master: () => req('GET', '/api/agreement/master'),
     round:  (roundId) => req('GET', `/api/agreement/round/${roundId}`),

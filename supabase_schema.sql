@@ -2,12 +2,25 @@
 -- Run this once in the Supabase SQL Editor:
 --   https://supabase.com/dashboard/project/thowyteqaavuewsaujot/sql
 
+CREATE TABLE IF NOT EXISTS groups (
+    id               BIGSERIAL PRIMARY KEY,
+    name             TEXT    NOT NULL,
+    slug             TEXT    NOT NULL UNIQUE,
+    trustee_user_id  BIGINT  NOT NULL,
+    status           TEXT    NOT NULL DEFAULT 'active',
+    etransfer_email  TEXT,
+    created_at       TEXT    NOT NULL
+                     DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
 CREATE TABLE IF NOT EXISTS users (
     telegram_id        BIGINT PRIMARY KEY,
     username           TEXT,
     full_name          TEXT   NOT NULL,
     credit             FLOAT8 NOT NULL DEFAULT 0,
     is_trustee         INTEGER NOT NULL DEFAULT 0,
+    group_id           BIGINT  REFERENCES groups(id),
+    is_platform_admin  INTEGER NOT NULL DEFAULT 0,
     invited_by         BIGINT  REFERENCES users(telegram_id),
     stripe_customer_id TEXT,
     photo_url          TEXT,
@@ -21,6 +34,21 @@ CREATE TABLE IF NOT EXISTS users (
     agreement_accepted_at TEXT,
     created_at         TEXT   NOT NULL
                        DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+);
+
+ALTER TABLE groups ADD CONSTRAINT groups_trustee_fk
+    FOREIGN KEY (trustee_user_id) REFERENCES users(telegram_id);
+
+CREATE TABLE IF NOT EXISTS trustee_applications (
+    id                  BIGSERIAL PRIMARY KEY,
+    applicant_user_id   BIGINT  NOT NULL REFERENCES users(telegram_id),
+    proposed_group_name TEXT    NOT NULL,
+    status              TEXT    NOT NULL DEFAULT 'pending',
+    reviewed_by         BIGINT  REFERENCES users(telegram_id),
+    review_notes        TEXT,
+    created_at          TEXT    NOT NULL
+                        DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    reviewed_at         TEXT
 );
 
 CREATE TABLE IF NOT EXISTS user_settings (
@@ -56,7 +84,8 @@ CREATE TABLE IF NOT EXISTS rounds (
     bonus_number     INTEGER,
     ticket_numbers   TEXT,
     ticket_image     TEXT,
-    lottery_type     TEXT    DEFAULT 'lotto_max'
+    lottery_type     TEXT    DEFAULT 'lotto_max',
+    group_id         BIGINT  NOT NULL REFERENCES groups(id)
 );
 
 CREATE TABLE IF NOT EXISTS participations (
@@ -77,6 +106,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     type       TEXT   NOT NULL,
     amount     FLOAT8 NOT NULL,
     note       TEXT,
+    group_id   BIGINT REFERENCES groups(id),
     created_at TEXT   NOT NULL
                DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
@@ -91,7 +121,19 @@ CREATE TABLE IF NOT EXISTS deposit_requests (
                    DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
     resolved_at    TEXT,
     payment_method TEXT   DEFAULT 'etransfer',
-    ref_code       TEXT
+    ref_code       TEXT,
+    group_id       BIGINT REFERENCES groups(id)
+);
+
+CREATE TABLE IF NOT EXISTS etransfer_email_receipts (
+    id                   BIGSERIAL PRIMARY KEY,
+    message_id           TEXT UNIQUE,
+    payment_notification TEXT UNIQUE,
+    sender_email         TEXT,
+    amount               FLOAT8,
+    deposit_request_id   BIGINT REFERENCES deposit_requests(id),
+    created_at           TEXT NOT NULL
+                         DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 
 CREATE TABLE IF NOT EXISTS stripe_subscriptions (

@@ -476,8 +476,8 @@ export default function Admin() {
               <ShieldIcon width={20} height={20} />
             </div>
             <div className="col gap-4">
-              <span style={{ fontSize: 15, fontWeight: 600 }}>Admin dashboard</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>Trustee access</span>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>Your group dashboard</span>
+              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>{user.group?.name || 'Trustee access'}</span>
             </div>
           </div>
           <span className="chip chip-gold" style={{ padding: '5px 10px' }}>TRUSTEE</span>
@@ -783,12 +783,12 @@ export default function Admin() {
                   <TelegramAvatar
                     user={m}
                     size={36}
-                    style={m.is_trustee ? { boxShadow: '0 0 0 2px var(--gold)' } : undefined}
+                    style={m.is_group_trustee ? { boxShadow: '0 0 0 2px var(--gold)' } : undefined}
                   />
                   <div className="col grow gap-4" style={{ minWidth: 0 }}>
                     <span style={{ fontWeight: 500, fontSize: 14 }}>
                       {m.full_name}
-                      {m.is_trustee && (
+                      {m.is_group_trustee && (
                         <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--gold)', fontWeight: 700 }}>TRUSTEE</span>
                       )}
                     </span>
