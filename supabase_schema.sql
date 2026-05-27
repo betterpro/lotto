@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE groups ADD CONSTRAINT groups_trustee_fk
     FOREIGN KEY (trustee_user_id) REFERENCES users(telegram_id);
 
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id   BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id    BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    role       TEXT   NOT NULL DEFAULT 'member',
+    joined_at  TEXT   NOT NULL
+               DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+
 CREATE TABLE IF NOT EXISTS trustee_applications (
     id                  BIGSERIAL PRIMARY KEY,
     applicant_user_id   BIGINT  NOT NULL REFERENCES users(telegram_id),

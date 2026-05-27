@@ -192,7 +192,11 @@ async def update_credit(db, telegram_id, delta):
 async def all_users(db, group_id=None):
     if group_id is not None:
         async with db.execute(
-            "SELECT * FROM users WHERE group_id = ? ORDER BY created_at", (group_id,)
+            """SELECT u.* FROM users u
+               JOIN group_members gm ON gm.user_id = u.telegram_id
+               WHERE gm.group_id = ?
+               ORDER BY gm.joined_at, u.created_at""",
+            (group_id,),
         ) as c:
             return await c.fetchall()
     async with db.execute("SELECT * FROM users ORDER BY created_at") as c:

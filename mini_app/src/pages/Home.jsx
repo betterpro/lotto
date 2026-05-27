@@ -6,7 +6,7 @@ import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
 import LiveRoundDeck from '../components/LiveRoundDeck.jsx'
 import { lotteryMeta } from '../lottery.js'
-import { GiftIcon, WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
+import { WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
 const STRIPE_APPEARANCE = {
@@ -269,7 +269,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
 }
 
 // ─── Join sheet ──────────────────────────────────────────────────────────────
-function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToast, initialShares }) {
+function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
   const PRICE = round?.price_per_share || 5
   const [shares, setShares] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -277,12 +277,17 @@ function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToas
   const credit = user?.credit ?? 0
   const after = credit - cost
   const shortfall = Math.max(0, cost - credit)
+  const insufficient = after < 0
 
   useEffect(() => {
-    if (open && initialShares) setShares(initialShares)
-  }, [open, initialShares])
+    if (open) setShares(1)
+  }, [open, round?.id])
 
   async function confirm() {
+    if (insufficient) {
+      showToast('Top up your balance on Home first, then join again.', 'error')
+      return
+    }
     setBusy(true)
     try {
       await api.participate(cost, round.id)
@@ -339,26 +344,205 @@ function JoinSheet({ open, onClose, round, user, onJoined, onNeedTopUp, showToas
               </div>
             ))}
           </div>
-          {after < 0 ? (
+          {insufficient ? (
             <>
-              <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 10, lineHeight: 1.5, textAlign: 'center' }}>
-                You need {fmtCAD(shortfall)} more to join with {shares} share{shares !== 1 ? 's' : ''}.
-              </p>
-              <button
-                className="btn btn-money btn-block"
-                onClick={() => onNeedTopUp(shortfall, shares)}
-              >
-                Top up {fmtCAD(suggestTopUpAmount(shortfall))} to continue
+              <div className="card" style={{
+                marginBottom: 12, padding: 14,
+                borderColor: 'rgba(255,80,80,.35)',
+                background: 'rgba(255,80,80,.08)',
+              }}>
+                <p style={{ margin: '0 0 6px', fontWeight: 700, fontSize: 14, color: 'var(--danger)' }}>
+                  Not enough credit
+                </p>
+                <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+                  You need at least {fmtCAD(cost)} for {shares} share{shares !== 1 ? 's' : ''} ({fmtCAD(shortfall)} short).
+                  Close this screen, tap your balance on Home to top up, then come back and join again.
+                  Paying does not join you until you confirm here.
+                </p>
+              </div>
+              <button className="btn btn-block" type="button" onClick={onClose}>
+                Close
               </button>
             </>
           ) : (
             <button className="btn btn-primary btn-block" disabled={busy} onClick={confirm}>
-                {busy ? 'Processing…' : `Confirm · ${fmtCAD(cost)}`}
-              </button>
+              {busy ? 'Processing…' : `Confirm · ${fmtCAD(cost)}`}
+            </button>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Groups: invite & create ─────────────────────────────────────────────────
+function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) {
+  const groups = user.groups?.length ? user.groups : (user.group ? [{ ...user.group, is_active: true }] : [])
+  const activeId = user.active_group_id ?? user.group?.id ?? groups[0]?.id
+  const [inviteGroupId, setInviteGroupId] = useState(activeId)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [applyBusy, setApplyBusy] = useState(false)
+  const [trusteeApp, setTrusteeApp] = useState(null)
+
+  useEffect(() => {
+    setInviteGroupId(activeId)
+  }, [activeId])
+
+  useEffect(() => {
+    if (!user.is_group_trustee) {
+      api.trustee.application().then(r => setTrusteeApp(r.application)).catch(() => {})
+    }
+  }, [user.is_group_trustee])
+
+  async function shareInvite() {
+    const g = groups.find(x => x.id === inviteGroupId) || groups[0]
+    if (!g) {
+      showToast('Join a group first', 'error')
+      return
+    }
+    try {
+      const { link } = await api.invite(g.id)
+      const text = `Join ${g.name} on Lotto Chee — group lottery with friends!`
+      const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`
+      if (window.Telegram?.WebApp?.openTelegramLink) {
+        window.Telegram.WebApp.openTelegramLink(shareUrl)
+      } else {
+        await navigator.clipboard.writeText(link)
+        showToast('Invite link copied', 'success')
+      }
+    } catch {
+      showToast('Could not get invite link', 'error')
+    }
+  }
+
+  async function setActiveGroup(groupId) {
+    try {
+      const r = await api.groups.setActive(groupId)
+      onUserUpdate({ ...user, ...r })
+      setInviteGroupId(groupId)
+      onActiveGroupChange?.()
+      showToast('Active group updated', 'success')
+    } catch (e) {
+      showToast(e.message, 'error')
+    }
+  }
+
+  const inviteGroup = groups.find(g => g.id === inviteGroupId) || groups[0]
+
+  return (
+    <>
+      <div className="section"><div className="label">Invite friends to your group</div></div>
+      <div className="stack">
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+          <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
+            Trustees and members can invite new players to a group. You can belong to several groups;
+            choose which one is active for rounds and deposits.
+          </p>
+          {groups.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0 }}>
+              Open a group invite link from your trustee to join first.
+            </p>
+          ) : (
+            <>
+              {groups.length > 1 && (
+                <label className="col gap-4" style={{ marginBottom: 10, display: 'flex' }}>
+                  <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
+                    Active group (rounds &amp; wallet context)
+                  </span>
+                  <select
+                    className="input"
+                    value={activeId ?? ''}
+                    onChange={e => setActiveGroup(Number(e.target.value))}
+                  >
+                    {groups.map(g => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}{g.is_trustee ? ' · trustee' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {groups.length > 1 && (
+                <label className="col gap-4" style={{ marginBottom: 10, display: 'flex' }}>
+                  <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
+                    Invite link for
+                  </span>
+                  <select
+                    className="input"
+                    value={inviteGroupId ?? ''}
+                    onChange={e => setInviteGroupId(Number(e.target.value))}
+                  >
+                    {groups.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <button className="btn btn-ghost btn-block btn-sm" type="button" onClick={shareInvite}>
+                <ShareIcon width={14} height={14} />
+                {inviteGroup
+                  ? `Invite to ${inviteGroup.name}`
+                  : 'Share group invite'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {!user.is_group_trustee && (
+        <>
+          <div className="section"><div className="label">Create your own group</div></div>
+          <div className="stack">
+            <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
+              {trusteeApp?.status === 'pending' ? (
+                <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>
+                  Your request for <strong>{trusteeApp.proposed_group_name}</strong> is pending platform approval.
+                </p>
+              ) : trusteeApp?.status === 'rejected' ? (
+                <p style={{ fontSize: 13, color: 'var(--danger)', margin: '0 0 10px' }}>
+                  Request rejected{trusteeApp.review_notes ? `: ${trusteeApp.review_notes}` : '.'}
+                </p>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                    Apply to run your own group: open rounds, approve deposits, and invite members.
+                    You can still stay in other groups as a player.
+                  </p>
+                  <input
+                    className="input"
+                    placeholder="Your group name"
+                    value={newGroupName}
+                    onChange={e => setNewGroupName(e.target.value)}
+                    style={{ marginBottom: 10 }}
+                  />
+                  <button
+                    className="btn btn-primary btn-sm btn-block"
+                    type="button"
+                    disabled={applyBusy || !newGroupName.trim()}
+                    onClick={async () => {
+                      setApplyBusy(true)
+                      try {
+                        await api.trustee.apply(newGroupName.trim())
+                        const r = await api.trustee.application()
+                        setTrusteeApp(r.application)
+                        setNewGroupName('')
+                        showToast('Application submitted', 'success')
+                      } catch (e) {
+                        showToast(e.message, 'error')
+                      } finally {
+                        setApplyBusy(false)
+                      }
+                    }}
+                  >
+                    {applyBusy ? 'Submitting…' : 'Request new group'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </>
   )
 }
 
@@ -478,7 +662,6 @@ export default function Home({ user, onUserUpdate }) {
   const [topUp, setTopUp]           = useState(false)
   const [topUpInitial, setTopUpInitial] = useState(null)
   const [join, setJoin]             = useState(false)
-  const [pendingJoin, setPendingJoin] = useState(null) // { shares }
   const showToast = useToast()
 
   const round = liveRounds?.[roundIndex] ?? null
@@ -489,13 +672,6 @@ export default function Home({ user, onUserUpdate }) {
       setLiveRounds(list)
       setRoundIndex(i => Math.min(i, Math.max(0, list.length - 1)))
     }).catch(() => setLiveRounds([]))
-  }
-
-  function openTopUpForJoin(shortfall, shares) {
-    setPendingJoin({ shares })
-    setJoin(false)
-    setTopUpInitial(shortfall)
-    setTopUp(true)
   }
 
   useEffect(() => {
@@ -640,45 +816,12 @@ export default function Home({ user, onUserUpdate }) {
         )}
       </div>
 
-      {/* Refer & earn */}
-      <div className="section"><div className="label">Earn free credit</div></div>
-      <div className="stack">
-        <div className="ref-card">
-          <div className="row gap-12">
-            <div style={{
-              width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-              background: 'rgba(46,166,255,.18)', color: 'var(--tg)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <GiftIcon width={22} height={22} />
-            </div>
-            <div className="col grow gap-4">
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Invite a friend, get $5</span>
-              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-                Both get $5 credit when they join their first round.
-              </span>
-            </div>
-          </div>
-          <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 12 }}
-            onClick={async () => {
-              try {
-                const { link } = await api.invite()
-                const text = '🎟 Join me on Lotto Chee — group lottery where we play together and share the winnings!'
-                const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`
-                if (window.Telegram?.WebApp?.openTelegramLink) {
-                  window.Telegram.WebApp.openTelegramLink(shareUrl)
-                } else {
-                  await navigator.clipboard.writeText(link)
-                  showToast('Link copied to clipboard!', 'success')
-                }
-              } catch {
-                showToast('Could not get invite link', 'error')
-              }
-            }}>
-            <ShareIcon width={14} height={14} /> Invite friends on Telegram
-          </button>
-        </div>
-      </div>
+      <GroupsSections
+        user={user}
+        onUserUpdate={onUserUpdate}
+        onActiveGroupChange={reloadLive}
+        showToast={showToast}
+      />
 
       {/* Last drawn round result */}
       {lastDrawn && (
@@ -725,16 +868,10 @@ export default function Home({ user, onUserUpdate }) {
         onSuccess={(amt, plan) => {
           setTopUpInitial(null)
           if (plan === 'once') {
-            showToast(`Added $${amt} credit`, 'success')
-            api.me().then(u => {
-              onUserUpdate(u)
-              if (pendingJoin) setJoin(true)
-            })
+            showToast(`Added $${amt} credit — open Join when you are ready`, 'success')
           } else if (plan === 'etransfer') {
-            setPendingJoin(null)
-            showToast('After approval, return to join the round', 'info')
+            showToast('After approval, top up completes — then join the round from Home', 'info')
           } else {
-            setPendingJoin(null)
             showToast(`Subscribed · $${amt}/mo`, 'success')
           }
           setTimeout(() => api.me().then(onUserUpdate), 3000)
@@ -743,14 +880,11 @@ export default function Home({ user, onUserUpdate }) {
 
       <JoinSheet
         open={join}
-        onClose={() => { setJoin(false); setPendingJoin(null) }}
+        onClose={() => setJoin(false)}
         round={round}
         user={user}
         showToast={showToast}
-        initialShares={pendingJoin?.shares}
-        onNeedTopUp={openTopUpForJoin}
         onJoined={(n) => {
-          setPendingJoin(null)
           showToast(`Joined with ${n} share${n > 1 ? 's' : ''}!`, 'success')
           reloadLive()
           api.me().then(onUserUpdate)

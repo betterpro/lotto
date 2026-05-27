@@ -61,7 +61,11 @@ async function reqPublic(method, path) {
 
 export const api = {
   me:           ()             => req('GET',  '/api/me'),
-  invite:       ()             => req('GET',  '/api/invite'),
+  invite:       (groupId) => req('GET', groupId ? `/api/invite?group_id=${groupId}` : '/api/invite'),
+  groups: {
+    list:      () => req('GET', '/api/groups'),
+    setActive: (group_id) => req('POST', '/api/groups/active', { group_id }),
+  },
   group: {
     preview: (slug) => reqPublic('GET', `/api/group/preview?slug=${encodeURIComponent(slug)}`),
     join:    (slug) => req('POST', '/api/group/join', { slug }),

@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 import database as db
 from config import CURRENCY, PLATFORM_ADMIN_IDS
-from group_context import parse_invite_slug
+from group_context import join_group_by_slug, parse_invite_slug
 from keyboards import main_menu, admin_menu
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     invited_by: int | None = None
     group_id = None
     group_name = None
+    slug = None
     if ctx.args:
         arg = ctx.args[0]
         if arg.startswith("ref_"):
@@ -69,6 +70,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             group_id=group_id,
             is_platform_admin=is_platform,
         )
+        if slug:
+            await join_group_by_slug(conn, user.id, slug)
         if group_name:
             welcome = (
                 f"👋 Welcome, *{user.first_name}*!\n\n"
@@ -83,15 +86,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
     else:
         welcome = f"👋 Welcome back, *{user.first_name}*!"
-        if group_id and not existing.get("group_id"):
-            await conn.execute(
-                "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, user.id)
-            )
-            await conn.commit()
-            if group_name:
+        if group_id and slug:
+            err, joined = await join_group_by_slug(conn, user.id, slug)
+            if not err and group_name:
                 welcome = f"👋 Welcome! You've joined *{group_name}*."
-        elif group_id and existing.get("group_id") and existing["group_id"] != group_id:
-            welcome += "\n\n⚠️ You already belong to another group."
+            elif err:
+                welcome += f"\n\n⚠️ {err}"
 
     record = await db.get_user(conn, user.id)
     credit = record["credit"] if record else 0.0

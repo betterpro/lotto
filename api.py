@@ -36,15 +36,21 @@ from agreements import (
     lottery_label,
 )
 from group_context import (
+    add_group_member,
     enrich_user_context,
+    ensure_active_group_id,
     get_group,
     get_group_by_slug,
     get_trustee_user,
+    get_user_groups,
     group_public,
+    join_group_by_slug,
+    member_group_public,
     parse_invite_slug,
     slugify,
     trustee_group_id,
     trustee_public,
+    user_in_group,
 )
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
@@ -203,21 +209,9 @@ def _init_start_param(params: dict) -> str | None:
 
 
 async def _assign_group_from_slug(db, telegram_id: int, slug: str) -> str | None:
-    """Assign group_id if user has none. Returns error message or None on success."""
-    group = await get_group_by_slug(db, slug)
-    if not group:
-        return "Invalid invite link"
-    if group["status"] != "active":
-        return "This group is not accepting members"
-    cur = await db.execute("SELECT group_id FROM users WHERE telegram_id=?", (telegram_id,))
-    row = await cur.fetchone()
-    if row and row["group_id"]:
-        if row["group_id"] != group["id"]:
-            return "You already belong to another group"
-        return None
-    await db.execute("UPDATE users SET group_id=? WHERE telegram_id=?", (group["id"], telegram_id))
-    await db.commit()
-    return None
+    """Add group membership from invite slug. Returns error message or None on success."""
+    err, _group = await join_group_by_slug(db, telegram_id, slug)
+    return err
 
 
 async def _get_user(init_data: str, db):
@@ -239,19 +233,25 @@ async def _get_user(init_data: str, db):
         ])).strip() or tg.get("username") or f"user_{tg['id']}"
         is_platform = 1 if tg["id"] in config.PLATFORM_ADMIN_IDS else 0
         group_id = None
+        invite_g = None
         if invite_slug:
-            g = await get_group_by_slug(db, invite_slug)
-            if g and g["status"] == "active":
-                group_id = g["id"]
+            invite_g = await get_group_by_slug(db, invite_slug)
+            if invite_g and invite_g["status"] == "active":
+                group_id = invite_g["id"]
         await db.execute(
-            """INSERT OR IGNORE INTO users
+            """INSERT INTO users
                (telegram_id, username, full_name, is_trustee, is_platform_admin, group_id)
-               VALUES (?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT (telegram_id) DO NOTHING""",
             (tg["id"], tg.get("username"), full_name, 0, is_platform, group_id),
         )
         await db.execute(
-            "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)", (tg["id"],)
+            "INSERT INTO user_settings (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING",
+            (tg["id"],),
         )
+        if group_id and invite_g:
+            role = "trustee" if invite_g["trustee_user_id"] == tg["id"] else "member"
+            await add_group_member(db, group_id, tg["id"], role)
         await db.commit()
         row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
         user = await row.fetchone()
@@ -360,8 +360,9 @@ async def _notify_all(db, text: str, setting_col: str | None = None, group_id: i
         if group_id is not None:
             cur = await db.execute(f"""
                 SELECT u.telegram_id FROM users u
+                JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
                 LEFT JOIN user_settings s ON s.user_id = u.telegram_id
-                WHERE u.group_id = ? AND COALESCE(s.{setting_col}, 1) = 1
+                WHERE COALESCE(s.{setting_col}, 1) = 1
             """, (group_id,))
         else:
             cur = await db.execute(f"""
@@ -372,7 +373,10 @@ async def _notify_all(db, text: str, setting_col: str | None = None, group_id: i
     else:
         if group_id is not None:
             cur = await db.execute(
-                "SELECT telegram_id FROM users WHERE group_id = ?", (group_id,)
+                """SELECT u.telegram_id FROM users u
+                   JOIN group_members gm ON gm.user_id = u.telegram_id
+                   WHERE gm.group_id = ?""",
+                (group_id,),
             )
         else:
             cur = await db.execute("SELECT telegram_id FROM users")
@@ -394,8 +398,13 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
                    s.preferred_day
             FROM users u
             JOIN user_settings s ON s.user_id = u.telegram_id
-            WHERE s.auto_participate = 1 AND u.group_id = ?
-        """, (group_id,))
+            WHERE s.auto_participate = 1
+              AND u.group_id = ?
+              AND EXISTS (
+                SELECT 1 FROM group_members gm
+                WHERE gm.user_id = u.telegram_id AND gm.group_id = ?
+              )
+        """, (group_id, group_id))
     else:
         cur = await db.execute("""
             SELECT u.telegram_id, u.credit, u.full_name,
@@ -861,10 +870,53 @@ async def api_group_join(request: Request, x_init_data: str | None = Header(defa
     slug = (body.get("slug") or "").strip().lower()
     if not slug:
         raise HTTPException(400, "slug required")
-    err = await _assign_group_from_slug(db, user["telegram_id"], slug)
+    err, _group = await join_group_by_slug(db, user["telegram_id"], slug)
     if err:
         await db.close()
         raise HTTPException(400, err)
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    ctx = await enrich_user_context(db, dict(row))
+    await db.close()
+    return {"ok": True, **ctx}
+
+
+@app.get("/api/groups")
+async def api_groups_list(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    memberships = await get_user_groups(db, user["telegram_id"])
+    active_gid = await ensure_active_group_id(db, user)
+    await db.close()
+    if not _bot_username:
+        raise HTTPException(500, "Bot not available")
+    groups = []
+    for m in memberships:
+        slug = m["slug"]
+        groups.append({
+            **member_group_public(m),
+            "is_active": m["id"] == active_gid,
+            "link": f"https://t.me/{_bot_username}?start=g_{slug}",
+            "app_link": f"https://t.me/{_bot_username}?startapp=join_{slug}",
+        })
+    return {"groups": groups, "active_group_id": active_gid}
+
+
+@app.post("/api/groups/active")
+async def api_groups_set_active(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    group_id = body.get("group_id")
+    if group_id is None:
+        raise HTTPException(400, "group_id required")
+    gid = int(group_id)
+    if not await user_in_group(db, user["telegram_id"], gid):
+        await db.close()
+        raise HTTPException(403, "You are not a member of this group")
+    await db.execute(
+        "UPDATE users SET group_id = ? WHERE telegram_id = ?",
+        (gid, user["telegram_id"]),
+    )
+    await db.commit()
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     ctx = await enrich_user_context(db, dict(row))
@@ -877,18 +929,33 @@ async def api_group_join(request: Request, x_init_data: str | None = Header(defa
 # ---------------------------------------------------------------------------
 
 @app.get("/api/invite")
-async def api_invite(x_init_data: str | None = Header(default=None)):
+async def api_invite(
+    group_id: int | None = None,
+    x_init_data: str | None = Header(default=None),
+):
     user, db = await _auth(x_init_data)
-    group = await get_group(db, user.get("group_id"))
+    gid = group_id or user.get("group_id")
+    if not gid:
+        gid = await ensure_active_group_id(db, user)
+    if not gid or not await user_in_group(db, user["telegram_id"], gid):
+        await db.close()
+        raise HTTPException(403, "Join this group before sharing invites")
+    group = await get_group(db, gid)
     await db.close()
     if not _bot_username:
         raise HTTPException(500, "Bot not available")
     if not group:
-        raise HTTPException(400, "Join a group before inviting friends")
+        raise HTTPException(404, "Group not found")
     slug = group["slug"]
     link = f"https://t.me/{_bot_username}?start=g_{slug}"
     app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}"
-    return {"link": link, "app_link": app_link, "slug": slug}
+    return {
+        "link": link,
+        "app_link": app_link,
+        "slug": slug,
+        "group_id": gid,
+        "group_name": group["name"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1229,7 +1296,7 @@ _OPEN_ROUNDS_ORDER = (
 
 
 async def _require_active_member_group(user: dict, db) -> int:
-    gid = user.get("group_id")
+    gid = await ensure_active_group_id(db, user)
     if not gid:
         raise HTTPException(403, "Join a group to play")
     group = await get_group(db, gid)
@@ -1355,7 +1422,11 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
     if not entries_open(round_d["status"], round_d.get("draw_date")):
         raise HTTPException(400, "Entries closed — draw agreement is available in Rounds")
     if user["credit"] < amount:
-        raise HTTPException(400, "Insufficient balance")
+        raise HTTPException(
+            400,
+            f"Not enough credit (${user['credit']:.2f} available, ${amount:.2f} needed). "
+            "Top up on Home first, then join again.",
+        )
     price_per_share = dict(round_).get("price_per_share") or 5.0
     shares = max(1, round(amount / price_per_share))
     # Upsert: allow adding more stake to same round
@@ -2085,7 +2156,11 @@ async def admin_members(x_init_data: str | None = Header(default=None)):
     user, db, group = await _require_group_trustee(x_init_data)
     gid = group["id"]
     cur = await db.execute(
-        "SELECT * FROM users WHERE group_id=? ORDER BY created_at", (gid,)
+        """SELECT u.* FROM users u
+           JOIN group_members gm ON gm.user_id = u.telegram_id
+           WHERE gm.group_id = ?
+           ORDER BY gm.joined_at, u.created_at""",
+        (gid,),
     )
     rows = []
     for r in await cur.fetchall():
@@ -2136,7 +2211,7 @@ async def platform_groups(x_init_data: str | None = Header(default=None)):
     cur = await db.execute("""
         SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
                u.photo_url AS trustee_photo_url,
-               (SELECT COUNT(*) FROM users WHERE group_id = g.id) AS member_count
+               (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count
         FROM groups g
         JOIN users u ON u.telegram_id = g.trustee_user_id
         ORDER BY g.id DESC
@@ -2164,10 +2239,12 @@ async def platform_group_detail(group_id: int, x_init_data: str | None = Header(
     cur = await db.execute("""
         SELECT telegram_id, username, full_name, credit, email, photo_url,
                is_platform_admin, created_at
-        FROM users WHERE group_id = ?
+        FROM users u
+        JOIN group_members gm ON gm.user_id = u.telegram_id
+        WHERE gm.group_id = ?
         ORDER BY
-          CASE WHEN telegram_id = ? THEN 0 ELSE 1 END,
-          created_at
+          CASE WHEN u.telegram_id = ? THEN 0 ELSE 1 END,
+          gm.joined_at, u.created_at
     """, (group_id, group["trustee_user_id"]))
     members = []
     for m in await cur.fetchall():
@@ -2289,6 +2366,7 @@ async def platform_approve_application(
     await db.execute(
         "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
     )
+    await add_group_member(db, group_id, applicant_id, "trustee")
     await db.execute(
         """UPDATE trustee_applications SET status='approved', reviewed_by=?,
            reviewed_at=datetime('now') WHERE id=?""",
