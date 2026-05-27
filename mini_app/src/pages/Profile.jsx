@@ -142,13 +142,15 @@ export default function Profile({ user, onUserUpdate }) {
   async function save() {
     setBusy(true)
     try {
-      const profile = await api.beneficiary.save({ email })
+      const profile = await api.profile.updateEmail(email)
       await api.settings.put(settings)
-      if (profile?.user) onUserUpdate(profile.user)
+      if (profile?.user) {
+        onUserUpdate(prev => ({ ...prev, ...profile.user }))
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
-      showToast(e.message, 'error')
+      showToast(e.message || 'Save failed', 'error')
     } finally {
       setBusy(false)
     }

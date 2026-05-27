@@ -928,38 +928,72 @@ def _beneficiary_agreement_kwargs(user: dict) -> dict:
     }
 
 
+def _beneficiary_update_parts(body: dict, user: dict) -> tuple[list[str], list]:
+    """Build SET clauses only for fields present in the request body."""
+    sets: list[str] = []
+    params: list = []
+
+    if "fullName" in body or "full_name" in body:
+        val = (body.get("fullName") or body.get("full_name") or user.get("full_name") or "").strip()
+        sets.append("full_name = COALESCE(NULLIF(?, ''), full_name)")
+        params.append(val)
+
+    if "email" in body:
+        val = (body.get("email") or "").strip().lower()
+        sets.append("email = COALESCE(NULLIF(?, ''), email)")
+        params.append(val)
+
+    for json_key, col in (
+        ("street", "street"),
+        ("city", "city"),
+        ("province", "province"),
+        ("postal", "postal_code"),
+        ("phone", "phone"),
+        ("category", "declaration_category"),
+    ):
+        if json_key in body:
+            sets.append(f"{col} = COALESCE(?, {col})")
+            params.append(body.get(json_key))
+
+    if "acceptedAt" in body or "accepted_at" in body:
+        sets.append("agreement_accepted_at = COALESCE(?, agreement_accepted_at)")
+        params.append(body.get("acceptedAt") or body.get("accepted_at"))
+
+    return sets, params
+
+
+@app.patch("/api/profile/email")
+async def api_update_profile_email(request: Request, x_init_data: str | None = Header(default=None)):
+    """Save Interac e-transfer sender email only (Profile page)."""
+    user, db = await _auth(x_init_data)
+    body = await request.json()
+    email_addr = (body.get("email") or "").strip().lower()
+    if not email_addr or "@" not in email_addr:
+        await db.close()
+        raise HTTPException(400, "Valid email required")
+    await db.execute(
+        "UPDATE users SET email=? WHERE telegram_id=?", (email_addr, user["telegram_id"])
+    )
+    await db.commit()
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    await db.close()
+    return {"ok": True, "user": dict(row) if row else None}
+
+
 @app.post("/api/beneficiary")
 async def api_save_beneficiary(request: Request, x_init_data: str | None = Header(default=None)):
     """Persist beneficiary profile from onboarding (BCLC Group Prize Agreement)."""
     user, db = await _auth(x_init_data)
     body = await request.json()
-    full_name = (body.get("fullName") or body.get("full_name") or user.get("full_name") or "").strip()
-    email_addr = (body.get("email") or user.get("email") or "").strip().lower()
-    accepted = body.get("acceptedAt") or body.get("accepted_at")
+    sets, params = _beneficiary_update_parts(body, user)
+    if not sets:
+        await db.close()
+        raise HTTPException(400, "No profile fields to update")
+    params.append(user["telegram_id"])
     await db.execute(
-        """UPDATE users SET
-            full_name = COALESCE(NULLIF(?, ''), full_name),
-            email = COALESCE(NULLIF(?, ''), email),
-            street = COALESCE(?, street),
-            city = COALESCE(?, city),
-            province = COALESCE(?, province),
-            postal_code = COALESCE(?, postal_code),
-            phone = COALESCE(?, phone),
-            declaration_category = COALESCE(?, declaration_category),
-            agreement_accepted_at = COALESCE(?, agreement_accepted_at)
-           WHERE telegram_id = ?""",
-        (
-            full_name,
-            email_addr,
-            body.get("street"),
-            body.get("city"),
-            body.get("province"),
-            body.get("postal"),
-            body.get("phone"),
-            body.get("category"),
-            accepted,
-            user["telegram_id"],
-        ),
+        f"UPDATE users SET {', '.join(sets)} WHERE telegram_id = ?",
+        tuple(params),
     )
     await db.commit()
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))

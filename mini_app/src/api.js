@@ -93,6 +93,9 @@ export const api = {
   beneficiary: {
     save: (data) => req('POST', '/api/beneficiary', data),
   },
+  profile: {
+    updateEmail: (email) => req('PATCH', '/api/profile/email', { email }),
+  },
   settings:     {
     get: ()      => req('GET', '/api/settings'),
     put: (body)  => req('PUT', '/api/settings', body),
