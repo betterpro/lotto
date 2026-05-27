@@ -697,10 +697,16 @@ async def _auth(x_init_data: str | None):
 async def _require_group_trustee(x_init_data):
     user, db = await _auth(x_init_data)
     gid = await trustee_group_id(db, user)
+    if not gid and user.get("group_id"):
+        g = await get_group(db, user["group_id"])
+        if g and g["trustee_user_id"] == user["telegram_id"]:
+            gid = g["id"]
     if not gid:
+        await db.close()
         raise HTTPException(403, "Group trustee only")
     group = await get_group(db, gid)
     if not group or group["trustee_user_id"] != user["telegram_id"]:
+        await db.close()
         raise HTTPException(403, "Group trustee only")
     return user, db, group
 
@@ -1222,17 +1228,22 @@ _OPEN_ROUNDS_ORDER = (
 )
 
 
-def _require_member_group(user: dict) -> int:
+async def _require_active_member_group(user: dict, db) -> int:
     gid = user.get("group_id")
     if not gid:
         raise HTTPException(403, "Join a group to play")
+    group = await get_group(db, gid)
+    if not group:
+        raise HTTPException(403, "Group not found")
+    if group["status"] != "active":
+        raise HTTPException(403, "This group is not active")
     return gid
 
 
 @app.get("/api/round")
 async def api_round(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
         f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1",
@@ -1255,7 +1266,7 @@ async def api_round(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds/open")
 async def api_open_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
         f"SELECT * FROM rounds WHERE status='open' AND group_id=? ORDER BY {_OPEN_ROUNDS_ORDER}",
@@ -1274,7 +1285,7 @@ async def api_open_rounds(x_init_data: str | None = Header(default=None)):
 @app.get("/api/rounds")
 async def api_rounds(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute("""
         SELECT r.*,
@@ -1316,7 +1327,7 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
 @app.post("/api/participate")
 async def api_participate(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
@@ -1406,7 +1417,7 @@ async def api_transactions(x_init_data: str | None = Header(default=None)):
 @app.post("/api/deposit")
 async def api_deposit(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
@@ -1518,7 +1529,7 @@ async def etransfer_info(x_init_data: str | None = Header(default=None)):
 @app.post("/api/etransfer/deposit")
 async def etransfer_deposit(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = _require_member_group(user)
+    gid = await _require_active_member_group(user, db)
     body = await request.json()
     amount = float(body.get("amount", 0))
     if amount <= 0:
@@ -1618,8 +1629,9 @@ async def admin_rounds(x_init_data: str | None = Header(default=None)):
     user, db, group = await _require_group_trustee(x_init_data)
     gid = group["id"]
     cur = await db.execute(
-        "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed','uploaded') "
-        f"ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 ELSE 2 END, {_OPEN_ROUNDS_ORDER}",
+        "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed','uploaded','drawn') "
+        "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 WHEN 'uploaded' THEN 2 ELSE 3 END, "
+        f"{_OPEN_ROUNDS_ORDER}",
         (gid,),
     )
     rows = await cur.fetchall()
@@ -2123,6 +2135,7 @@ async def platform_groups(x_init_data: str | None = Header(default=None)):
     user, db = await _require_platform_admin(x_init_data)
     cur = await db.execute("""
         SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
+               u.photo_url AS trustee_photo_url,
                (SELECT COUNT(*) FROM users WHERE group_id = g.id) AS member_count
         FROM groups g
         JOIN users u ON u.telegram_id = g.trustee_user_id
@@ -2133,15 +2146,70 @@ async def platform_groups(x_init_data: str | None = Header(default=None)):
     return {"groups": rows}
 
 
-@app.get("/api/platform/users")
-async def platform_users(x_init_data: str | None = Header(default=None), limit: int = 100):
-    user, db = await _require_platform_admin(x_init_data)
+@app.get("/api/platform/groups/{group_id}")
+async def platform_group_detail(group_id: int, x_init_data: str | None = Header(default=None)):
+    await _require_platform_admin(x_init_data)
+    db = await get_db()
     cur = await db.execute("""
+        SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
+               u.photo_url AS trustee_photo_url, u.email AS trustee_email
+        FROM groups g
+        JOIN users u ON u.telegram_id = g.trustee_user_id
+        WHERE g.id = ?
+    """, (group_id,))
+    group = await cur.fetchone()
+    if not group:
+        await db.close()
+        raise HTTPException(404, "Group not found")
+    cur = await db.execute("""
+        SELECT telegram_id, username, full_name, credit, email, photo_url,
+               is_platform_admin, created_at
+        FROM users WHERE group_id = ?
+        ORDER BY
+          CASE WHEN telegram_id = ? THEN 0 ELSE 1 END,
+          created_at
+    """, (group_id, group["trustee_user_id"]))
+    members = []
+    for m in await cur.fetchall():
+        row = dict(m)
+        row["is_trustee"] = row["telegram_id"] == group["trustee_user_id"]
+        members.append(row)
+    cur = await db.execute(
+        "SELECT COUNT(*) AS c FROM rounds WHERE group_id = ?", (group_id,)
+   )
+    rc = await cur.fetchone()
+    rounds_count = int(rc["c"]) if rc else 0
+    await db.close()
+    g = dict(group)
+    return {
+        "group": g,
+        "members": members,
+        "rounds_count": rounds_count,
+        "invite_link_slug": g["slug"],
+    }
+
+
+@app.get("/api/platform/users")
+async def platform_users(
+    x_init_data: str | None = Header(default=None),
+    limit: int = 100,
+    group_id: int | None = None,
+):
+    await _require_platform_admin(x_init_data)
+    db = await get_db()
+    sql = """
         SELECT u.*, g.name AS group_name, g.slug AS group_slug
         FROM users u
         LEFT JOIN groups g ON g.id = u.group_id
-        ORDER BY u.created_at DESC LIMIT ?
-    """, (min(limit, 500),))
+        WHERE 1=1
+    """
+    params: list = []
+    if group_id is not None:
+        sql += " AND u.group_id = ?"
+        params.append(group_id)
+    sql += " ORDER BY u.created_at DESC LIMIT ?"
+    params.append(min(limit, 500))
+    cur = await db.execute(sql, tuple(params))
     rows = [dict(r) for r in await cur.fetchall()]
     await db.close()
     return {"users": rows}
@@ -2259,23 +2327,126 @@ async def platform_patch_group(
 ):
     await _require_platform_admin(x_init_data)
     db = await get_db()
-    body = await request.json()
-    status = body.get("status")
-    etransfer_email = body.get("etransfer_email")
-    if status in ("active", "suspended"):
-        await db.execute("UPDATE groups SET status=? WHERE id=?", (status, group_id))
-    if etransfer_email is not None:
-        await db.execute(
-            "UPDATE groups SET etransfer_email=? WHERE id=?",
-            (etransfer_email or None, group_id),
-        )
-    await db.commit()
     cur = await db.execute("SELECT * FROM groups WHERE id=?", (group_id,))
+    existing = await cur.fetchone()
+    if not existing:
+        await db.close()
+        raise HTTPException(404, "Group not found")
+
+    body = await request.json()
+    name = body.get("name")
+    if name is not None:
+        name = str(name).strip()
+        if not name:
+            await db.close()
+            raise HTTPException(400, "Group name cannot be empty")
+        await db.execute("UPDATE groups SET name=? WHERE id=?", (name, group_id))
+
+    status = body.get("status")
+    if status is not None:
+        if status not in ("active", "suspended"):
+            await db.close()
+            raise HTTPException(400, "status must be active or suspended")
+        await db.execute("UPDATE groups SET status=? WHERE id=?", (status, group_id))
+
+    if "etransfer_email" in body:
+        email = (body.get("etransfer_email") or "").strip().lower() or None
+        await db.execute(
+            "UPDATE groups SET etransfer_email=? WHERE id=?", (email, group_id)
+        )
+
+    if body.get("regenerate_slug") and name:
+        base_slug = slugify(name)
+        slug = base_slug
+        n = 0
+        while True:
+            cur = await db.execute(
+                "SELECT id FROM groups WHERE slug=? AND id<>?", (slug, group_id)
+            )
+            if not await cur.fetchone():
+                break
+            n += 1
+            slug = f"{base_slug}-{n}"
+        await db.execute("UPDATE groups SET slug=? WHERE id=?", (slug, group_id))
+
+    new_trustee = body.get("trustee_user_id")
+    if new_trustee is not None:
+        new_trustee = int(new_trustee)
+        cur = await db.execute("SELECT telegram_id FROM users WHERE telegram_id=?", (new_trustee,))
+        if not await cur.fetchone():
+            await db.close()
+            raise HTTPException(400, "Trustee user not found")
+        await db.execute(
+            "UPDATE groups SET trustee_user_id=? WHERE id=?", (new_trustee, group_id)
+        )
+        await db.execute(
+            "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, new_trustee)
+        )
+
+    await db.commit()
+    await db.close()
+    detail = await platform_group_detail(group_id, x_init_data)
+    return {"ok": True, **detail}
+
+
+@app.patch("/api/platform/users/{telegram_id}")
+async def platform_patch_user(
+    telegram_id: int,
+    request: Request,
+    x_init_data: str | None = Header(default=None),
+):
+    admin, db = await _require_platform_admin(x_init_data)
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+    target = await cur.fetchone()
+    if not target:
+        await db.close()
+        raise HTTPException(404, "User not found")
+
+    body = await request.json()
+
+    if "group_id" in body:
+        gid = body.get("group_id")
+        if gid is None:
+            await db.execute(
+                "UPDATE users SET group_id=NULL WHERE telegram_id=?", (telegram_id,)
+            )
+        else:
+            gid = int(gid)
+            cur = await db.execute("SELECT id, status FROM groups WHERE id=?", (gid,))
+            group = await cur.fetchone()
+            if not group:
+                await db.close()
+                raise HTTPException(400, "Group not found")
+            await db.execute(
+                "UPDATE users SET group_id=? WHERE telegram_id=?", (gid, telegram_id)
+            )
+
+    if "is_platform_admin" in body:
+        flag = 1 if body.get("is_platform_admin") else 0
+        if telegram_id == admin["telegram_id"] and not flag:
+            await db.close()
+            raise HTTPException(400, "Cannot remove your own platform admin access")
+        await db.execute(
+            "UPDATE users SET is_platform_admin=? WHERE telegram_id=?",
+            (flag, telegram_id),
+        )
+
+    if "credit" in body and body["credit"] is not None:
+        await db.execute(
+            "UPDATE users SET credit=? WHERE telegram_id=?",
+            (float(body["credit"]), telegram_id),
+        )
+
+    await db.commit()
+    cur = await db.execute("""
+        SELECT u.*, g.name AS group_name, g.slug AS group_slug
+        FROM users u
+        LEFT JOIN groups g ON g.id = u.group_id
+        WHERE u.telegram_id = ?
+    """, (telegram_id,))
     row = await cur.fetchone()
     await db.close()
-    if not row:
-        raise HTTPException(404, "Group not found")
-    return {"ok": True, "group": dict(row)}
+    return {"ok": True, "user": dict(row) if row else None}
 
 
 # ---------------------------------------------------------------------------

@@ -59,31 +59,31 @@ def group_public(group_row) -> dict | None:
     }
 
 
-async def is_group_trustee(db, user: dict) -> bool:
-    gid = user.get("group_id")
-    if not gid:
-        cur = await db.execute(
-            "SELECT id FROM groups WHERE trustee_user_id = ? AND status = 'active' LIMIT 1",
-            (user["telegram_id"],),
-        )
-        row = await cur.fetchone()
-        return row is not None
-    group = await get_group(db, gid)
-    return bool(group and group["trustee_user_id"] == user["telegram_id"])
-
-
-async def trustee_group_id(db, user: dict) -> int | None:
-    """Group id this user trustees (may differ from users.group_id for trustees)."""
-    cur = await db.execute(
-        "SELECT id FROM groups WHERE trustee_user_id = ? AND status = 'active' LIMIT 1",
-        (user["telegram_id"],),
-    )
+async def trustee_group_id(db, user: dict, *, active_only: bool = False) -> int | None:
+    """Group id this user trustees (may differ from users.group_id)."""
+    sql = "SELECT id FROM groups WHERE trustee_user_id = ?"
+    if active_only:
+        sql += " AND status = 'active'"
+    sql += " ORDER BY id DESC LIMIT 1"
+    cur = await db.execute(sql, (user["telegram_id"],))
     row = await cur.fetchone()
     return row["id"] if row else None
 
 
+async def is_group_trustee(db, user: dict) -> bool:
+    gid = user.get("group_id")
+    if gid:
+        group = await get_group(db, gid)
+        return bool(group and group["trustee_user_id"] == user["telegram_id"])
+    return await trustee_group_id(db, user) is not None
+
+
 async def enrich_user_context(db, user: dict) -> dict:
     group_row = await get_group(db, user.get("group_id"))
+    if not group_row:
+        tg_gid = await trustee_group_id(db, user)
+        if tg_gid:
+            group_row = await get_group(db, tg_gid)
     trustee_row = None
     if group_row:
         trustee_row = await get_trustee_user(db, group_row["trustee_user_id"])

@@ -404,7 +404,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
 }
 
 // ── Main Admin page ────────────────────────────────────────────────────────
-export default function Admin() {
+export default function Admin({ user }) {
   const [tab,      setTab]      = useState('round')
   const [rounds,   setRounds]   = useState(undefined)
   const [selectedId, setSelectedId] = useState(null)
@@ -419,18 +419,34 @@ export default function Admin() {
 
   const round = rounds?.find(r => r.id === selectedId) ?? rounds?.[0] ?? null
 
+  const [loadError, setLoadError] = useState(null)
+
   const loadRounds = useCallback(() => api.admin.rounds().then(d => {
     const list = d.rounds || []
     setRounds(list)
+    setLoadError(null)
     setSelectedId(prev => {
       if (prev && list.some(r => r.id === prev)) return prev
       return list[0]?.id ?? null
     })
-  }).catch(() => setRounds([])), [])
-  const loadDeposits = useCallback(() => api.admin.deposits().then(d => { setDeposits(d.deposits); setImapOk(!!d.imap_configured) }).catch(() => setDeposits([])), [])
-  const loadMembers  = useCallback(() => api.admin.members().then(d => setMembers(d.members)).catch(() => setMembers([])), [])
+  }).catch(err => {
+    setRounds([])
+    setLoadError(err.message || 'Could not load rounds')
+    showToast(err.message || 'Could not load rounds', 'error')
+  }), [showToast])
+  const loadDeposits = useCallback(() => api.admin.deposits().then(d => {
+    setDeposits(d.deposits)
+    setImapOk(!!d.imap_configured)
+  }).catch(err => {
+    setDeposits([])
+    showToast(err.message || 'Could not load deposits', 'error')
+  }), [showToast])
+  const loadMembers  = useCallback(() => api.admin.members().then(d => setMembers(d.members)).catch(err => {
+    setMembers([])
+    showToast(err.message || 'Could not load members', 'error')
+  }), [showToast])
 
-  useEffect(() => { loadRounds(); loadDeposits(); loadMembers() }, [])
+  useEffect(() => { loadRounds(); loadDeposits(); loadMembers() }, [loadRounds, loadDeposits, loadMembers])
 
   function setB(k, v) { setBusy(p => ({ ...p, [k]: v })) }
 
@@ -477,7 +493,10 @@ export default function Admin() {
             </div>
             <div className="col gap-4">
               <span style={{ fontSize: 15, fontWeight: 600 }}>Your group dashboard</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>{user.group?.name || 'Trustee access'}</span>
+              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>
+                {user?.group?.name || 'Trustee access'}
+                {user?.group?.status === 'suspended' ? ' · suspended' : ''}
+              </span>
             </div>
           </div>
           <span className="chip chip-gold" style={{ padding: '5px 10px' }}>TRUSTEE</span>
@@ -527,6 +546,19 @@ export default function Admin() {
             </div>
           ) : (
             <>
+          {loadError && (
+            <div className="card" style={{ padding: 12, marginBottom: 12, borderColor: 'var(--danger)' }}>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--danger)' }}>{loadError}</p>
+            </div>
+          )}
+          {rounds.length === 0 && !loadError && (
+            <div className="card" style={{ padding: 16, marginBottom: 12, textAlign: 'center' }}>
+              <p style={{ margin: '0 0 8px', fontWeight: 600 }}>No rounds yet</p>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)' }}>
+                Open your first round for this group below.
+              </p>
+            </div>
+          )}
           {rounds.length > 0 && (
             <div style={{ display: 'flex', gap: 8, overflowX: 'auto', marginBottom: 12, paddingBottom: 2 }}>
               {rounds.map(r => {

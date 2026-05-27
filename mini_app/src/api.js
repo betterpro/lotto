@@ -73,7 +73,15 @@ export const api = {
   platform: {
     overview:      () => req('GET', '/api/platform/overview'),
     groups:        () => req('GET', '/api/platform/groups'),
-    users:         () => req('GET', '/api/platform/users'),
+    group:         (id) => req('GET', `/api/platform/groups/${id}`),
+    users:         (params = {}) => {
+      const q = new URLSearchParams()
+      if (params.group_id != null) q.set('group_id', params.group_id)
+      if (params.limit) q.set('limit', params.limit)
+      const s = q.toString()
+      return req('GET', `/api/platform/users${s ? `?${s}` : ''}`)
+    },
+    patchUser:     (telegramId, body) => req('PATCH', `/api/platform/users/${telegramId}`, body),
     rounds:        (params = {}) => {
       const q = new URLSearchParams()
       if (params.group_id) q.set('group_id', params.group_id)
