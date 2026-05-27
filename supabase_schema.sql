@@ -7,9 +7,11 @@ CREATE TABLE IF NOT EXISTS groups (
     name             TEXT    NOT NULL,
     slug             TEXT    NOT NULL UNIQUE,
     trustee_user_id  BIGINT  NOT NULL,
-    status           TEXT    NOT NULL DEFAULT 'active',
-    etransfer_email  TEXT,
-    created_at       TEXT    NOT NULL
+    status               TEXT    NOT NULL DEFAULT 'active',
+    etransfer_email      TEXT,
+    payment_methods      TEXT    NOT NULL DEFAULT 'both',
+    etransfer_min_amount FLOAT8  NOT NULL DEFAULT 25,
+    created_at           TEXT    NOT NULL
                      DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
 

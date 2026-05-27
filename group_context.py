@@ -48,6 +48,15 @@ def trustee_public(trustee_row) -> dict | None:
     }
 
 
+CARD_DEPOSIT_AMOUNTS = (25.0, 50.0, 100.0, 250.0)
+VALID_PAYMENT_METHODS = ("etransfer", "card", "both")
+
+
+def _normalize_payment_methods(value) -> str:
+    pm = (value or "both").lower()
+    return pm if pm in VALID_PAYMENT_METHODS else "both"
+
+
 def group_public(group_row) -> dict | None:
     if not group_row:
         return None
@@ -56,7 +65,25 @@ def group_public(group_row) -> dict | None:
         "name": group_row["name"],
         "slug": group_row["slug"],
         "status": group_row["status"],
+        "payment_methods": _normalize_payment_methods(group_row.get("payment_methods")),
+        "etransfer_min_amount": float(group_row.get("etransfer_min_amount") or 25),
+        "etransfer_email": group_row.get("etransfer_email"),
     }
+
+
+def group_allows_payment(group_row, method: str) -> bool:
+    if not group_row:
+        return False
+    pm = _normalize_payment_methods(group_row.get("payment_methods"))
+    if method == "card":
+        return pm in ("card", "both")
+    if method == "etransfer":
+        return pm in ("etransfer", "both")
+    return False
+
+
+def is_valid_card_deposit_amount(amount: float) -> bool:
+    return round(float(amount), 2) in CARD_DEPOSIT_AMOUNTS
 
 
 async def trustee_group_id(db, user: dict, *, active_only: bool = False) -> int | None:

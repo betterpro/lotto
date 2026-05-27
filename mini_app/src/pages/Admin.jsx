@@ -403,6 +403,104 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   )
 }
 
+// ── Payment settings (trustee) ─────────────────────────────────────────────
+function PaymentsTab({ showToast }) {
+  const [group, setGroup] = useState(null)
+  const [pm, setPm] = useState('both')
+  const [minAmt, setMinAmt] = useState('25')
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.admin.group.get()
+      .then(d => {
+        const g = d.group
+        setGroup(g)
+        setPm(g.payment_methods || 'both')
+        setMinAmt(String(g.etransfer_min_amount ?? 25))
+        setEmail(g.etransfer_email || '')
+      })
+      .catch(err => showToast(err.message, 'error'))
+  }, [showToast])
+
+  async function save() {
+    setBusy(true)
+    try {
+      const r = await api.admin.group.patch({
+        payment_methods: pm,
+        etransfer_min_amount: Number(minAmt) || 25,
+        etransfer_email: email.trim() || null,
+      })
+      setGroup(r.group)
+      showToast('Payment settings saved', 'success')
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setBusy(false) }
+  }
+
+  if (!group) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 40 }}>
+        <div className="spinner" />
+      </div>
+    )
+  }
+
+  const pmOptions = [
+    { v: 'both', label: 'Card & e-Transfer' },
+    { v: 'card', label: 'Card only' },
+    { v: 'etransfer', label: 'E-Transfer only' },
+  ]
+
+  return (
+    <div style={{ padding: '12px 16px 24px' }}>
+      <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
+        <FieldLabel label="Accepted payment methods">
+          <div className="col" style={{ gap: 8 }}>
+            {pmOptions.map(o => (
+              <button key={o.v} type="button" onClick={() => setPm(o.v)} style={{
+                padding: '12px 14px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                border: `.5px solid ${pm === o.v ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                background: pm === o.v ? 'rgba(46,166,255,.1)' : 'var(--bg-3)',
+                color: pm === o.v ? 'var(--tg)' : '#fff',
+                fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+              }}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </FieldLabel>
+
+        {(pm === 'etransfer' || pm === 'both') && (
+          <>
+            <FieldLabel label="E-transfer deposit email">
+              <input className="input mono" type="email" value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="trustee@example.com" />
+            </FieldLabel>
+            <FieldLabel label="Minimum e-transfer amount (CAD)">
+              <input className="input mono" type="number" min="1" step="1"
+                value={minAmt} onChange={e => setMinAmt(e.target.value)} />
+            </FieldLabel>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+              Members pick $25, $50, $100, or $250 for card. E-transfer options are the same amounts at or above your minimum.
+            </p>
+          </>
+        )}
+
+        {(pm === 'card' || pm === 'both') && !group.stripe_configured && (
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--warn)' }}>
+            Stripe is not configured on the server — card payments will not work until it is.
+          </p>
+        )}
+      </div>
+
+      <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>
+        {busy ? 'Saving…' : 'Save payment settings'}
+      </button>
+    </div>
+  )
+}
+
 // ── Main Admin page ────────────────────────────────────────────────────────
 export default function Admin({ user }) {
   const [tab,      setTab]      = useState('round')
@@ -524,6 +622,7 @@ export default function Admin({ user }) {
           { id: 'round',    label: 'Round'   },
           { id: 'deposits', label: pendingCount ? `Deposits (${pendingCount})` : 'Deposits' },
           { id: 'members',  label: 'Members' },
+          { id: 'payments', label: 'Payments' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{
@@ -795,6 +894,10 @@ export default function Admin({ user }) {
             </div>
           ))}
         </div>
+      )}
+
+      {tab === 'payments' && (
+        <PaymentsTab showToast={showToast} />
       )}
 
       {/* ── Members tab ── */}

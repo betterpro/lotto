@@ -36,6 +36,8 @@ from agreements import (
     lottery_label,
 )
 from group_context import (
+    CARD_DEPOSIT_AMOUNTS,
+    VALID_PAYMENT_METHODS,
     add_group_member,
     enrich_user_context,
     ensure_active_group_id,
@@ -43,7 +45,9 @@ from group_context import (
     get_group_by_slug,
     get_trustee_user,
     get_user_groups,
+    group_allows_payment,
     group_public,
+    is_valid_card_deposit_amount,
     join_group_by_slug,
     member_group_public,
     parse_invite_slug,
@@ -1307,6 +1311,28 @@ async def _require_active_member_group(user: dict, db) -> int:
     return gid
 
 
+async def _active_group_row(user: dict, db):
+    gid = await _require_active_member_group(user, db)
+    return gid, await get_group(db, gid)
+
+
+def _payment_options_payload(group, *, stripe_configured: bool) -> dict:
+    admin_email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
+    min_amt = float(group.get("etransfer_min_amount") or 25) if group else 25.0
+    card_allowed = bool(group and group_allows_payment(group, "card") and stripe_configured)
+    etx_allowed = bool(group and group_allows_payment(group, "etransfer") and admin_email)
+    etx_presets = [a for a in CARD_DEPOSIT_AMOUNTS if a >= min_amt]
+    return {
+        "payment_methods": group_public(group)["payment_methods"] if group else "both",
+        "etransfer_min_amount": min_amt,
+        "card_amounts": list(CARD_DEPOSIT_AMOUNTS),
+        "etransfer_amounts": etx_presets,
+        "card_enabled": card_allowed,
+        "etransfer_enabled": etx_allowed,
+        "etransfer_email": admin_email if etx_allowed else None,
+    }
+
+
 @app.get("/api/round")
 async def api_round(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
@@ -1585,30 +1611,55 @@ async def put_settings(request: Request, x_init_data: str | None = Header(defaul
 # E-transfer endpoints
 # ---------------------------------------------------------------------------
 
+@app.get("/api/payment/options")
+async def payment_options(x_init_data: str | None = Header(default=None)):
+    user, db = await _auth(x_init_data)
+    try:
+        _, group = await _active_group_row(user, db)
+    except HTTPException:
+        group = await get_group(db, user.get("group_id")) if user.get("group_id") else None
+    payload = _payment_options_payload(group, stripe_configured=bool(config.STRIPE_SECRET_KEY))
+    await db.close()
+    return payload
+
+
 @app.get("/api/etransfer/info")
 async def etransfer_info(x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    group = await get_group(db, user.get("group_id"))
+    try:
+        _, group = await _active_group_row(user, db)
+    except HTTPException:
+        group = await get_group(db, user.get("group_id")) if user.get("group_id") else None
+    opts = _payment_options_payload(group, stripe_configured=bool(config.STRIPE_SECRET_KEY))
     await db.close()
-    email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
     return {
-        "enabled": bool(email),
-        "email": email,
+        "enabled": opts["etransfer_enabled"],
+        "email": opts["etransfer_email"],
+        "min_amount": opts["etransfer_min_amount"],
+        "amounts": opts["etransfer_amounts"],
     }
 
 
 @app.post("/api/etransfer/deposit")
 async def etransfer_deposit(request: Request, x_init_data: str | None = Header(default=None)):
     user, db = await _auth(x_init_data)
-    gid = await _require_active_member_group(user, db)
+    gid, group = await _active_group_row(user, db)
     body = await request.json()
-    amount = float(body.get("amount", 0))
+    amount = round(float(body.get("amount", 0)), 2)
     if amount <= 0:
         raise HTTPException(400, "Amount must be positive")
+    opts = _payment_options_payload(group, stripe_configured=bool(config.STRIPE_SECRET_KEY))
+    if not opts["etransfer_enabled"]:
+        await db.close()
+        raise HTTPException(400, "E-transfer is not enabled for this group")
+    min_amt = opts["etransfer_min_amount"]
+    if amount < min_amt:
+        await db.close()
+        raise HTTPException(400, f"Minimum e-transfer amount is ${min_amt:.2f}")
     if not user.get("email"):
+        await db.close()
         raise HTTPException(400, "Add your e-transfer email in Profile before sending a deposit")
-    group = await get_group(db, gid)
-    admin_email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
+    admin_email = opts["etransfer_email"]
     cur = await db.execute(
         "INSERT INTO deposit_requests (user_id, amount, payment_method, group_id) VALUES (?,?,'etransfer',?) RETURNING id",
         (user["telegram_id"], amount, gid),
@@ -1673,6 +1724,65 @@ async def api_trustee_apply(request: Request, x_init_data: str | None = Header(d
 # ---------------------------------------------------------------------------
 # Admin endpoints (group trustee)
 # ---------------------------------------------------------------------------
+
+@app.get("/api/admin/group")
+async def admin_get_group(x_init_data: str | None = Header(default=None)):
+    user, db, group = await _require_group_trustee(x_init_data)
+    await db.close()
+    return {
+        "group": {
+            **group_public(group),
+            "stripe_configured": bool(config.STRIPE_SECRET_KEY),
+        }
+    }
+
+
+@app.patch("/api/admin/group")
+async def admin_patch_group(request: Request, x_init_data: str | None = Header(default=None)):
+    user, db, group = await _require_group_trustee(x_init_data)
+    body = await request.json()
+    gid = group["id"]
+
+    if "payment_methods" in body:
+        pm = (body.get("payment_methods") or "both").lower()
+        if pm not in VALID_PAYMENT_METHODS:
+            await db.close()
+            raise HTTPException(400, "payment_methods must be etransfer, card, or both")
+        await db.execute(
+            "UPDATE groups SET payment_methods=? WHERE id=?", (pm, gid)
+        )
+
+    if "etransfer_min_amount" in body:
+        try:
+            min_amt = float(body["etransfer_min_amount"])
+        except (TypeError, ValueError):
+            await db.close()
+            raise HTTPException(400, "Invalid etransfer_min_amount")
+        if min_amt <= 0:
+            await db.close()
+            raise HTTPException(400, "etransfer_min_amount must be positive")
+        await db.execute(
+            "UPDATE groups SET etransfer_min_amount=? WHERE id=?", (min_amt, gid)
+        )
+
+    if "etransfer_email" in body:
+        email = (body.get("etransfer_email") or "").strip().lower() or None
+        await db.execute(
+            "UPDATE groups SET etransfer_email=? WHERE id=?", (email, gid)
+        )
+
+    await db.commit()
+    cur = await db.execute("SELECT * FROM groups WHERE id=?", (gid,))
+    updated = await cur.fetchone()
+    await db.close()
+    return {
+        "ok": True,
+        "group": {
+            **group_public(updated),
+            "stripe_configured": bool(config.STRIPE_SECRET_KEY),
+        },
+    }
+
 
 @app.get("/api/admin/round")
 async def admin_round(x_init_data: str | None = Header(default=None)):
@@ -2433,6 +2543,28 @@ async def platform_patch_group(
             "UPDATE groups SET etransfer_email=? WHERE id=?", (email, group_id)
         )
 
+    if "payment_methods" in body:
+        pm = (body.get("payment_methods") or "both").lower()
+        if pm not in VALID_PAYMENT_METHODS:
+            await db.close()
+            raise HTTPException(400, "payment_methods must be etransfer, card, or both")
+        await db.execute(
+            "UPDATE groups SET payment_methods=? WHERE id=?", (pm, group_id)
+        )
+
+    if "etransfer_min_amount" in body:
+        try:
+            min_amt = float(body["etransfer_min_amount"])
+        except (TypeError, ValueError):
+            await db.close()
+            raise HTTPException(400, "Invalid etransfer_min_amount")
+        if min_amt <= 0:
+            await db.close()
+            raise HTTPException(400, "etransfer_min_amount must be positive")
+        await db.execute(
+            "UPDATE groups SET etransfer_min_amount=? WHERE id=?", (min_amt, group_id)
+        )
+
     if body.get("regenerate_slug") and name:
         base_slug = slugify(name)
         slug = base_slug
@@ -2545,11 +2677,17 @@ async def stripe_payment_intent(
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
     user, db = await _auth(x_init_data)
+    _, group = await _active_group_row(user, db)
+    opts = _payment_options_payload(group, stripe_configured=True)
+    if not opts["card_enabled"]:
+        await db.close()
+        raise HTTPException(400, "Card payments are not enabled for this group")
     body = await request.json()
-    amount = float(body.get("amount", 0))
-    if amount <= 0:
-        raise HTTPException(400, "Amount must be positive")
-    charge_amount = round(amount * 1.05, 2)  # 5% processing fee
+    amount = round(float(body.get("amount", 0)), 2)
+    if not is_valid_card_deposit_amount(amount):
+        await db.close()
+        raise HTTPException(400, "Card amount must be one of: $25, $50, $100, $250")
+    charge_amount = amount
     try:
         customer_id = await _get_or_create_customer(user, db)
         pi = stripe.PaymentIntent.create(
@@ -2585,11 +2723,17 @@ async def stripe_create_subscription(
     )
     if await cur.fetchone():
         raise HTTPException(400, "Already have an active subscription")
+    _, group = await _active_group_row(user, db)
+    opts = _payment_options_payload(group, stripe_configured=True)
+    if not opts["card_enabled"]:
+        await db.close()
+        raise HTTPException(400, "Card payments are not enabled for this group")
     body = await request.json()
-    amount = float(body.get("amount", 0))
-    if amount <= 0:
-        raise HTTPException(400, "Amount must be positive")
-    charge_amount = round(amount * 1.05, 2)  # 5% processing fee
+    amount = round(float(body.get("amount", 0)), 2)
+    if not is_valid_card_deposit_amount(amount):
+        await db.close()
+        raise HTTPException(400, "Card amount must be one of: $25, $50, $100, $250")
+    charge_amount = amount
     try:
         customer_id = await _get_or_create_customer(user, db)
         price = stripe.Price.create(
@@ -2653,16 +2797,23 @@ async def stripe_update_subscription(
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
     user, db = await _auth(x_init_data)
+    _, group = await _active_group_row(user, db)
+    opts = _payment_options_payload(group, stripe_configured=True)
+    if not opts["card_enabled"]:
+        await db.close()
+        raise HTTPException(400, "Card payments are not enabled for this group")
     body = await request.json()
-    new_amount = float(body.get("amount", 0))
-    if new_amount <= 0:
-        raise HTTPException(400, "Amount must be positive")
+    new_amount = round(float(body.get("amount", 0)), 2)
+    if not is_valid_card_deposit_amount(new_amount):
+        await db.close()
+        raise HTTPException(400, "Card amount must be one of: $25, $50, $100, $250")
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
         (user["telegram_id"],),
     )
     sub_row = await cur.fetchone()
     if sub_row is None:
+        await db.close()
         raise HTTPException(404, "No active subscription")
     stripe_sub = stripe.Subscription.retrieve(sub_row["stripe_sub_id"])
     product_id = stripe_sub["items"]["data"][0]["price"]["product"]
@@ -2760,7 +2911,7 @@ async def stripe_webhook(request: Request):
                 deposit_amount = float(stripe_sub.metadata.get("deposit_amount") or 0)
                 if user_id:
                     stored_amount = deposit_amount or (
-                        stripe_sub["items"]["data"][0]["price"]["unit_amount"] / 100 / 1.05
+                        stripe_sub["items"]["data"][0]["price"]["unit_amount"] / 100
                     )
                     await db.execute(
                         "INSERT OR IGNORE INTO stripe_subscriptions "

@@ -66,32 +66,61 @@ function PaymentForm({ onSuccess, onError }) {
 }
 
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
-const PRESETS = [3, 6, 9, 12]
+const CARD_AMOUNTS = [25, 50, 100, 250]
 
-function suggestTopUpAmount(shortfall) {
-  const needed = Math.max(3, Math.ceil(shortfall))
-  return PRESETS.find(p => p >= needed) ?? needed
+function suggestTopUpAmount(shortfall, presets) {
+  const list = presets?.length ? presets : CARD_AMOUNTS
+  const needed = Math.max(list[0], Math.ceil(shortfall))
+  return list.find(p => p >= needed) ?? list[list.length - 1]
 }
 
 function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
   const [tab, setTab]           = useState('once')
-  const [amount, setAmount]     = useState(18)
+  const [amount, setAmount]     = useState(50)
   const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
   const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
   const [stripePromise, setSP]  = useState(null)
   const [clientSecret, setCS]   = useState(null)
   const [etxInfo, setEtxInfo]   = useState(null)     // { admin_email, amount }
+  const [payOpts, setPayOpts]   = useState(null)
 
   useEffect(() => {
-    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); return }
-    if (initialAmount != null) setAmount(suggestTopUpAmount(initialAmount))
+    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); setPayOpts(null); return }
+    api.payment.options().then(opts => {
+      setPayOpts(opts)
+      const presets = opts.card_enabled ? opts.card_amounts : opts.etransfer_amounts
+      if (initialAmount != null) setAmount(suggestTopUpAmount(initialAmount, presets))
+      else setAmount(presets?.[1] ?? presets?.[0] ?? 50)
+      if (opts.card_enabled) setMethod('card')
+      else if (opts.etransfer_enabled) setMethod('etransfer')
+    }).catch(() => setPayOpts({ card_enabled: true, etransfer_enabled: true, card_amounts: CARD_AMOUNTS, etransfer_amounts: CARD_AMOUNTS }))
     api.stripe.config().then(cfg => setSP(loadStripe(cfg.publishable_key))).catch(() => {})
   }, [open, initialAmount])
 
   function resetMethod() { setCS(null); setStep('select') }
 
-  const fee       = method === 'card' ? +(amount * 0.05).toFixed(2) : 0
-  const chargeAmt = +(amount + fee).toFixed(2)
+  const cardAmounts = payOpts?.card_amounts ?? CARD_AMOUNTS
+  const etxAmounts = (payOpts?.etransfer_amounts?.length ? payOpts.etransfer_amounts : cardAmounts)
+  const presets = method === 'card' ? cardAmounts : etxAmounts
+  const chargeAmt = amount
+
+  useEffect(() => {
+    if (!payOpts || !presets.length) return
+    setAmount(prev => (presets.includes(prev) ? prev : suggestTopUpAmount(prev, presets)))
+  }, [method, payOpts])
+
+  const methodChoices = [
+    payOpts?.card_enabled && {
+      id: 'card', icon: '💳', name: 'Credit / Debit card',
+      note: `Charged $${chargeAmt.toFixed(2)} · instant`,
+    },
+    payOpts?.etransfer_enabled && {
+      id: 'etransfer', icon: '🏦', name: 'Interac e-Transfer',
+      note: payOpts.etransfer_min_amount
+        ? `Min $${payOpts.etransfer_min_amount} · 0–24 h approval`
+        : 'No fee · 0–24 h approval',
+    },
+  ].filter(Boolean)
 
   async function proceed() {
     if (method === 'card') {
@@ -166,7 +195,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
             style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 18, cursor: 'pointer', padding: '0 8px 0 0' }}>
             ←
           </button>
-          <span className="sheet-title">Pay ${chargeAmt.toFixed(2)} by card</span>
+          <span className="sheet-title">Pay ${amount.toFixed(2)} by card</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
@@ -177,7 +206,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
             />
           </Elements>
           <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
-            🔒 Secured by Stripe · ${amount.toFixed(2)} credit + ${fee.toFixed(2)} fee (5%)
+            🔒 Secured by Stripe · ${amount.toFixed(2)} credit
           </div>
         </div>
       </div>
@@ -194,7 +223,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          {/* One-time / Monthly tabs */}
+          {payOpts?.card_enabled && (
           <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 16 }}>
             {[['once','One-time'],['monthly','Monthly']].map(([k,l]) => (
               <button key={k} onClick={() => { setTab(k); setCS(null) }} style={{
@@ -205,33 +234,32 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
               }}>{l}</button>
             ))}
           </div>
+          )}
 
           {/* Amount presets */}
           <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Amount</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginBottom: 8 }}>
-            {PRESETS.map(p => (
-              <button key={p} onClick={() => setAmount(p)} style={{
-                padding: '14px 0', borderRadius: 12, cursor: 'pointer',
-                border: `.5px solid ${amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
-                background: amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
-                color: amount === p ? 'var(--tg)' : '#fff',
-                fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
-              }}>${p}</button>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--tx-3)', marginBottom: 16, textAlign: 'center', lineHeight: 1.5 }}>
-            {amount >= 9
-              ? `$${amount} = ${Math.floor(amount/9)}× combo (Lotto Max + 6/49)`
-              : amount === 6 ? '$6 = 1× Lotto Max ticket'
-              : '$3 = 1× 6/49 ticket'}
-          </div>
+          {presets.length === 0 ? (
+            <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16 }}>
+              No payment amounts available. Ask your trustee to configure payments.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(presets.length, 4)},1fr)`, gap: 8, marginBottom: 16 }}>
+              {presets.map(p => (
+                <button key={p} onClick={() => setAmount(p)} style={{
+                  padding: '14px 0', borderRadius: 12, cursor: 'pointer',
+                  border: `.5px solid ${amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                  background: amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
+                  color: amount === p ? 'var(--tg)' : '#fff',
+                  fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
+                }}>${p}</button>
+              ))}
+            </div>
+          )}
 
-          {/* Payment method */}
+          {methodChoices.length > 1 && (
+          <>
           <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Payment method</div>
-          {[
-            { id: 'card',      icon: '💳', name: 'Credit / Debit card', note: `+5% fee · charged $${chargeAmt.toFixed(2)}` },
-            { id: 'etransfer', icon: '🏦', name: 'Interac e-Transfer',  note: 'No fee · 0–24 h approval'                  },
-          ].map(m => (
+          {methodChoices.map(m => (
             <div key={m.id} onClick={() => setMethod(m.id)} style={{
               display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
               borderRadius: 12, cursor: 'pointer', marginBottom: 8,
@@ -250,6 +278,14 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
               }} />
             </div>
           ))}
+          </>
+          )}
+
+          {method === 'etransfer' && payOpts?.etransfer_min_amount && amount < payOpts.etransfer_min_amount && (
+            <p style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8, lineHeight: 1.5 }}>
+              Minimum e-transfer: ${payOpts.etransfer_min_amount}
+            </p>
+          )}
 
           {tab === 'monthly' && method === 'etransfer' && (
             <p style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 4, marginBottom: 8, lineHeight: 1.5 }}>
@@ -257,9 +293,11 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
             </p>
           )}
 
-          <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}>
+          <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}
+            disabled={!presets.length || methodChoices.length === 0
+              || (method === 'etransfer' && payOpts?.etransfer_min_amount && amount < payOpts.etransfer_min_amount)}>
             {method === 'card'
-              ? tab === 'once' ? `Pay $${chargeAmt.toFixed(2)} by card` : `Subscribe · $${chargeAmt.toFixed(2)}/mo`
+              ? tab === 'once' ? `Pay $${amount.toFixed(2)} by card` : `Subscribe · $${amount.toFixed(2)}/mo`
               : `Get e-transfer details`}
           </button>
         </div>

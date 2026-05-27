@@ -113,6 +113,9 @@ export const api = {
     put: (body)  => req('PUT', '/api/settings', body),
   },
   deposit:      (amount)       => req('POST', '/api/deposit', { amount }),
+  payment: {
+    options: () => req('GET', '/api/payment/options'),
+  },
   etransfer: {
     info:    ()       => req('GET',  '/api/etransfer/info'),
     deposit: (amount) => req('POST', '/api/etransfer/deposit', { amount }),
@@ -146,5 +149,9 @@ export const api = {
     resolve:      (id, action)    => req('POST', `/api/admin/deposits/${id}`, { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
+    group: {
+      get:   () => req('GET', '/api/admin/group'),
+      patch: (body) => req('PATCH', '/api/admin/group', body),
+    },
   },
 }
