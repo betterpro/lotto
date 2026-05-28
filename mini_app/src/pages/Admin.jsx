@@ -3,11 +3,14 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
-import { LOTTERY_TYPES, lotteryMeta } from '../lottery.js'
+import {
+  LOTTERY_TYPES, lotteryMeta, ticketLayout, emptyTicketRows,
+  parseTicketNumbers, ticketRowsValid, ticketRowsToNumbers, mergeScannedRows,
+} from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
-  CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon,
+  CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon, CameraIcon,
 } from '../components/Icon.jsx'
 
 function compressImage(file, maxPx = 1200, quality = 0.82) {
@@ -40,6 +43,31 @@ function fmtDate(s) {
   if (!s) return ''
   const d = new Date(s.includes('T') ? s : s + 'T00:00:00')
   return d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function TicketNumbersView({ ticketNumbers, lotteryType }) {
+  const layout = ticketLayout(lotteryType)
+  const rows = parseTicketNumbers(ticketNumbers)
+  if (!rows.length) return null
+  return (
+    <div className="col" style={{ gap: 10 }}>
+      {layout.rows.map((spec, i) => (
+        <div key={spec.label}>
+          {layout.rows.length > 1 && (
+            <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '.3px' }}>
+              {spec.label}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {(rows[i] || []).map((n, j) => (
+              <span key={`${i}-${j}`} className="ball md white">{n}</span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const TODAY = new Date().toISOString().slice(0, 10)
@@ -163,33 +191,49 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
 
 // ── Upload Ticket Sheet (with camera scan) ───────────────────────────────
 function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
-  const [nums,      setNums]      = useState(['', '', '', '', '', '', ''])
+  const layout = ticketLayout(round?.lottery_type)
+  const [rows,      setRows]      = useState(() => emptyTicketRows(layout))
   const [busy,      setBusy]      = useState(false)
   const [scanning,  setScanning]  = useState(false)
   const [preview,   setPreview]   = useState(null)   // data URL for thumbnail
   const [scanDate,  setScanDate]  = useState(null)   // draw date from scan
-  const fileRef = useRef()
+  const galleryRef = useRef()
+  const cameraRef  = useRef()
 
-  function setNum(i, v) {
-    const c = [...nums]
-    c[i] = v.replace(/\D/g, '').slice(0, 2)
-    setNums(c)
-    if (v.length >= 2 && i < 6) document.getElementById(`tn${i + 1}`)?.focus()
+  function setNum(rowIdx, colIdx, v, spec) {
+    const maxLen = spec.max >= 10 ? 2 : 1
+    const next = rows.map((row, ri) =>
+      ri === rowIdx
+        ? row.map((cell, ci) => (ci === colIdx ? v.replace(/\D/g, '').slice(0, maxLen) : cell))
+        : [...row],
+    )
+    setRows(next)
+    const val = v.replace(/\D/g, '').slice(0, maxLen)
+    if (val.length >= maxLen && colIdx < spec.count - 1) {
+      document.getElementById(`tn-${rowIdx}-${colIdx + 1}`)?.focus()
+    } else if (val.length >= maxLen && rowIdx < layout.rows.length - 1) {
+      document.getElementById(`tn-${rowIdx + 1}-0`)?.focus()
+    }
   }
 
-  async function handleFile(e) {
-    const file = e.target.files?.[0]
+  async function processImage(file) {
     if (!file) return
     const dataUrl = await compressImage(file)
     setPreview(dataUrl)
     setScanning(true)
     try {
       const res = await api.admin.scanTicket(round.id, dataUrl)
-      if (res.numbers?.length === 7) {
-        setNums(res.numbers.map(String))
-        showToast('Ticket scanned — numbers pre-filled!', 'success')
+      const scanned = res.rows?.length ? res.rows : (res.numbers?.length ? [res.numbers] : [])
+      if (scanned.length) {
+        const merged = mergeScannedRows(scanned, layout)
+        setRows(merged)
+        const filled = ticketRowsValid(merged, layout)
+        showToast(
+          filled ? 'All lines scanned — review and submit' : 'Partial scan — fill any missing numbers',
+          filled ? 'success' : 'info',
+        )
       } else {
-        showToast('Scan done — verify numbers manually', 'success')
+        showToast('Scan done — enter numbers manually', 'info')
       }
       if (res.draw_date) setScanDate(res.draw_date)
     } catch (err) {
@@ -199,12 +243,23 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     }
   }
 
-  const valid = nums.every(n => n && Number(n) >= 1 && Number(n) <= 50)
+  function handleFilePick(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    processImage(file)
+  }
+
+  const scanBtnStyle = {
+    flex: 1, gap: 8, background: 'rgba(46,166,255,.12)', color: 'var(--tg)',
+    border: '.5px solid rgba(46,166,255,.25)',
+  }
+
+  const valid = ticketRowsValid(rows, layout)
 
   async function submit() {
     setBusy(true)
     try {
-      await api.admin.uploadTicket(round.id, nums.map(Number))
+      await api.admin.uploadTicket(round.id, ticketRowsToNumbers(rows))
       showToast('Ticket numbers uploaded!', 'success')
       onUploaded()
       onClose()
@@ -224,9 +279,10 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
         </div>
         <div className="body">
 
-          {/* Camera scan section */}
-          <input ref={fileRef} type="file" accept="image/*" capture="environment"
-            style={{ display: 'none' }} onChange={handleFile} />
+          <input ref={galleryRef} type="file" accept="image/*"
+            style={{ display: 'none' }} onChange={handleFilePick} />
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment"
+            style={{ display: 'none' }} onChange={handleFilePick} />
 
           {preview ? (
             <div style={{ position: 'relative', marginBottom: 14 }}>
@@ -243,23 +299,38 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                 </div>
               )}
               {!scanning && (
-                <button onClick={() => fileRef.current?.click()}
-                  style={{
-                    position: 'absolute', bottom: 8, right: 8,
-                    background: 'rgba(46,166,255,.9)', color: '#fff',
-                    border: 'none', borderRadius: 8, padding: '5px 10px',
-                    fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                  }}>
-                  Rescan
-                </button>
+                <div style={{
+                  position: 'absolute', bottom: 8, left: 8, right: 8,
+                  display: 'flex', gap: 8,
+                }}>
+                  <button type="button" className="btn" disabled={scanning}
+                    onClick={() => cameraRef.current?.click()}
+                    style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700,
+                      background: 'rgba(46,166,255,.95)', color: '#fff', border: 'none', gap: 6 }}>
+                    <CameraIcon width={14} height={14} /> Retake
+                  </button>
+                  <button type="button" className="btn" disabled={scanning}
+                    onClick={() => galleryRef.current?.click()}
+                    style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700,
+                      background: 'rgba(13,20,27,.85)', color: '#fff', border: 'none', gap: 6 }}>
+                    <UploadIcon width={14} height={14} /> Replace
+                  </button>
+                </div>
               )}
             </div>
           ) : (
-            <button className="btn btn-block" onClick={() => fileRef.current?.click()}
-              style={{ background: 'rgba(46,166,255,.12)', color: 'var(--tg)', marginBottom: 14, gap: 8 }}>
-              <span style={{ fontSize: 20 }}>📷</span>
-              Scan ticket photo
-            </button>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              <button type="button" className="btn btn-block" disabled={scanning}
+                onClick={() => cameraRef.current?.click()} style={scanBtnStyle}>
+                <CameraIcon width={18} height={18} />
+                Take photo
+              </button>
+              <button type="button" className="btn btn-block" disabled={scanning}
+                onClick={() => galleryRef.current?.click()} style={scanBtnStyle}>
+                <UploadIcon width={18} height={18} />
+                Upload photo
+              </button>
+            </div>
           )}
 
           {scanDate && (
@@ -277,16 +348,41 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
-            Ticket numbers (1–50)
+            Ticket numbers
+            {round?.lottery_type === 'lotto_max' && (
+              <span style={{ fontWeight: 500, textTransform: 'none', color: 'var(--tx-3)' }}>
+                {' '}· 3 lines × 7 (1–52)
+              </span>
+            )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, marginBottom: 16 }}>
-            {nums.map((v, i) => (
-              <input key={i} id={`tn${i}`} value={v} maxLength={2}
-                inputMode="numeric"
-                onChange={e => setNum(i, e.target.value)}
-                className="input num-input"
-                style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
-              />
+          <div className="col" style={{ gap: 14, marginBottom: 16 }}>
+            {layout.rows.map((spec, rowIdx) => (
+              <div key={spec.label}>
+                {layout.rows.length > 1 && (
+                  <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
+                    textTransform: 'uppercase', letterSpacing: '.3px' }}>
+                    {spec.label} ({spec.min}–{spec.max})
+                  </div>
+                )}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: `repeat(${spec.count}, 1fr)`,
+                  gap: 6,
+                }}>
+                  {(rows[rowIdx] || []).map((v, colIdx) => (
+                    <input
+                      key={colIdx}
+                      id={`tn-${rowIdx}-${colIdx}`}
+                      value={v}
+                      maxLength={spec.max >= 10 ? 2 : 1}
+                      inputMode="numeric"
+                      onChange={e => setNum(rowIdx, colIdx, e.target.value, spec)}
+                      className="input num-input"
+                      style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
+                    />
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
 
@@ -731,11 +827,10 @@ export default function Admin({ user }) {
                   <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
                     Ticket numbers
                   </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {JSON.parse(round.ticket_numbers || '[]').map(n => (
-                      <span key={n} className="ball md white">{n}</span>
-                    ))}
-                  </div>
+                  <TicketNumbersView
+                    ticketNumbers={round.ticket_numbers}
+                    lotteryType={round.lottery_type}
+                  />
                 </>
               )}
 

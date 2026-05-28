@@ -35,7 +35,15 @@ from agreements import (
     build_trustee_from_user,
     lottery_label,
 )
-from lottery_types import LOTTERY_PREFERENCE_PRICES, lottery_share_price, valid_lottery_type
+from lottery_types import (
+    LOTTERY_PREFERENCE_PRICES,
+    build_scan_prompt,
+    format_ticket_numbers_message,
+    lottery_share_price,
+    normalize_ticket_rows,
+    valid_lottery_type,
+    validate_ticket_rows,
+)
 from group_context import (
     CARD_DEPOSIT_AMOUNTS,
     VALID_PAYMENT_METHODS,
@@ -1906,7 +1914,7 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
-    numbers = body.get("numbers", [])  # list of 7 ints
+    numbers = body.get("numbers", [])
 
     if round_id:
         cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
@@ -1919,15 +1927,21 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
     if not round_:
         raise HTTPException(400, "No suitable round found")
 
+    lottery_type = round_.get("lottery_type") or "lotto_max"
+    rows = normalize_ticket_rows(numbers, lottery_type)
+    if not validate_ticket_rows(rows, lottery_type):
+        await db.close()
+        raise HTTPException(400, "Enter all ticket numbers for every line on the ticket")
+
     await db.execute(
         "UPDATE rounds SET ticket_numbers=?, status='uploaded' WHERE id=?",
-        (json.dumps(numbers), round_["id"])
+        (json.dumps(rows), round_["id"])
     )
     await db.commit()
 
     # Notify participants: ticket purchased
     draw_date_str = round_["draw_date"] or "TBD"
-    nums_str = "  ".join(f"<b>{n}</b>" for n in numbers)
+    nums_str = format_ticket_numbers_message(rows, lottery_type)
     cur = await db.execute(
         "SELECT p.user_id FROM participations p WHERE p.round_id=?", (round_["id"],)
     )
@@ -1992,11 +2006,14 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
         await db.close()
         raise HTTPException(400, "No round found")
 
+    lottery_type = round_.get("lottery_type") or "lotto_max"
+    scan_prompt = build_scan_prompt(lottery_type)
+
     client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
     try:
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=512,
             messages=[{
                 "role": "user",
                 "content": [
@@ -2004,16 +2021,7 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
                         "type": "image",
                         "source": {"type": "base64", "media_type": media_type, "data": image_data},
                     },
-                    {
-                        "type": "text",
-                        "text": (
-                            "This is a Canadian Lotto Max lottery ticket. "
-                            "Extract and return ONLY a JSON object with no extra text:\n"
-                            "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
-                            "- numbers: array of exactly 7 integers 1-50 from the FIRST selection (null if not visible)\n"
-                            "Example: {\"draw_date\":\"2025-03-14\",\"numbers\":[3,14,22,31,38,45,49]}"
-                        ),
-                    },
+                    {"type": "text", "text": scan_prompt},
                 ],
             }],
         )
@@ -2044,15 +2052,17 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
     await db.commit()
     await db.close()
 
-    numbers = result.get("numbers")
-    if isinstance(numbers, list):
-        numbers = [int(n) for n in numbers if isinstance(n, (int, float)) and 1 <= int(n) <= 50][:7]
+    raw_rows = result.get("rows")
+    if not isinstance(raw_rows, list) and isinstance(result.get("numbers"), list):
+        raw_rows = [result.get("numbers")]
+    rows = normalize_ticket_rows(raw_rows or [], lottery_type)
 
     return {
         "ok": True,
         "round_id": round_["id"],
         "draw_date": result.get("draw_date"),
-        "numbers": numbers or [],
+        "rows": rows,
+        "numbers": rows[0] if rows else [],  # legacy clients
     }
 
 

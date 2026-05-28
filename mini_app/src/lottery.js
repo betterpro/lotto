@@ -24,3 +24,68 @@ export function lotteryMeta(type) {
 export function lotterySharePrice(type) {
   return lotteryMeta(type).price
 }
+
+/** Ticket row layout per game — keep in sync with lottery_types.py */
+export const TICKET_LAYOUTS = {
+  lotto_max: {
+    rows: [
+      { label: 'Line 1', count: 7, min: 1, max: 52 },
+      { label: 'Line 2', count: 7, min: 1, max: 52 },
+      { label: 'Line 3', count: 7, min: 1, max: 52 },
+    ],
+  },
+  '649': {
+    rows: [{ label: '6/49 numbers', count: 6, min: 1, max: 49 }],
+  },
+  daily_grand: {
+    rows: [
+      { label: 'Main numbers', count: 5, min: 1, max: 49 },
+      { label: 'Grand number', count: 1, min: 1, max: 7 },
+    ],
+  },
+}
+
+export function ticketLayout(type) {
+  return TICKET_LAYOUTS[type] || TICKET_LAYOUTS.lotto_max
+}
+
+export function emptyTicketRows(layout) {
+  return layout.rows.map(r => Array(r.count).fill(''))
+}
+
+/** @returns {string[][]} */
+export function parseTicketNumbers(raw) {
+  if (!raw) return []
+  let data
+  try { data = typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return [] }
+  if (!Array.isArray(data) || !data.length) return []
+  if (typeof data[0] === 'number') return [data.map(String)]
+  return data.map(row => (Array.isArray(row) ? row : []).map(String))
+}
+
+export function ticketRowsValid(rows, layout) {
+  return layout.rows.every((spec, i) => {
+    const row = rows[i] || []
+    if (row.length !== spec.count) return false
+    return row.every(n => {
+      const v = Number(n)
+      return Number.isInteger(v) && v >= spec.min && v <= spec.max
+    })
+  })
+}
+
+export function ticketRowsToNumbers(rows) {
+  return rows.map(row => row.map(n => Number(n)))
+}
+
+export function mergeScannedRows(scanned, layout) {
+  const base = emptyTicketRows(layout)
+  if (!scanned?.length) return base
+  return layout.rows.map((spec, i) => {
+    const src = scanned[i] || []
+    return Array.from({ length: spec.count }, (_, j) => {
+      const v = src[j]
+      return v != null && v !== '' ? String(v) : (base[i][j] || '')
+    })
+  })
+}
