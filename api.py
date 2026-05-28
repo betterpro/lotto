@@ -35,6 +35,7 @@ from agreements import (
     build_trustee_from_user,
     lottery_label,
 )
+from lottery_types import LOTTERY_PREFERENCE_PRICES, lottery_share_price, valid_lottery_type
 from group_context import (
     CARD_DEPOSIT_AMOUNTS,
     VALID_PAYMENT_METHODS,
@@ -433,7 +434,7 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
 
         # Use the share price matching user's preference, not necessarily the round's price
         shares = u["shares"]
-        amount = shares * _LOTTERY_SHARE_PRICE.get(pref, price_per_share)
+        amount = shares * lottery_share_price(pref, default=price_per_share)
 
         # Monthly participation limit
         cnt_cur = await db.execute("""
@@ -1538,7 +1539,7 @@ _SETTING_DEFAULTS = dict(
     notif_new_round=True, notif_reminder=True, notif_ticket=True, notif_results=True,
 )
 
-_LOTTERY_SHARE_PRICE = {"lotto_max": 6.0, "649": 3.0, "both": 9.0}
+_LOTTERY_SHARE_PRICE = LOTTERY_PREFERENCE_PRICES
 
 
 def _row_to_settings(row) -> dict:
@@ -1839,6 +1840,9 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     price_per_share = body.get("price_per_share") or 5.0
     draw_date = body.get("draw_date") or None
     lottery_type = body.get("lottery_type") or "lotto_max"
+    if not valid_lottery_type(lottery_type):
+        await db.close()
+        raise HTTPException(400, "Unknown lottery type")
     cur = await db.execute(
         """INSERT INTO rounds
            (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type, group_id)

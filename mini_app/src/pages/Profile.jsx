@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast.jsx'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
+import { LOTTERY_PREFS } from '../lottery.js'
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -97,12 +98,6 @@ const DAYS = [
   { v: null, label: 'Any'  },
   { v: 1,    label: 'Tue'  },
   { v: 4,    label: 'Fri'  },
-]
-
-const LOTTERY_PREFS = [
-  { v: 'lotto_max', label: 'Lotto Max', price: 6, tag: '$6/ticket' },
-  { v: '649',       label: '6/49',      price: 3, tag: '$3/ticket' },
-  { v: 'both',      label: 'Both',      price: 9, tag: '$9/draw'   },
 ]
 
 const DEFAULTS = {

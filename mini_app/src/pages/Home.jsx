@@ -6,6 +6,7 @@ import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
 import LiveRoundDeck from '../components/LiveRoundDeck.jsx'
 import { lotteryMeta } from '../lottery.js'
+import LotteryLogo from '../components/LotteryLogo.jsx'
 import { WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
@@ -610,8 +611,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
       </div>
 
       <div className="row gap-10" style={{ alignItems: 'center' }}>
-        <img src={lotto.logo} alt={lotto.name}
-          style={{ height: 44, width: 56, objectFit: 'contain', flexShrink: 0 }} />
+        <LotteryLogo type={round.lottery_type} height={44} style={{ width: 56, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           {jackpot > 0 ? (
             <>

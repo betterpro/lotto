@@ -29,15 +29,16 @@ def build_trustee_from_user(user: dict) -> dict:
         "email": user.get("email") or DEFAULT_TRUSTEE["email"],
     }
 
-_LOTTERY_LABELS = {
-    "lotto_max": "Lotto Max",
-    "649": "6/49",
-    "both": "Lotto Max & 6/49",
-}
+from lottery_types import lottery_label as _catalog_lottery_label
+
+_PREF_LABELS = {"both": "Lotto Max & 6/49"}
 
 
 def lottery_label(lottery_type: str | None) -> str:
-    return _LOTTERY_LABELS.get(lottery_type or "", lottery_type or "BCLC draw")
+    key = lottery_type or ""
+    if key in _PREF_LABELS:
+        return _PREF_LABELS[key]
+    return _catalog_lottery_label(lottery_type)
 
 
 def _format_address(street: str | None, city: str | None, province: str | None, postal: str | None) -> str:

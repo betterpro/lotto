@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 import { LOTTERY_TYPES, lotteryMeta } from '../lottery.js'
+import LotteryLogo from '../components/LotteryLogo.jsx'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon,
@@ -117,8 +118,7 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                       fontFamily: 'inherit', display: 'flex', flexDirection: 'column',
                       alignItems: 'center', gap: 8,
                     }}>
-                      <img src={lt.logo} alt={lt.name}
-                        style={{ height: 40, width: '100%', objectFit: 'contain' }} />
+                      <LotteryLogo type={lt.id} height={40} style={{ width: '100%' }} />
                       <div style={{ fontWeight: 700, fontSize: 13 }}>{lt.name}</div>
                       <div style={{
                         fontSize: 10, fontWeight: 500,
@@ -672,7 +672,7 @@ export default function Admin({ user }) {
                     fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
                     color: sel ? 'var(--tg)' : 'var(--tx-1)',
                   }}>
-                    <img src={meta.logo} alt={meta.name} style={{ height: 18, objectFit: 'contain' }} />
+                    <LotteryLogo type={r.lottery_type} height={18} style={{ width: 28 }} />
                     #{r.id}
                     {r.draw_date && <span style={{ color: 'var(--tx-3)', fontWeight: 500 }}>{r.draw_date.slice(5)}</span>}
                   </button>
@@ -684,11 +684,7 @@ export default function Admin({ user }) {
             <div className="card" style={{ marginBottom: 12 }}>
               <div className="row between" style={{ marginBottom: 12 }}>
                 <div className="row gap-8" style={{ alignItems: 'center' }}>
-                  <img
-                    src={lotteryMeta(round.lottery_type).logo}
-                    alt={lotteryMeta(round.lottery_type).name}
-                    style={{ height: 28, objectFit: 'contain' }}
-                  />
+                  <LotteryLogo type={round.lottery_type} height={28} style={{ width: 36 }} />
                   <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.id}</span>
                 </div>
                 <StatusPill status={ds} />
