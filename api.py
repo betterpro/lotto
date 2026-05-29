@@ -908,8 +908,8 @@ async def api_groups_list(x_init_data: str | None = Header(default=None)):
         groups.append({
             **member_group_public(m),
             "is_active": m["id"] == active_gid,
-            "link": f"https://t.me/{_bot_username}?start=g_{slug}",
-            "app_link": f"https://t.me/{_bot_username}?startapp=join_{slug}",
+            "link": f"https://t.me/{_bot_username}?startapp=join_{slug}",
+            "bot_link": f"https://t.me/{_bot_username}?start=g_{slug}",
         })
     return {"groups": groups, "active_group_id": active_gid}
 
@@ -960,11 +960,12 @@ async def api_invite(
     if not group:
         raise HTTPException(404, "Group not found")
     slug = group["slug"]
-    link = f"https://t.me/{_bot_username}?start=g_{slug}"
     app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}"
+    bot_link = f"https://t.me/{_bot_username}?start=g_{slug}"
     return {
-        "link": link,
+        "link": app_link,
         "app_link": app_link,
+        "bot_link": bot_link,
         "slug": slug,
         "group_id": gid,
         "group_name": group["name"],
@@ -2013,7 +2014,7 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
     try:
         msg = await client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=512,
+            max_tokens=1024,
             messages=[{
                 "role": "user",
                 "content": [

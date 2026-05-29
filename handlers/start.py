@@ -86,10 +86,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
     else:
         welcome = f"👋 Welcome back, *{user.first_name}*!"
-        if group_id and slug:
+        if slug:
             err, joined = await join_group_by_slug(conn, user.id, slug)
-            if not err and group_name:
-                welcome = f"👋 Welcome! You've joined *{group_name}*."
+            if not err and joined:
+                welcome = f"👋 Welcome! You've joined *{joined['name']}*."
             elif err:
                 welcome += f"\n\n⚠️ {err}"
 

@@ -228,12 +228,13 @@ async def show_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not group:
         await _reply(update, "Join a group in the app before inviting friends.", keyboard=main_menu())
         return
-    link = f"https://t.me/{bot_info.username}?start=g_{group['slug']}"
+    slug = group["slug"]
+    app_link = f"https://t.me/{bot_info.username}?startapp=join_{slug}"
     await _reply(
         update,
         f"🔗 *Invite a Friend*\n\n"
         f"Share this link to invite friends to *{group['name']}*:\n\n"
-        f"`{link}`",
+        f"`{app_link}`",
         keyboard=main_menu(),
     )
 

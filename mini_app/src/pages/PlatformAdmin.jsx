@@ -86,7 +86,7 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
 
   const slug = detail?.group?.slug
   const inviteUrl = slug && botUsername
-    ? `https://t.me/${botUsername}?start=g_${slug}` : null
+    ? `https://t.me/${botUsername}?startapp=join_${slug}` : null
 
   return (
     <Sheet open={!!groupId} onClose={onClose} title={detail?.group?.name || 'Group'}>

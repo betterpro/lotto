@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from './api.js'
 import BottomNav       from './components/BottomNav.jsx'
 import TelegramAvatar  from './components/TelegramAvatar.jsx'
@@ -51,8 +51,11 @@ export default function App() {
   const [error, setError] = useState(null)
   const [onboarded, setOnboarded] = useState(() => !!localStorage.getItem(ONB_KEY))
   const [inviteSlug] = useState(() => parseInviteSlug())
+  const [inviteJoinError, setInviteJoinError] = useState(null)
+  const inviteJoinAttempted = useRef(false)
 
   const loadUser = useCallback(() => {
+    setInviteJoinError(null)
     setError(null)
     setUser(null)
     api.me()
@@ -74,6 +77,23 @@ export default function App() {
       if (raw) api.beneficiary.save(JSON.parse(raw)).catch(() => {})
     } catch { /* ignore */ }
   }, [user])
+
+  useEffect(() => {
+    if (!user?.needs_invite || !inviteSlug || inviteJoinAttempted.current) return
+    inviteJoinAttempted.current = true
+    let cancelled = false
+    api.group.join(inviteSlug)
+      .then(() => {
+        if (!cancelled) {
+          localStorage.removeItem(INVITE_SLUG_KEY)
+          loadUser()
+        }
+      })
+      .catch(e => {
+        if (!cancelled) setInviteJoinError(e.message || 'Could not join group')
+      })
+    return () => { cancelled = true }
+  }, [user?.needs_invite, inviteSlug, loadUser])
 
   if (error) {
     const notInTelegram = error.includes('X-Init-Data') || error.includes('initData') || error.includes('bot first')
@@ -117,7 +137,15 @@ export default function App() {
   )
 
   if (user.needs_invite) {
-    return <NeedsInvite />
+    if (inviteSlug && !inviteJoinError) {
+      return (
+        <div className="center-screen">
+          <div className="spinner" />
+          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Joining your group…</span>
+        </div>
+      )
+    }
+    return <NeedsInvite error={inviteJoinError} />
   }
 
   const serverOnboarded = user.onboarded || !!user.agreement_accepted_at

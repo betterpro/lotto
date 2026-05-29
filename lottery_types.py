@@ -20,7 +20,9 @@ TICKET_LAYOUTS: dict[str, dict] = {
     },
     "649": {
         "label": "Lotto 6/49",
-        "rows": [{"label": "6/49 numbers", "count": 6, "min": 1, "max": 49}],
+        "repeat_row": {"label": "Classic", "count": 6, "min": 1, "max": 49},
+        "min_rows": 1,
+        "max_rows": 10,
     },
     "daily_grand": {
         "label": "Daily Grand",
@@ -60,6 +62,17 @@ def ticket_layout(lottery_type: str | None) -> dict:
     return TICKET_LAYOUTS.get(key, TICKET_LAYOUTS["lotto_max"])
 
 
+def is_variable_row_layout(layout: dict) -> bool:
+    return "repeat_row" in layout
+
+
+def row_spec_for_index(layout: dict, index: int) -> dict:
+    if is_variable_row_layout(layout):
+        base = layout["repeat_row"]
+        return {**base, "label": f"Line {index + 1}"}
+    return layout["rows"][index]
+
+
 def parse_ticket_numbers(raw) -> list[list]:
     if raw is None:
         return []
@@ -74,7 +87,11 @@ def parse_ticket_numbers(raw) -> list[list]:
         return []
     if isinstance(data[0], (int, float)):
         return [[int(n) for n in data]]
-    return [[int(n) for n in row if isinstance(n, (int, float))] for row in data if isinstance(row, list)]
+    return [
+        [int(n) for n in row if isinstance(n, (int, float))]
+        for row in data
+        if isinstance(row, list)
+    ]
 
 
 def _clamp_row(values: list, spec: dict) -> list[int]:
@@ -92,7 +109,18 @@ def _clamp_row(values: list, spec: dict) -> list[int]:
 def normalize_ticket_rows(numbers, lottery_type: str | None) -> list[list]:
     layout = ticket_layout(lottery_type)
     parsed = parse_ticket_numbers(numbers)
-    rows: list[list] = []
+
+    if is_variable_row_layout(layout):
+        spec = layout["repeat_row"]
+        max_rows = layout.get("max_rows", 10)
+        rows: list[list] = []
+        for row in parsed:
+            clamped = _clamp_row(row, spec)
+            if len(clamped) == spec["count"]:
+                rows.append(clamped)
+        return rows[:max_rows]
+
+    rows = []
     for i, spec in enumerate(layout["rows"]):
         src = parsed[i] if i < len(parsed) else []
         rows.append(_clamp_row(src, spec))
@@ -101,6 +129,21 @@ def normalize_ticket_rows(numbers, lottery_type: str | None) -> list[list]:
 
 def validate_ticket_rows(rows: list[list], lottery_type: str | None) -> bool:
     layout = ticket_layout(lottery_type)
+    if not rows:
+        return False
+
+    if is_variable_row_layout(layout):
+        spec = layout["repeat_row"]
+        min_rows = layout.get("min_rows", 1)
+        max_rows = layout.get("max_rows", 10)
+        if not (min_rows <= len(rows) <= max_rows):
+            return False
+        return all(
+            len(row) == spec["count"]
+            and all(spec["min"] <= int(n) <= spec["max"] for n in row)
+            for row in rows
+        )
+
     if len(rows) != len(layout["rows"]):
         return False
     for spec, row in zip(layout["rows"], rows):
@@ -114,14 +157,33 @@ def validate_ticket_rows(rows: list[list], lottery_type: str | None) -> bool:
 def format_ticket_numbers_message(rows: list[list], lottery_type: str | None) -> str:
     layout = ticket_layout(lottery_type)
     parts = []
-    for spec, row in zip(layout["rows"], rows):
-        nums = "  ".join(f"<b>{n}</b>" for n in row)
-        parts.append(f"{spec['label']}: {nums}")
+    if is_variable_row_layout(layout):
+        for i, row in enumerate(rows):
+            nums = "  ".join(f"<b>{n}</b>" for n in row)
+            parts.append(f"Line {i + 1}: {nums}")
+    else:
+        for spec, row in zip(layout["rows"], rows):
+            nums = "  ".join(f"<b>{n}</b>" for n in row)
+            parts.append(f"{spec['label']}: {nums}")
     return "\n".join(parts)
 
 
 def build_scan_prompt(lottery_type: str | None) -> str:
     layout = ticket_layout(lottery_type)
+
+    if lottery_type == "649":
+        return (
+            "This is a Canadian Lotto 6/49 lottery ticket. "
+            "Extract EVERY horizontal row under the CLASSIC DRAW section. "
+            "Each classic row has exactly 6 main numbers from 1 to 49 (ignore leading zeros, e.g. 05 → 5). "
+            "Do NOT include Gold Ball Draw serial codes (10-digit codes like 09533128-01). "
+            "Return ONLY a JSON object with no extra text:\n"
+            "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
+            "- rows: array of arrays — one inner array per classic draw line, top to bottom, "
+            "each with exactly 6 integers\n"
+            'Example: {"draw_date":"2026-05-27","rows":[[10,14,22,25,44,45],[5,10,12,27,32,42],[13,14,27,35,41,45]]}'
+        )
+
     row_lines = "\n".join(
         f"  - {r['label']}: exactly {r['count']} integers from {r['min']} to {r['max']}"
         for r in layout["rows"]

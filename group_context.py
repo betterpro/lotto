@@ -184,6 +184,12 @@ async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | Non
 
 async def enrich_user_context(db, user: dict) -> dict:
     memberships = await get_user_groups(db, user["telegram_id"])
+    if not memberships and user.get("group_id"):
+        group = await get_group(db, user["group_id"])
+        if group and group["status"] == "active":
+            role = "trustee" if group["trustee_user_id"] == user["telegram_id"] else "member"
+            await add_group_member(db, group["id"], user["telegram_id"], role)
+            memberships = await get_user_groups(db, user["telegram_id"])
     active_gid = await ensure_active_group_id(db, user)
     group_row = await get_group(db, active_gid) if active_gid else None
     if not group_row and memberships:

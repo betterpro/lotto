@@ -35,7 +35,9 @@ export const TICKET_LAYOUTS = {
     ],
   },
   '649': {
-    rows: [{ label: '6/49 numbers', count: 6, min: 1, max: 49 }],
+    repeatRow: { label: 'Classic', count: 6, min: 1, max: 49 },
+    minRows: 1,
+    maxRows: 10,
   },
   daily_grand: {
     rows: [
@@ -49,7 +51,21 @@ export function ticketLayout(type) {
   return TICKET_LAYOUTS[type] || TICKET_LAYOUTS.lotto_max
 }
 
+export function isVariableRowLayout(layout) {
+  return !!layout.repeatRow
+}
+
+export function rowSpecForIndex(layout, index) {
+  if (isVariableRowLayout(layout)) {
+    return { ...layout.repeatRow, label: `Line ${index + 1}` }
+  }
+  return layout.rows[index]
+}
+
 export function emptyTicketRows(layout) {
+  if (isVariableRowLayout(layout)) {
+    return [Array(layout.repeatRow.count).fill('')]
+  }
   return layout.rows.map(r => Array(r.count).fill(''))
 }
 
@@ -64,6 +80,20 @@ export function parseTicketNumbers(raw) {
 }
 
 export function ticketRowsValid(rows, layout) {
+  if (!rows.length) return false
+  if (isVariableRowLayout(layout)) {
+    const spec = layout.repeatRow
+    const min = layout.minRows ?? 1
+    const max = layout.maxRows ?? 10
+    if (rows.length < min || rows.length > max) return false
+    return rows.every(row =>
+      row.length === spec.count &&
+      row.every(n => {
+        const v = Number(n)
+        return Number.isInteger(v) && v >= spec.min && v <= spec.max
+      }),
+    )
+  }
   return layout.rows.every((spec, i) => {
     const row = rows[i] || []
     if (row.length !== spec.count) return false
@@ -79,13 +109,36 @@ export function ticketRowsToNumbers(rows) {
 }
 
 export function mergeScannedRows(scanned, layout) {
-  const base = emptyTicketRows(layout)
-  if (!scanned?.length) return base
+  if (!scanned?.length) return emptyTicketRows(layout)
+
+  if (isVariableRowLayout(layout)) {
+    const spec = layout.repeatRow
+    const max = layout.maxRows ?? 10
+    return scanned.slice(0, max).map(row =>
+      Array.from({ length: spec.count }, (_, j) => {
+        const v = row[j]
+        return v != null && v !== '' ? String(v) : ''
+      }),
+    )
+  }
+
   return layout.rows.map((spec, i) => {
     const src = scanned[i] || []
     return Array.from({ length: spec.count }, (_, j) => {
       const v = src[j]
-      return v != null && v !== '' ? String(v) : (base[i][j] || '')
+      return v != null && v !== '' ? String(v) : ''
     })
   })
+}
+
+export function addTicketRow(layout, rows) {
+  if (!isVariableRowLayout(layout)) return rows
+  const max = layout.maxRows ?? 10
+  if (rows.length >= max) return rows
+  return [...rows, Array(layout.repeatRow.count).fill('')]
+}
+
+export function removeTicketRow(layout, rows, index) {
+  if (!isVariableRowLayout(layout) || rows.length <= (layout.minRows ?? 1)) return rows
+  return rows.filter((_, i) => i !== index)
 }

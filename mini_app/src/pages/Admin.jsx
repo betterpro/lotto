@@ -6,8 +6,10 @@ import TelegramAvatar from '../components/TelegramAvatar.jsx'
 import {
   LOTTERY_TYPES, lotteryMeta, ticketLayout, emptyTicketRows,
   parseTicketNumbers, ticketRowsValid, ticketRowsToNumbers, mergeScannedRows,
+  isVariableRowLayout, rowSpecForIndex, addTicketRow, removeTicketRow,
 } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
+import CameraCapture from '../components/CameraCapture.jsx'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon, CameraIcon,
@@ -45,27 +47,53 @@ function fmtDate(s) {
   return d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function TicketNumbersView({ ticketNumbers, lotteryType }) {
+function TicketNumbersView({ ticketNumbers, lotteryType, selectable, selectedMain = [], bonus, pickBonus, onPick }) {
   const layout = ticketLayout(lotteryType)
   const rows = parseTicketNumbers(ticketNumbers)
   if (!rows.length) return null
+  const multi = isVariableRowLayout(layout) || layout.rows.length > 1
+  const mainSet = new Set(selectedMain.map(Number))
+  const bonusN = bonus ? Number(bonus) : null
+
+  function ballClass(n) {
+    const v = Number(n)
+    if (bonusN === v) return 'bonus'
+    if (mainSet.has(v)) return 'match'
+    return 'white'
+  }
+
   return (
     <div className="col" style={{ gap: 10 }}>
-      {layout.rows.map((spec, i) => (
-        <div key={spec.label}>
-          {layout.rows.length > 1 && (
-            <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
-              textTransform: 'uppercase', letterSpacing: '.3px' }}>
-              {spec.label}
+      {rows.map((row, i) => {
+        const spec = rowSpecForIndex(layout, i)
+        return (
+          <div key={`${spec.label}-${i}`}>
+            {multi && (
+              <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
+                textTransform: 'uppercase', letterSpacing: '.3px' }}>
+                {spec.label}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {row.map((n, j) => {
+                const cls = ballClass(n)
+                if (selectable) {
+                  return (
+                    <button key={`${i}-${j}`} type="button" onClick={() => onPick(n)}
+                      style={{
+                        border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+                        opacity: pickBonus && cls === 'white' ? 0.85 : 1,
+                      }}>
+                      <span className={`ball md ${cls}`}>{n}</span>
+                    </button>
+                  )
+                }
+                return <span key={`${i}-${j}`} className={`ball md ${cls}`}>{n}</span>
+              })}
             </div>
-          )}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {(rows[i] || []).map((n, j) => (
-              <span key={`${i}-${j}`} className="ball md white">{n}</span>
-            ))}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -197,8 +225,9 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   const [scanning,  setScanning]  = useState(false)
   const [preview,   setPreview]   = useState(null)   // data URL for thumbnail
   const [scanDate,  setScanDate]  = useState(null)   // draw date from scan
+  const [cameraOpen, setCameraOpen] = useState(false)
   const galleryRef = useRef()
-  const cameraRef  = useRef()
+  const cameraFileRef = useRef()
 
   function setNum(rowIdx, colIdx, v, spec) {
     const maxLen = spec.max >= 10 ? 2 : 1
@@ -211,14 +240,13 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     const val = v.replace(/\D/g, '').slice(0, maxLen)
     if (val.length >= maxLen && colIdx < spec.count - 1) {
       document.getElementById(`tn-${rowIdx}-${colIdx + 1}`)?.focus()
-    } else if (val.length >= maxLen && rowIdx < layout.rows.length - 1) {
+    } else if (val.length >= maxLen && rowIdx < rows.length - 1) {
       document.getElementById(`tn-${rowIdx + 1}-0`)?.focus()
     }
   }
 
-  async function processImage(file) {
-    if (!file) return
-    const dataUrl = await compressImage(file)
+  async function processDataUrl(dataUrl) {
+    if (!dataUrl) return
     setPreview(dataUrl)
     setScanning(true)
     try {
@@ -228,8 +256,11 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
         const merged = mergeScannedRows(scanned, layout)
         setRows(merged)
         const filled = ticketRowsValid(merged, layout)
+        const n = merged.length
         showToast(
-          filled ? 'All lines scanned — review and submit' : 'Partial scan — fill any missing numbers',
+          filled
+            ? `Scanned ${n} line${n === 1 ? '' : 's'} — review and submit`
+            : `Scanned ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
           filled ? 'success' : 'info',
         )
       } else {
@@ -243,10 +274,23 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     }
   }
 
+  async function processImage(file) {
+    if (!file) return
+    await processDataUrl(await compressImage(file))
+  }
+
   function handleFilePick(e) {
     const file = e.target.files?.[0]
     e.target.value = ''
     processImage(file)
+  }
+
+  function openCamera() {
+    if (navigator.mediaDevices?.getUserMedia) {
+      setCameraOpen(true)
+      return
+    }
+    cameraFileRef.current?.click()
   }
 
   const scanBtnStyle = {
@@ -255,6 +299,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   }
 
   const valid = ticketRowsValid(rows, layout)
+  const variableRows = isVariableRowLayout(layout)
 
   async function submit() {
     setBusy(true)
@@ -281,8 +326,19 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
 
           <input ref={galleryRef} type="file" accept="image/*"
             style={{ display: 'none' }} onChange={handleFilePick} />
-          <input ref={cameraRef} type="file" accept="image/*" capture="environment"
+          <input ref={cameraFileRef} type="file" accept="image/*" capture="environment"
             style={{ display: 'none' }} onChange={handleFilePick} />
+
+          {cameraOpen && (
+            <CameraCapture
+              onClose={() => setCameraOpen(false)}
+              onCapture={dataUrl => {
+                setCameraOpen(false)
+                processDataUrl(dataUrl)
+              }}
+              onError={msg => showToast(msg, 'error')}
+            />
+          )}
 
           {preview ? (
             <div style={{ position: 'relative', marginBottom: 14 }}>
@@ -304,7 +360,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                   display: 'flex', gap: 8,
                 }}>
                   <button type="button" className="btn" disabled={scanning}
-                    onClick={() => cameraRef.current?.click()}
+                    onClick={openCamera}
                     style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700,
                       background: 'rgba(46,166,255,.95)', color: '#fff', border: 'none', gap: 6 }}>
                     <CameraIcon width={14} height={14} /> Retake
@@ -321,7 +377,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
           ) : (
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
               <button type="button" className="btn btn-block" disabled={scanning}
-                onClick={() => cameraRef.current?.click()} style={scanBtnStyle}>
+                onClick={openCamera} style={scanBtnStyle}>
                 <CameraIcon width={18} height={18} />
                 Take photo
               </button>
@@ -354,36 +410,58 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                 {' '}· 3 lines × 7 (1–52)
               </span>
             )}
+            {round?.lottery_type === '649' && (
+              <span style={{ fontWeight: 500, textTransform: 'none', color: 'var(--tx-3)' }}>
+                {' '}· classic draw lines × 6 (1–49)
+              </span>
+            )}
           </div>
-          <div className="col" style={{ gap: 14, marginBottom: 16 }}>
-            {layout.rows.map((spec, rowIdx) => (
-              <div key={spec.label}>
-                {layout.rows.length > 1 && (
-                  <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
-                    textTransform: 'uppercase', letterSpacing: '.3px' }}>
-                    {spec.label} ({spec.min}–{spec.max})
+          <div className="col" style={{ gap: 14, marginBottom: 16, maxHeight: 320, overflowY: 'auto' }}>
+            {rows.map((_, rowIdx) => {
+              const spec = rowSpecForIndex(layout, rowIdx)
+              return (
+                <div key={`row-${rowIdx}`}>
+                  <div className="row between" style={{ marginBottom: 6 }}>
+                    <div style={{ fontSize: 10, color: 'var(--tx-3)', fontWeight: 600,
+                      textTransform: 'uppercase', letterSpacing: '.3px' }}>
+                      {spec.label} ({spec.min}–{spec.max})
+                    </div>
+                    {variableRows && rows.length > 1 && (
+                      <button type="button" onClick={() => setRows(removeTicketRow(layout, rows, rowIdx))}
+                        style={{ background: 'none', border: 'none', color: 'var(--danger)',
+                          fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                        Remove
+                      </button>
+                    )}
                   </div>
-                )}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: `repeat(${spec.count}, 1fr)`,
-                  gap: 6,
-                }}>
-                  {(rows[rowIdx] || []).map((v, colIdx) => (
-                    <input
-                      key={colIdx}
-                      id={`tn-${rowIdx}-${colIdx}`}
-                      value={v}
-                      maxLength={spec.max >= 10 ? 2 : 1}
-                      inputMode="numeric"
-                      onChange={e => setNum(rowIdx, colIdx, e.target.value, spec)}
-                      className="input num-input"
-                      style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
-                    />
-                  ))}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${spec.count}, 1fr)`,
+                    gap: 6,
+                  }}>
+                    {(rows[rowIdx] || []).map((v, colIdx) => (
+                      <input
+                        key={colIdx}
+                        id={`tn-${rowIdx}-${colIdx}`}
+                        value={v}
+                        maxLength={spec.max >= 10 ? 2 : 1}
+                        inputMode="numeric"
+                        onChange={e => setNum(rowIdx, colIdx, e.target.value, spec)}
+                        className="input num-input"
+                        style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
+            {variableRows && rows.length < (layout.maxRows ?? 10) && (
+              <button type="button" className="btn btn-block"
+                style={{ background: 'var(--surface-2)', fontSize: 13 }}
+                onClick={() => setRows(addTicketRow(layout, rows))}>
+                <PlusIcon width={14} height={14} /> Add line
+              </button>
+            )}
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
@@ -403,10 +481,17 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   )
 }
 
+const WINNING_MAIN_COUNT = 7
+
 // ── Enter Results Sheet ───────────────────────────────────────────────────
 function ResultsSheet({ round, onClose, onResults, showToast }) {
-  const [nums,       setNums]       = useState(['', '', '', '', '', '', ''])
+  const ticketRows = parseTicketNumbers(round?.ticket_numbers)
+  const hasTickets = ticketRows.length > 0
+
+  const [mainNums,   setMainNums]   = useState([])
+  const [nums,       setNums]       = useState(() => Array(WINNING_MAIN_COUNT).fill(''))
   const [bonus,      setBonus]      = useState('')
+  const [pickBonus,  setPickBonus]  = useState(false)
   const [totalPrize, setTotalPrize] = useState('')
   const [busy,       setBusy]       = useState(false)
 
@@ -414,19 +499,51 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     const c = [...nums]
     c[i] = v.replace(/\D/g, '').slice(0, 2)
     setNums(c)
-    if (v.length >= 2 && i < 6) {
+    if (v.length >= 2 && i < WINNING_MAIN_COUNT - 1) {
       document.getElementById(`wn${i + 1}`)?.focus()
     }
   }
 
-  const valid = nums.every(n => n && Number(n) >= 1) &&
+  function pickFromTicket(n) {
+    const v = Number(n)
+    if (!Number.isFinite(v) || v < 1) return
+
+    if (pickBonus) {
+      setBonus(String(v))
+      setPickBonus(false)
+      setMainNums(prev => prev.filter(x => x !== v))
+      return
+    }
+
+    if (mainNums.includes(v)) {
+      setMainNums(prev => prev.filter(x => x !== v))
+      return
+    }
+    if (Number(bonus) === v) {
+      setBonus('')
+      return
+    }
+    if (mainNums.length < WINNING_MAIN_COUNT) {
+      setMainNums(prev => [...prev, v])
+    }
+  }
+
+  function clearBonus() {
+    setBonus('')
+    setPickBonus(false)
+  }
+
+  const winningNumbers = hasTickets ? mainNums : nums.map(Number)
+  const valid = (hasTickets
+    ? mainNums.length === WINNING_MAIN_COUNT
+    : nums.every(n => n && Number(n) >= 1)) &&
     bonus && Number(bonus) >= 1 &&
     totalPrize && Number(totalPrize) >= 0
 
   async function submit() {
     setBusy(true)
     try {
-      await api.admin.results(round.id, nums.map(Number), Number(bonus), Number(totalPrize))
+      await api.admin.results(round.id, winningNumbers, Number(bonus), Number(totalPrize))
       showToast('Results entered — prizes distributed!', 'success')
       onResults()
       onClose()
@@ -444,38 +561,87 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
         </div>
         <div className="body">
           <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
-            Enter the 7 winning numbers and bonus. Prize allocation is computed
-            automatically and distributed to participants proportionally.
+            {hasTickets
+              ? 'Tap numbers from the ticket to set the 7 winning numbers and bonus. Prize allocation is computed automatically.'
+              : 'Enter the 7 winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.'}
           </p>
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
             Winning numbers
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, marginBottom: 12 }}>
-            {nums.map((v, i) => (
-              <input key={i} id={`wn${i}`} value={v} placeholder="—" maxLength={2}
-                inputMode="numeric"
-                onChange={e => setNum(i, e.target.value)}
-                className="input num-input"
-                style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
+
+          {hasTickets ? (
+            <>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                {Array.from({ length: WINNING_MAIN_COUNT }, (_, i) => {
+                  const n = mainNums[i]
+                  return n != null ? (
+                    <button key={i} type="button" onClick={() => pickFromTicket(n)}
+                      style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+                      <span className="ball md match">{n}</span>
+                    </button>
+                  ) : (
+                    <span key={i} className="ball md def" style={{ opacity: 0.35 }}>—</span>
+                  )
+                })}
+                <span style={{ color: 'var(--tx-3)', fontSize: 18, fontWeight: 700 }}>+</span>
+                <button type="button" onClick={() => (bonus ? clearBonus() : setPickBonus(true))}
+                  style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
+                  <span className={`ball md ${bonus ? 'bonus' : 'def'}`}
+                    style={pickBonus ? { outline: '2px solid var(--gold)', outlineOffset: 2 } : undefined}>
+                    {bonus || '—'}
+                  </span>
+                </button>
+              </div>
+              {pickBonus && (
+                <p style={{ fontSize: 12, color: 'var(--gold)', marginBottom: 10 }}>
+                  Tap a ticket number for the bonus
+                </p>
+              )}
+
+              <div style={{ fontSize: 11, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.3px',
+                            textTransform: 'uppercase', marginBottom: 8 }}>
+                Ticket numbers
+              </div>
+              <TicketNumbersView
+                ticketNumbers={round.ticket_numbers}
+                lotteryType={round.lottery_type}
+                selectable
+                selectedMain={mainNums}
+                bonus={bonus}
+                pickBonus={pickBonus}
+                onPick={pickFromTicket}
               />
-            ))}
-          </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${WINNING_MAIN_COUNT}, 1fr)`, gap: 6, marginBottom: 12 }}>
+                {nums.map((v, i) => (
+                  <input key={i} id={`wn${i}`} value={v} placeholder="—" maxLength={2}
+                    inputMode="numeric"
+                    onChange={e => setNum(i, e.target.value)}
+                    className="input num-input"
+                    style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
+                  />
+                ))}
+              </div>
+
+              <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+                            textTransform: 'uppercase', marginBottom: 8 }}>
+                Bonus number
+              </div>
+              <input value={bonus} onChange={e => setBonus(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                placeholder="—" maxLength={2} inputMode="numeric"
+                className="input num-input"
+                style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700,
+                         height: 44, marginBottom: 16 }}
+              />
+            </>
+          )}
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
-                        textTransform: 'uppercase', marginBottom: 8 }}>
-            Bonus number
-          </div>
-          <input value={bonus} onChange={e => setBonus(e.target.value.replace(/\D/g, '').slice(0, 2))}
-            placeholder="—" maxLength={2} inputMode="numeric"
-            className="input num-input"
-            style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700,
-                     height: 44, marginBottom: 16 }}
-          />
-
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
-                        textTransform: 'uppercase', marginBottom: 8 }}>
+                        textTransform: 'uppercase', marginBottom: 8, marginTop: hasTickets ? 16 : 0 }}>
             Total prize won by this pool (CAD)
           </div>
           <input value={totalPrize} onChange={e => setTotalPrize(e.target.value)}
