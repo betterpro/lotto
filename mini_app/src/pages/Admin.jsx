@@ -493,6 +493,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const [bonus,      setBonus]      = useState('')
   const [pickBonus,  setPickBonus]  = useState(false)
   const [totalPrize, setTotalPrize] = useState('')
+  const [freeTickets, setFreeTickets] = useState('')
   const [busy,       setBusy]       = useState(false)
 
   function setNum(i, v) {
@@ -534,16 +535,19 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   }
 
   const winningNumbers = hasTickets ? mainNums : nums.map(Number)
+  const cashPrize = totalPrize === '' ? 0 : Number(totalPrize)
+  const freeTicketCount = freeTickets === '' ? 0 : Number(freeTickets)
   const valid = (hasTickets
     ? mainNums.length === WINNING_MAIN_COUNT
     : nums.every(n => n && Number(n) >= 1)) &&
     bonus && Number(bonus) >= 1 &&
-    totalPrize && Number(totalPrize) >= 0
+    (cashPrize >= 0 && freeTicketCount >= 0) &&
+    (cashPrize > 0 || freeTicketCount > 0)
 
   async function submit() {
     setBusy(true)
     try {
-      await api.admin.results(round.id, winningNumbers, Number(bonus), Number(totalPrize))
+      await api.admin.results(round.id, winningNumbers, Number(bonus), cashPrize, freeTicketCount)
       showToast('Results entered — prizes distributed!', 'success')
       onResults()
       onClose()
@@ -642,12 +646,25 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8, marginTop: hasTickets ? 16 : 0 }}>
-            Total prize won by this pool (CAD)
+            Cash prize (CAD)
           </div>
           <input value={totalPrize} onChange={e => setTotalPrize(e.target.value)}
-            placeholder="0.00" type="number" inputMode="decimal"
+            placeholder="0.00" type="number" inputMode="decimal" min="0"
             className="input mono" style={{ marginBottom: 16 }}
           />
+
+          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+                        textTransform: 'uppercase', marginBottom: 8 }}>
+            Free tickets won
+          </div>
+          <input value={freeTickets} onChange={e => setFreeTickets(e.target.value.replace(/\D/g, ''))}
+            placeholder="0" type="number" inputMode="numeric" min="0"
+            className="input mono" style={{ marginBottom: 8 }}
+          />
+          <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+            Enter cash and/or free tickets. Free-ticket handling follows your group setting
+            (next-round auto-enroll or cash credit from your balance).
+          </p>
 
           <div className="card" style={{ marginBottom: 16 }}>
             <SummaryRow k="Round"        v={`#${round?.id}`} mono />
@@ -671,6 +688,7 @@ function PaymentsTab({ showToast }) {
   const [pm, setPm] = useState('both')
   const [minAmt, setMinAmt] = useState('25')
   const [email, setEmail] = useState('')
+  const [freeTicketMode, setFreeTicketMode] = useState('next_round')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -681,6 +699,7 @@ function PaymentsTab({ showToast }) {
         setPm(g.payment_methods || 'both')
         setMinAmt(String(g.etransfer_min_amount ?? 25))
         setEmail(g.etransfer_email || '')
+        setFreeTicketMode(g.free_ticket_mode || 'next_round')
       })
       .catch(err => showToast(err.message, 'error'))
   }, [showToast])
@@ -692,6 +711,7 @@ function PaymentsTab({ showToast }) {
         payment_methods: pm,
         etransfer_min_amount: Number(minAmt) || 25,
         etransfer_email: email.trim() || null,
+        free_ticket_mode: freeTicketMode,
       })
       setGroup(r.group)
       showToast('Payment settings saved', 'success')
@@ -711,6 +731,19 @@ function PaymentsTab({ showToast }) {
     { v: 'both', label: 'Card & e-Transfer' },
     { v: 'card', label: 'Card only' },
     { v: 'etransfer', label: 'E-Transfer only' },
+  ]
+
+  const freeTicketOptions = [
+    {
+      v: 'next_round',
+      label: 'Use in next round',
+      hint: 'Winners are auto-enrolled in the next round of the same game. All free tickets are applied as shares — no credit charged.',
+    },
+    {
+      v: 'cash_credit',
+      label: 'Convert to credit',
+      hint: 'Ticket value (by game price) is deducted from your trustee balance and credited to winners by pool share.',
+    },
   ]
 
   return (
@@ -756,8 +789,32 @@ function PaymentsTab({ showToast }) {
         )}
       </div>
 
+      <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
+        <FieldLabel label="Free ticket prizes">
+          <p style={{ margin: '0 0 4px', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+            Applies to every round in this group when you enter free tickets as a prize.
+          </p>
+          <div className="col" style={{ gap: 8 }}>
+            {freeTicketOptions.map(o => (
+              <button key={o.v} type="button" onClick={() => setFreeTicketMode(o.v)} style={{
+                padding: '12px 14px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                border: `.5px solid ${freeTicketMode === o.v ? 'var(--gold)' : 'var(--hairline-2)'}`,
+                background: freeTicketMode === o.v ? 'rgba(255,193,7,.1)' : 'var(--bg-3)',
+                color: freeTicketMode === o.v ? 'var(--gold)' : '#fff',
+                fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+              }}>
+                <div>{o.label}</div>
+                <div style={{ fontSize: 12, fontWeight: 400, color: 'var(--tx-3)', marginTop: 4, lineHeight: 1.45 }}>
+                  {o.hint}
+                </div>
+              </button>
+            ))}
+          </div>
+        </FieldLabel>
+      </div>
+
       <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>
-        {busy ? 'Saving…' : 'Save payment settings'}
+        {busy ? 'Saving…' : 'Save settings'}
       </button>
     </div>
   )
@@ -884,7 +941,7 @@ export default function Admin({ user }) {
           { id: 'round',    label: 'Round'   },
           { id: 'deposits', label: pendingCount ? `Deposits (${pendingCount})` : 'Deposits' },
           { id: 'members',  label: 'Members' },
-          { id: 'payments', label: 'Payments' },
+          { id: 'payments', label: 'Settings' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{

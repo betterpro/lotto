@@ -60,7 +60,7 @@ export function AgreementSheet({ kind, roundId, title, onClose }) {
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()} style={{ maxHeight: '88dvh' }}>
+      <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
           <span className="sheet-title">{title || doc?.title || 'Agreement'}</span>

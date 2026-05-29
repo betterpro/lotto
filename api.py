@@ -44,6 +44,12 @@ from lottery_types import (
     valid_lottery_type,
     validate_ticket_rows,
 )
+from free_tickets import (
+    apply_pending_free_tickets,
+    distribute_integer_shares,
+    free_ticket_cash_value,
+    normalize_free_ticket_mode,
+)
 from group_context import (
     CARD_DEPOSIT_AMOUNTS,
     VALID_PAYMENT_METHODS,
@@ -145,6 +151,7 @@ def display_status(
     *,
     my_prize: float | None = None,
     my_stake: float | None = None,
+    my_free_tickets: int | None = None,
     winning_numbers=None,
     drawn_at: str | None = None,
 ) -> str:
@@ -157,7 +164,7 @@ def display_status(
     """
     if results_finalized(status, winning_numbers, drawn_at):
         if my_stake:
-            if (my_prize or 0) > 0:
+            if (my_prize or 0) > 0 or (my_free_tickets or 0) > 0:
                 return "WON"
             return "LOST"
         return "REVEALED"
@@ -1278,6 +1285,7 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["my_stake"]  = my["amount"] if my else None
     rd["my_shares"] = (my.get("shares") if my else None) or (round(my["amount"] / (rd.get("price_per_share") or 5)) if my else None)
     rd["my_prize"]  = my["prize"]  if my else None
+    rd["my_free_tickets"] = (my.get("free_tickets_awarded") or 0) if my else None
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
@@ -1286,6 +1294,7 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["display_status"] = display_status(
         rd["status"], rd.get("draw_date"),
         my_prize=rd.get("my_prize"), my_stake=rd.get("my_stake"),
+        my_free_tickets=rd.get("my_free_tickets"),
         winning_numbers=rd.get("winning_numbers"), drawn_at=rd.get("drawn_at"),
     )
     rd["entries_open"] = entries_open(rd["status"], rd.get("draw_date"))
@@ -1781,6 +1790,12 @@ async def admin_patch_group(request: Request, x_init_data: str | None = Header(d
             "UPDATE groups SET etransfer_email=? WHERE id=?", (email, gid)
         )
 
+    if "free_ticket_mode" in body:
+        mode = normalize_free_ticket_mode(body.get("free_ticket_mode"))
+        await db.execute(
+            "UPDATE groups SET free_ticket_mode=? WHERE id=?", (mode, gid)
+        )
+
     await db.commit()
     cur = await db.execute("SELECT * FROM groups WHERE id=?", (gid,))
     updated = await cur.fetchone()
@@ -1862,6 +1877,29 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
     await db.commit()
 
     await _auto_join_round(db, round_id, price_per_share, group_id=gid)
+
+    applied_free = await apply_pending_free_tickets(
+        db,
+        round_id=round_id,
+        group_id=gid,
+        lottery_type=lottery_type,
+        price_per_share=float(price_per_share),
+    )
+    if applied_free > 0:
+        await db.commit()
+        cur = await db.execute(
+            """SELECT p.user_id, p.free_ticket_shares
+               FROM participations p WHERE p.round_id = ? AND p.free_ticket_shares > 0""",
+            (round_id,),
+        )
+        for row in await cur.fetchall():
+            shares = row["free_ticket_shares"]
+            await _notify(
+                row["user_id"],
+                f"🎟 <b>Free tickets applied — Round #{round_id}</b>\n"
+                f"You were auto-enrolled with <b>{shares}</b> free share(s) from the previous "
+                f"{lottery_label(lottery_type)} win. No credit was charged.",
+            )
 
     draw_str = f" · Draw {draw_date}" if draw_date else ""
     jackpot_str = f" · ${jackpot/1_000_000:.0f}M jackpot" if jackpot else ""
@@ -2088,7 +2126,7 @@ async def round_ticket_image(round_id: int, x_init_data: str | None = Header(def
 
 @app.post("/api/admin/round/results")
 async def admin_enter_results(request: Request, x_init_data: str | None = Header(default=None)):
-    """Admin enters winning numbers and total prize; prizes distributed proportionally."""
+    """Trustee enters winning numbers, cash prize, and/or free tickets."""
     user, db, group = await _require_group_trustee(x_init_data)
     gid = group["id"]
     body = await request.json()
@@ -2096,6 +2134,7 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
     winning_numbers = body.get("winning_numbers", [])
     bonus_number = body.get("bonus_number")
     total_prize = float(body.get("total_prize", 0))
+    free_tickets = int(body.get("free_tickets") or 0)
 
     if round_id:
         cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
@@ -2108,22 +2147,67 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
     if not round_:
         raise HTTPException(400, "No uploaded round found")
 
-    # Get all participations
     cur = await db.execute("SELECT * FROM participations WHERE round_id=?", (round_["id"],))
-    parts = await cur.fetchall()
+    parts = [dict(p) for p in await cur.fetchall()]
     pool = round_["pool"] or sum(p["amount"] for p in parts)
 
     if not winning_numbers:
         await db.close()
         raise HTTPException(400, "Winning numbers are required")
+    if total_prize < 0 or free_tickets < 0:
+        await db.close()
+        raise HTTPException(400, "Prize amounts cannot be negative")
+    if total_prize <= 0 and free_tickets <= 0:
+        await db.close()
+        raise HTTPException(400, "Enter a cash prize and/or free tickets won")
 
-    # Distribute prize proportionally (always set participation.prize so WON/LOST is accurate)
+    mode = normalize_free_ticket_mode(group.get("free_ticket_mode"))
+    lottery_type = round_.get("lottery_type") or "lotto_max"
+    free_ticket_allocation: dict[int, int] = {}
+    free_ticket_cash_total = 0.0
+
+    if free_tickets > 0 and mode == "cash_credit":
+        free_ticket_cash_total = free_ticket_cash_value(lottery_type, free_tickets)
+        trustee_id = group["trustee_user_id"]
+        cur = await db.execute("SELECT credit FROM users WHERE telegram_id=?", (trustee_id,))
+        trustee = await cur.fetchone()
+        trustee_credit = float((trustee or {}).get("credit") or 0)
+        if trustee_credit < free_ticket_cash_total:
+            await db.close()
+            raise HTTPException(
+                400,
+                f"Your trustee credit (${trustee_credit:.2f}) is less than the free-ticket "
+                f"value (${free_ticket_cash_total:.2f}). Top up or choose “Next round” mode.",
+            )
+        await db.execute(
+            "UPDATE users SET credit=credit-? WHERE telegram_id=?",
+            (free_ticket_cash_total, trustee_id),
+        )
+        await db.execute(
+            "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+            (
+                trustee_id,
+                "free_ticket",
+                -free_ticket_cash_total,
+                f"Free tickets Round #{round_['id']}",
+                gid,
+            ),
+        )
+    elif free_tickets > 0:
+        free_ticket_allocation = distribute_integer_shares(free_tickets, parts, pool)
+
+    prize_by_user: dict[int, float] = {}
     for p in parts:
         share = p["amount"] / pool if pool else 0
         prize = round(share * total_prize, 2) if total_prize > 0 and pool > 0 else 0.0
+        if free_tickets > 0 and mode == "cash_credit" and pool > 0:
+            prize = round(prize + share * free_ticket_cash_total, 2)
+        prize_by_user[p["user_id"]] = prize
+        ft_awarded = free_ticket_allocation.get(p["user_id"], 0) if mode == "next_round" else 0
         await db.execute(
-            "UPDATE participations SET prize=? WHERE round_id=? AND user_id=?",
-            (prize, round_["id"], p["user_id"]),
+            """UPDATE participations SET prize=?, free_tickets_awarded=?
+               WHERE round_id=? AND user_id=?""",
+            (prize, ft_awarded, round_["id"], p["user_id"]),
         )
         if prize > 0:
             await db.execute(
@@ -2135,15 +2219,16 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
             )
 
     await db.execute(
-        "UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?, drawn_at=datetime('now') WHERE id=?",
-        (json.dumps(winning_numbers), bonus_number, round_["id"]),
+        """UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?,
+           drawn_at=datetime('now'), free_tickets_won=? WHERE id=?""",
+        (json.dumps(winning_numbers), bonus_number, free_tickets, round_["id"]),
     )
     await db.commit()
 
-    # Notify each participant individually with their result
     win_str = "  ".join(f"<b>{n}</b>" for n in winning_numbers)
     if bonus_number:
         win_str += f"  +<b>{bonus_number}</b> (bonus)"
+    game_label = lottery_label(lottery_type)
     for p in parts:
         setting = await db.execute(
             "SELECT notif_results FROM user_settings WHERE user_id=?", (p["user_id"],)
@@ -2151,15 +2236,21 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
         s = await setting.fetchone()
         if s and not s["notif_results"]:
             continue
-        prize = p.get("prize", 0) or 0
+        prize = prize_by_user.get(p["user_id"], 0)
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
-        if prize > 0:
-            msg = (
-                f"🏆 <b>You won — Round #{round_['id']}</b>\n"
-                f"Prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n"
-                f"Winning numbers: {win_str}\n"
-                f"Credited to your balance! 💰"
-            )
+        ft = free_ticket_allocation.get(p["user_id"], 0)
+        if prize > 0 or ft > 0:
+            lines = [f"🏆 <b>You won — Round #{round_['id']}</b>"]
+            if prize > 0:
+                lines.append(f"Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)")
+            if ft > 0:
+                lines.append(
+                    f"Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round"
+                )
+            lines.append(f"Winning numbers: {win_str}")
+            if prize > 0:
+                lines.append("Credited to your balance! 💰")
+            msg = "\n".join(lines)
         else:
             msg = (
                 f"🎟 <b>Results — Round #{round_['id']}</b>\n"
@@ -2170,7 +2261,13 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
         await _notify(p["user_id"], msg)
 
     await db.close()
-    return {"ok": True, "total_prize": total_prize, "distributed": len(parts)}
+    return {
+        "ok": True,
+        "total_prize": total_prize,
+        "free_tickets": free_tickets,
+        "free_ticket_mode": mode,
+        "distributed": len(parts),
+    }
 
 
 @app.post("/api/admin/round/draw")

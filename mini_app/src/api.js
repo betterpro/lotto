@@ -141,8 +141,10 @@ export const api = {
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
     scanTicket:   (round_id, image_b64) => req('POST', '/api/admin/round/scan-ticket', { round_id, image_b64 }),
     uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket', { round_id, numbers }),
-    results:      (round_id, winning_numbers, bonus_number, total_prize) =>
-                                     req('POST', '/api/admin/round/results', { round_id, winning_numbers, bonus_number, total_prize }),
+    results:      (round_id, winning_numbers, bonus_number, total_prize, free_tickets) =>
+                                     req('POST', '/api/admin/round/results', {
+                                       round_id, winning_numbers, bonus_number, total_prize, free_tickets,
+                                     }),
     round:        ()              => req('GET',  '/api/admin/round'),
     rounds:       ()              => req('GET',  '/api/admin/rounds'),
     deposits:     ()              => req('GET',  '/api/admin/deposits'),

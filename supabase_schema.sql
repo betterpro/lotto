@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS groups (
     etransfer_email      TEXT,
     payment_methods      TEXT    NOT NULL DEFAULT 'both',
     etransfer_min_amount FLOAT8  NOT NULL DEFAULT 25,
+    free_ticket_mode     TEXT    NOT NULL DEFAULT 'next_round',
     created_at           TEXT    NOT NULL
                      DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
@@ -97,8 +98,10 @@ CREATE TABLE IF NOT EXISTS rounds (
     bonus_number     INTEGER,
     ticket_numbers   TEXT,
     ticket_image     TEXT,
-    lottery_type     TEXT    DEFAULT 'lotto_max',
-    group_id         BIGINT  NOT NULL REFERENCES groups(id)
+    lottery_type          TEXT    DEFAULT 'lotto_max',
+    free_tickets_won      INTEGER NOT NULL DEFAULT 0,
+    free_tickets_consumed INTEGER NOT NULL DEFAULT 0,
+    group_id              BIGINT  NOT NULL REFERENCES groups(id)
 );
 
 CREATE TABLE IF NOT EXISTS participations (
@@ -106,8 +109,10 @@ CREATE TABLE IF NOT EXISTS participations (
     round_id   BIGINT  NOT NULL REFERENCES rounds(id),
     user_id    BIGINT  NOT NULL REFERENCES users(telegram_id),
     amount     FLOAT8  NOT NULL,
-    shares     INTEGER DEFAULT 1,
-    prize      FLOAT8  DEFAULT 0,
+    shares              INTEGER DEFAULT 1,
+    free_ticket_shares  INTEGER NOT NULL DEFAULT 0,
+    free_tickets_awarded INTEGER NOT NULL DEFAULT 0,
+    prize               FLOAT8  DEFAULT 0,
     created_at TEXT    NOT NULL
                DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
     UNIQUE(round_id, user_id)

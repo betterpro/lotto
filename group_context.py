@@ -48,6 +48,8 @@ def trustee_public(trustee_row) -> dict | None:
     }
 
 
+from free_tickets import normalize_free_ticket_mode
+
 CARD_DEPOSIT_AMOUNTS = (25.0, 50.0, 100.0, 250.0)
 VALID_PAYMENT_METHODS = ("etransfer", "card", "both")
 
@@ -68,6 +70,7 @@ def group_public(group_row) -> dict | None:
         "payment_methods": _normalize_payment_methods(group_row.get("payment_methods")),
         "etransfer_min_amount": float(group_row.get("etransfer_min_amount") or 25),
         "etransfer_email": group_row.get("etransfer_email"),
+        "free_ticket_mode": normalize_free_ticket_mode(group_row.get("free_ticket_mode")),
     }
 
 

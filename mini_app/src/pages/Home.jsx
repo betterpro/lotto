@@ -78,6 +78,7 @@ function suggestTopUpAmount(shortfall, presets) {
 function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
   const [tab, setTab]           = useState('once')
   const [amount, setAmount]     = useState(50)
+  const [customInput, setCustomInput] = useState('')
   const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
   const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
   const [stripePromise, setSP]  = useState(null)
@@ -86,12 +87,18 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
   const [payOpts, setPayOpts]   = useState(null)
 
   useEffect(() => {
-    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); setPayOpts(null); return }
+    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); setPayOpts(null); setCustomInput(''); return }
     api.payment.options().then(opts => {
       setPayOpts(opts)
       const presets = opts.card_enabled ? opts.card_amounts : opts.etransfer_amounts
-      if (initialAmount != null) setAmount(suggestTopUpAmount(initialAmount, presets))
-      else setAmount(presets?.[1] ?? presets?.[0] ?? 50)
+      if (initialAmount != null) {
+        const suggested = suggestTopUpAmount(initialAmount, presets)
+        setAmount(suggested)
+        setCustomInput(presets.includes(suggested) ? '' : String(suggested))
+      } else {
+        setAmount(presets?.[1] ?? presets?.[0] ?? 50)
+        setCustomInput('')
+      }
       if (opts.card_enabled) setMethod('card')
       else if (opts.etransfer_enabled) setMethod('etransfer')
     }).catch(() => setPayOpts({ card_enabled: true, etransfer_enabled: true, card_amounts: CARD_AMOUNTS, etransfer_amounts: CARD_AMOUNTS }))
@@ -104,24 +111,39 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
   const etxAmounts = (payOpts?.etransfer_amounts?.length ? payOpts.etransfer_amounts : cardAmounts)
   const presets = method === 'card' ? cardAmounts : etxAmounts
   const chargeAmt = amount
+  const etxMin = payOpts?.etransfer_min_amount ?? 25
+  const usingCustomAmt = method === 'etransfer' && customInput !== ''
 
   useEffect(() => {
-    if (!payOpts || !presets.length) return
+    if (!payOpts || !presets.length || method === 'etransfer') return
+    setCustomInput('')
     setAmount(prev => (presets.includes(prev) ? prev : suggestTopUpAmount(prev, presets)))
   }, [method, payOpts])
 
+  function selectPreset(p) {
+    setAmount(p)
+    setCustomInput('')
+  }
+
+  function onCustomAmountChange(raw) {
+    setCustomInput(raw)
+    const n = parseFloat(raw)
+    if (!isNaN(n) && n > 0) setAmount(Math.round(n * 100) / 100)
+  }
+
+  function selectMethod(id) {
+    setMethod(id)
+    if (id === 'card') setCustomInput('')
+  }
+
   const methodChoices = [
-    payOpts?.card_enabled && {
-      id: 'card', icon: '💳', name: 'Credit / Debit card',
-      note: `Charged $${chargeAmt.toFixed(2)} · instant`,
-    },
-    payOpts?.etransfer_enabled && {
-      id: 'etransfer', icon: '🏦', name: 'Interac e-Transfer',
-      note: payOpts.etransfer_min_amount
-        ? `Min $${payOpts.etransfer_min_amount} · 0–24 h approval`
-        : 'No fee · 0–24 h approval',
-    },
+    payOpts?.card_enabled && { id: 'card', icon: '💳', label: 'Card' },
+    payOpts?.etransfer_enabled && { id: 'etransfer', icon: '🏦', label: 'E-Transfer' },
   ].filter(Boolean)
+
+  const etxAmountInvalid = method === 'etransfer' && (
+    amount <= 0 || amount < etxMin || (usingCustomAmt && (isNaN(parseFloat(customInput)) || parseFloat(customInput) <= 0))
+  )
 
   async function proceed() {
     if (method === 'card') {
@@ -174,10 +196,12 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
             <span className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
           </div>
           <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
-            borderRadius: 10, padding: '12px 14px', marginBottom: 20, fontSize: 12,
+            borderRadius: 10, padding: '12px 14px', fontSize: 12,
             color: 'var(--money)', lineHeight: 1.6 }}>
             ✓ Your account will be credited automatically once we detect your transfer. Usually within minutes.
           </div>
+        </div>
+        <div className="sheet-foot">
           <button className="btn btn-primary btn-block" onClick={() => { onSuccess(amount, 'etransfer'); onClose() }}>
             Done — I've sent it
           </button>
@@ -224,7 +248,30 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          {payOpts?.card_enabled && (
+          {methodChoices.length > 1 && (
+            <>
+              <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 8 }}>
+                {methodChoices.map(m => (
+                  <button key={m.id} type="button" onClick={() => selectMethod(m.id)} style={{
+                    flex: 1, padding: '10px 0', borderRadius: 7, border: 0, cursor: 'pointer',
+                    background: method === m.id ? 'var(--surface-2)' : 'transparent',
+                    color: method === m.id ? '#fff' : 'var(--tx-2)',
+                    fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  }}>
+                    <span style={{ fontSize: 16 }}>{m.icon}</span>{m.label}
+                  </button>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
+                {method === 'card'
+                  ? `Charged $${chargeAmt.toFixed(2)} · instant`
+                  : `Min $${etxMin} · 0–24 h approval`}
+              </p>
+            </>
+          )}
+
+          {payOpts?.card_enabled && method === 'card' && (
           <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 16 }}>
             {[['once','One-time'],['monthly','Monthly']].map(([k,l]) => (
               <button key={k} onClick={() => { setTab(k); setCS(null) }} style={{
@@ -244,59 +291,58 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
               No payment amounts available. Ask your trustee to configure payments.
             </p>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(presets.length, 4)},1fr)`, gap: 8, marginBottom: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(presets.length, 4)},1fr)`, gap: 8, marginBottom: method === 'etransfer' ? 12 : 16 }}>
               {presets.map(p => (
-                <button key={p} onClick={() => setAmount(p)} style={{
+                <button key={p} type="button" onClick={() => selectPreset(p)} style={{
                   padding: '14px 0', borderRadius: 12, cursor: 'pointer',
-                  border: `.5px solid ${amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
-                  background: amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
-                  color: amount === p ? 'var(--tg)' : '#fff',
+                  border: `.5px solid ${!usingCustomAmt && amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
+                  background: !usingCustomAmt && amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
+                  color: !usingCustomAmt && amount === p ? 'var(--tg)' : '#fff',
                   fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
                 }}>${p}</button>
               ))}
             </div>
           )}
 
-          {methodChoices.length > 1 && (
-          <>
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Payment method</div>
-          {methodChoices.map(m => (
-            <div key={m.id} onClick={() => setMethod(m.id)} style={{
-              display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
-              borderRadius: 12, cursor: 'pointer', marginBottom: 8,
-              border: `.5px solid ${method === m.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
-              background: method === m.id ? 'rgba(46,166,255,.1)' : 'var(--bg-3)',
-            }}>
-              <span style={{ fontSize: 22, flexShrink: 0 }}>{m.icon}</span>
-              <div className="col grow gap-2" style={{ minWidth: 0 }}>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{m.name}</span>
-                <span style={{ fontSize: 11, color: method === m.id ? 'var(--tg)' : 'var(--tx-2)' }}>{m.note}</span>
+          {method === 'etransfer' && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
+                Custom amount
               </div>
-              <div style={{
-                width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
-                border: `.5px solid ${method === m.id ? 'var(--tg)' : 'var(--hairline-2)'}`,
-                background: method === m.id ? 'var(--tg)' : 'transparent',
-              }} />
+              <div style={{ position: 'relative' }}>
+                <span className="mono" style={{
+                  position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
+                  color: usingCustomAmt ? 'var(--tg)' : 'var(--tx-2)', fontSize: 15, fontWeight: 700,
+                }}>$</span>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min={etxMin}
+                  step="0.01"
+                  className="input"
+                  placeholder={`Min $${etxMin}`}
+                  value={customInput}
+                  onChange={e => onCustomAmountChange(e.target.value)}
+                  style={{
+                    paddingLeft: 28,
+                    fontFamily: 'var(--mono)',
+                    borderColor: usingCustomAmt ? 'var(--tg)' : undefined,
+                    background: usingCustomAmt ? 'rgba(46,166,255,.08)' : undefined,
+                  }}
+                />
+              </div>
             </div>
-          ))}
-          </>
           )}
 
-          {method === 'etransfer' && payOpts?.etransfer_min_amount && amount < payOpts.etransfer_min_amount && (
+          {method === 'etransfer' && etxAmountInvalid && (
             <p style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8, lineHeight: 1.5 }}>
-              Minimum e-transfer: ${payOpts.etransfer_min_amount}
+              Minimum e-transfer: ${etxMin}
             </p>
           )}
-
-          {tab === 'monthly' && method === 'etransfer' && (
-            <p style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 4, marginBottom: 8, lineHeight: 1.5 }}>
-              Monthly e-transfers must be sent manually each billing cycle.
-            </p>
-          )}
-
-          <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}
-            disabled={!presets.length || methodChoices.length === 0
-              || (method === 'etransfer' && payOpts?.etransfer_min_amount && amount < payOpts.etransfer_min_amount)}>
+        </div>
+        <div className="sheet-foot">
+          <button className="btn btn-primary btn-block" onClick={proceed}
+            disabled={!presets.length || methodChoices.length === 0 || etxAmountInvalid}>
             {method === 'card'
               ? tab === 'once' ? `Pay $${amount.toFixed(2)} by card` : `Subscribe · $${amount.toFixed(2)}/mo`
               : `Get e-transfer details`}
@@ -726,7 +772,7 @@ export default function Home({ user, onUserUpdate }) {
   const poolRaised = round?.pool || 0
   const jackpot    = round?.jackpot || 0
   const winPot     = jackpot && poolRaised > 0 && round?.my_stake
-    ? Math.round((round.my_stake / poolRaised) * (jackpot / (round.tickets_target || 25)))
+    ? Math.round((round.my_stake / poolRaised) * jackpot)
     : null
 
   const trusteeName = user.trustee?.full_name || user.trustee?.username
