@@ -29,8 +29,12 @@ async function req(method, path, body) {
   const text = await res.text()
   if (!res.ok) {
     let msg = text
-    try { msg = JSON.parse(text).detail ?? text } catch {}
-    throw new Error(msg || 'API request failed')
+    try {
+      const j = JSON.parse(text)
+      const d = j.detail
+      msg = Array.isArray(d) ? d.map(x => x.msg || String(x)).join('; ') : (d ?? text)
+    } catch {}
+    throw new Error(typeof msg === 'string' ? msg : 'API request failed')
   }
   try {
     return JSON.parse(text)

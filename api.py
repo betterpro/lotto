@@ -76,7 +76,7 @@ from group_context import (
 )
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
-from database import get_db
+from database import ensure_schema, get_db
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -825,6 +825,11 @@ async def _etransfer_poll_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _ptb_app, _bot_username, _etransfer_task
+    try:
+        await ensure_schema()
+        log.info("Database schema verified")
+    except Exception:
+        log.exception("Schema bootstrap failed — run migrations in Supabase SQL Editor")
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url and not config.MINI_APP_URL:
         os.environ["MINI_APP_URL"] = render_url
@@ -1792,9 +1797,33 @@ async def admin_get_group(x_init_data: str | None = Header(default=None)):
 @app.patch("/api/admin/group")
 async def admin_patch_group(request: Request, x_init_data: str | None = Header(default=None)):
     user, db, group = await _require_group_trustee(x_init_data)
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        await db.close()
+        raise HTTPException(400, "Invalid JSON body")
     gid = group["id"]
 
+    try:
+        await ensure_schema()
+        return await _admin_patch_group_body(db, gid, body)
+    except HTTPException:
+        await db.close()
+        raise
+    except Exception as e:
+        log.exception("admin_patch_group failed for group %s", gid)
+        await db.close()
+        err = str(e).lower()
+        if "free_ticket_mode" in err and ("does not exist" in err or "undefined_column" in err):
+            raise HTTPException(
+                503,
+                "Database is missing free_ticket_mode — restart the API after migrations, "
+                "or run migrations/008_free_ticket_settings.sql in Supabase.",
+            ) from e
+        raise HTTPException(500, "Could not save group settings") from e
+
+
+async def _admin_patch_group_body(db, gid: int, body: dict):
     if "payment_methods" in body:
         pm = (body.get("payment_methods") or "both").lower()
         if pm not in VALID_PAYMENT_METHODS:

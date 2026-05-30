@@ -148,6 +148,40 @@ async def get_db() -> _DB:
     return _DB(conn)
 
 
+# Idempotent patches (keep in sync with migrations/*.sql)
+_SCHEMA_STATEMENTS = [
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS payment_methods TEXT NOT NULL DEFAULT 'both'",
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS etransfer_min_amount FLOAT8 NOT NULL DEFAULT 25",
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS free_ticket_mode TEXT NOT NULL DEFAULT 'next_round'",
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS free_tickets_won INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS free_tickets_consumed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS round_tickets TEXT",
+    "ALTER TABLE participations ADD COLUMN IF NOT EXISTS free_ticket_shares INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE participations ADD COLUMN IF NOT EXISTS free_tickets_awarded INTEGER NOT NULL DEFAULT 0",
+    "UPDATE groups SET free_ticket_mode = 'next_round' WHERE free_ticket_mode IS NULL",
+    "UPDATE rounds SET free_tickets_won = 0 WHERE free_tickets_won IS NULL",
+    "UPDATE rounds SET free_tickets_consumed = 0 WHERE free_tickets_consumed IS NULL",
+    "UPDATE participations SET free_ticket_shares = 0 WHERE free_ticket_shares IS NULL",
+    "UPDATE participations SET free_tickets_awarded = 0 WHERE free_tickets_awarded IS NULL",
+]
+
+_schema_ready = False
+
+
+async def ensure_schema() -> None:
+    """Apply missing columns so admin settings (e.g. free_ticket_mode) do not 500."""
+    global _schema_ready
+    if _schema_ready:
+        return
+    db = await get_db()
+    try:
+        for sql in _SCHEMA_STATEMENTS:
+            await db.execute(sql)
+        _schema_ready = True
+    finally:
+        await db.close()
+
+
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 async def get_user(db, telegram_id):

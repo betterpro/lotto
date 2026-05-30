@@ -829,7 +829,7 @@ function PaymentsTab({ showToast }) {
       .catch(err => showToast(err.message, 'error'))
   }, [showToast])
 
-  async function save() {
+  async function save(extra = {}) {
     setBusy(true)
     try {
       const r = await api.admin.group.patch({
@@ -837,11 +837,32 @@ function PaymentsTab({ showToast }) {
         etransfer_min_amount: Number(minAmt) || 25,
         etransfer_email: email.trim() || null,
         free_ticket_mode: freeTicketMode,
+        ...extra,
       })
       setGroup(r.group)
       showToast('Payment settings saved', 'success')
     } catch (err) { showToast(err.message, 'error') }
     finally { setBusy(false) }
+  }
+
+  async function selectFreeTicketMode(mode) {
+    setFreeTicketMode(mode)
+    setBusy(true)
+    try {
+      const r = await api.admin.group.patch({ free_ticket_mode: mode })
+      setGroup(r.group)
+      setFreeTicketMode(r.group.free_ticket_mode || mode)
+      showToast(
+        mode === 'cash_credit'
+          ? 'Free tickets will convert to member credit'
+          : 'Free tickets will auto-apply in the next round',
+        'success',
+      )
+    } catch (err) {
+      showToast(err.message || 'Could not save setting', 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   if (!group) {
@@ -921,7 +942,8 @@ function PaymentsTab({ showToast }) {
           </p>
           <div className="col" style={{ gap: 8 }}>
             {freeTicketOptions.map(o => (
-              <button key={o.v} type="button" onClick={() => setFreeTicketMode(o.v)} style={{
+              <button key={o.v} type="button" disabled={busy}
+                onClick={() => selectFreeTicketMode(o.v)} style={{
                 padding: '12px 14px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
                 border: `.5px solid ${freeTicketMode === o.v ? 'var(--gold)' : 'var(--hairline-2)'}`,
                 background: freeTicketMode === o.v ? 'rgba(255,193,7,.1)' : 'var(--bg-3)',
