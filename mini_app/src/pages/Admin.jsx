@@ -10,6 +10,7 @@ import {
 } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import CameraCapture from '../components/CameraCapture.jsx'
+import { scanTicketImage } from '../ticketOcr.js'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon, CameraIcon,
@@ -124,10 +125,25 @@ function SummaryRow({ k, v, mono }) {
 function NewRoundSheet({ onClose, onCreated, showToast }) {
   const [lotteryType, setLotteryType] = useState('lotto_max')
   const [date,     setDate]     = useState('')
-  const [jackpot,  setJackpot]  = useState('70000000')
+  const [jackpot,  setJackpot]  = useState('')
   const [target,   setTarget]   = useState('25')
   const [price,    setPrice]    = useState('6')
   const [busy,     setBusy]     = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setSuggesting(true)
+    api.admin.suggestRound(lotteryType)
+      .then(res => {
+        if (cancelled) return
+        if (res.draw_date) setDate(res.draw_date)
+        if (res.jackpot) setJackpot(String(res.jackpot))
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSuggesting(false) })
+    return () => { cancelled = true }
+  }, [lotteryType])
 
   function selectType(lt) {
     setLotteryType(lt.id)
@@ -188,9 +204,9 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               </div>
             </FieldLabel>
 
-            <FieldLabel label="Estimated jackpot (CAD)">
+            <FieldLabel label={`Estimated jackpot (CAD)${suggesting ? ' · loading…' : ''}`}>
               <input className="input mono" type="number" value={jackpot}
-                onChange={e => setJackpot(e.target.value)} placeholder="70000000" />
+                onChange={e => setJackpot(e.target.value)} placeholder="10000000" />
             </FieldLabel>
             <div className="row gap-8">
               <FieldLabel label="Pool target (tickets)" flex>
@@ -217,17 +233,34 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
   )
 }
 
-// ── Upload Ticket Sheet (with camera scan) ───────────────────────────────
+// ── Upload Ticket Sheet (camera + Tesseract OCR, multi-ticket) ───────────
 function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   const layout = ticketLayout(round?.lottery_type)
-  const [rows,      setRows]      = useState(() => emptyTicketRows(layout))
-  const [busy,      setBusy]      = useState(false)
-  const [scanning,  setScanning]  = useState(false)
-  const [preview,   setPreview]   = useState(null)   // data URL for thumbnail
-  const [scanDate,  setScanDate]  = useState(null)   // draw date from scan
+  const required = round?.tickets_required ?? 1
+  const alreadySaved = (round?.round_tickets || []).filter(t => t?.rows?.length).length
+  const [ticketIndex, setTicketIndex] = useState(alreadySaved)
+  const [savedCount, setSavedCount] = useState(alreadySaved)
+  const [rows, setRows] = useState(() => emptyTicketRows(layout))
+  const [busy, setBusy] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [ocrPct, setOcrPct] = useState(0)
+  const [preview, setPreview] = useState(null)
+  const [previewB64, setPreviewB64] = useState(null)
+  const [scanDate, setScanDate] = useState(null)
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [showNextPrompt, setShowNextPrompt] = useState(false)
   const galleryRef = useRef()
   const cameraFileRef = useRef()
+
+  const ticketNum = Math.min(ticketIndex + 1, required)
+  const allDone = savedCount >= required
+
+  function resetForNextScan() {
+    setRows(emptyTicketRows(layout))
+    setPreview(null)
+    setPreviewB64(null)
+    setShowNextPrompt(false)
+  }
 
   function setNum(rowIdx, colIdx, v, spec) {
     const maxLen = spec.max >= 10 ? 2 : 1
@@ -248,29 +281,31 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   async function processDataUrl(dataUrl) {
     if (!dataUrl) return
     setPreview(dataUrl)
+    setPreviewB64(dataUrl)
     setScanning(true)
+    setOcrPct(0)
     try {
-      const res = await api.admin.scanTicket(round.id, dataUrl)
-      const scanned = res.rows?.length ? res.rows : (res.numbers?.length ? [res.numbers] : [])
+      const scanned = await scanTicketImage(dataUrl, round.lottery_type, setOcrPct)
+      const merged = scanned.length ? mergeScannedRows(scanned, layout) : emptyTicketRows(layout)
+      setRows(merged)
       if (scanned.length) {
-        const merged = mergeScannedRows(scanned, layout)
-        setRows(merged)
         const filled = ticketRowsValid(merged, layout)
         const n = merged.length
         showToast(
           filled
-            ? `Scanned ${n} line${n === 1 ? '' : 's'} — review and submit`
-            : `Scanned ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
+            ? `OCR found ${n} line${n === 1 ? '' : 's'} — review and save`
+            : `OCR found ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
           filled ? 'success' : 'info',
         )
       } else {
-        showToast('Scan done — enter numbers manually', 'info')
+        showToast('OCR could not read numbers — enter them manually', 'info')
       }
-      if (res.draw_date) setScanDate(res.draw_date)
+      // Image + rows are persisted when trustee taps Save ticket
     } catch (err) {
       showToast('Scan failed: ' + err.message, 'error')
     } finally {
       setScanning(false)
+      setOcrPct(0)
     }
   }
 
@@ -301,28 +336,116 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   const valid = ticketRowsValid(rows, layout)
   const variableRows = isVariableRowLayout(layout)
 
-  async function submit() {
+  async function saveCurrentTicket() {
+    if (!valid || !previewB64) return
     setBusy(true)
     try {
-      await api.admin.uploadTicket(round.id, ticketRowsToNumbers(rows))
-      showToast('Ticket numbers uploaded!', 'success')
+      const nums = ticketRowsToNumbers(rows)
+      const res = await api.admin.saveTicket(
+        round.id, ticketIndex, nums, previewB64, scanDate || undefined,
+      )
+      const uploaded = res.tickets_uploaded ?? savedCount + 1
+      setSavedCount(uploaded)
+      showToast(`Ticket ${ticketNum} of ${required} saved`, 'success')
+      if (uploaded >= required) {
+        await finalizeUpload()
+        return
+      }
+      setShowNextPrompt(true)
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function finalizeUpload() {
+    setBusy(true)
+    try {
+      await api.admin.uploadTicket(round.id)
+      showToast(
+        savedCount >= required
+          ? `All ${required} ticket${required === 1 ? '' : 's'} uploaded!`
+          : 'Ticket numbers uploaded!',
+        'success',
+      )
       onUploaded()
       onClose()
-    } catch (err) { showToast(err.message, 'error') }
-    finally { setBusy(false) }
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function onNextTicket() {
+    setTicketIndex(i => i + 1)
+    resetForNextScan()
   }
 
   const dateMismatch = scanDate && round?.draw_date && scanDate !== round.draw_date
+
+  if (showNextPrompt) {
+    const remaining = required - savedCount
+    return (
+      <div className="sheet-overlay" onClick={onClose}>
+        <div className="sheet" onClick={e => e.stopPropagation()}>
+          <div className="handle" />
+          <div className="sheet-head">
+            <span className="sheet-title">Ticket {ticketNum} saved</span>
+            <button className="sheet-close" onClick={onClose}>✕</button>
+          </div>
+          <div className="body">
+            <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.5, marginBottom: 16 }}>
+              {savedCount} of {required} ticket{required === 1 ? '' : 's'} uploaded.
+              {remaining > 0
+                ? ` Scan ${remaining} more physical ticket${remaining === 1 ? '' : 's'} purchased for this round.`
+                : ''}
+            </p>
+            <div className="col" style={{ gap: 8 }}>
+              {remaining > 0 && (
+                <button type="button" className="btn btn-primary btn-block" onClick={onNextTicket}>
+                  <CameraIcon width={16} height={16} />
+                  Next ticket ({savedCount + 1} of {required})
+                </button>
+              )}
+              <button type="button" className="btn btn-block"
+                style={{ background: 'var(--surface-2)' }}
+                disabled={busy || savedCount < required}
+                onClick={finalizeUpload}>
+                <CheckIcon width={16} height={16} />
+                {busy ? 'Finishing…' : savedCount < required
+                  ? `Need ${remaining} more ticket${remaining === 1 ? '' : 's'}`
+                  : 'Finished — notify group'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">Upload ticket · Round #{round?.id}</span>
+          <span className="sheet-title">
+            Ticket {ticketNum} of {required} · Round #{round?.id}
+          </span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
+
+          <div style={{
+            fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+            background: allDone ? 'rgba(78,208,122,.1)' : 'rgba(46,166,255,.1)',
+            color: allDone ? 'var(--money)' : 'var(--tg)',
+            border: `.5px solid ${allDone ? 'rgba(78,208,122,.3)' : 'rgba(46,166,255,.25)'}`,
+          }}>
+            {savedCount} of {required} ticket{required === 1 ? '' : 's'} saved
+            {required > 1 && ' · one scan per physical ticket bought in the pool'}
+          </div>
 
           <input ref={galleryRef} type="file" accept="image/*"
             style={{ display: 'none' }} onChange={handleFilePick} />
@@ -351,7 +474,9 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10,
                 }}>
                   <div className="spinner" />
-                  <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>Scanning ticket…</span>
+                  <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
+                    Reading ticket…{ocrPct ? ` ${ocrPct}%` : ''}
+                  </span>
                 </div>
               )}
               {!scanning && (
@@ -404,19 +529,9 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
 
           <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
-            Ticket numbers
-            {round?.lottery_type === 'lotto_max' && (
-              <span style={{ fontWeight: 500, textTransform: 'none', color: 'var(--tx-3)' }}>
-                {' '}· 3 lines × 7 (1–52)
-              </span>
-            )}
-            {round?.lottery_type === '649' && (
-              <span style={{ fontWeight: 500, textTransform: 'none', color: 'var(--tx-3)' }}>
-                {' '}· classic draw lines × 6 (1–49)
-              </span>
-            )}
+            Numbers on this ticket
           </div>
-          <div className="col" style={{ gap: 14, marginBottom: 16, maxHeight: 320, overflowY: 'auto' }}>
+          <div className="col" style={{ gap: 14, marginBottom: 16, maxHeight: 280, overflowY: 'auto' }}>
             {rows.map((_, rowIdx) => {
               const spec = rowSpecForIndex(layout, rowIdx)
               return (
@@ -465,16 +580,26 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
           </div>
 
           <div className="card" style={{ marginBottom: 16 }}>
-            <SummaryRow k="Round"        v={`#${round?.id}`} mono />
-            <SummaryRow k="Pool total"   v={fmtCAD(round?.pool)} mono />
-            <SummaryRow k="Participants" v={round?.participants?.length ?? 0} mono />
-            <SummaryRow k="Draw date"    v={round?.draw_date ? fmtDate(round.draw_date) : '—'} />
+            <SummaryRow k="Shares bought"  v={required} mono />
+            <SummaryRow k="Pool total"     v={fmtCAD(round?.pool)} mono />
+            <SummaryRow k="Draw date"      v={round?.draw_date ? fmtDate(round.draw_date) : '—'} />
           </div>
 
-          <button className="btn btn-primary btn-block" disabled={!valid || busy || scanning} onClick={submit}>
+          <button className="btn btn-primary btn-block"
+            disabled={!valid || busy || scanning || !previewB64}
+            onClick={saveCurrentTicket}>
             <UploadIcon width={16} height={16} />
-            {busy ? 'Uploading…' : scanning ? 'Scanning…' : 'Submit ticket numbers'}
+            {busy ? 'Saving…' : scanning ? 'Scanning…' : `Save ticket ${ticketNum}`}
           </button>
+          {savedCount > 0 && (
+            <button type="button" className="btn btn-block" style={{ marginTop: 8, background: 'var(--surface-2)' }}
+              disabled={busy || savedCount < required}
+              onClick={finalizeUpload}>
+              {savedCount < required
+                ? `Finished (${savedCount}/${required} — need ${required - savedCount} more)`
+                : 'Finished — notify group'}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1057,16 +1182,21 @@ export default function Admin({ user }) {
                 </>
               )}
 
-              {round.ticket_image && (
+              {(round.tickets_required > 1 || round.tickets_uploaded > 0) && (
                 <>
-                  <div style={{ height: '.5px', background: 'var(--hairline)', margin: '12px 0 12px' }} />
+                  <div style={{ height: '.5px', background: 'var(--hairline)', margin: '8px 0 12px' }} />
                   <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
-                    Ticket photo
+                    Tickets · {round.tickets_uploaded ?? 0} / {round.tickets_required ?? 1} uploaded
                   </div>
-                  <img src={round.ticket_image} alt="Lotto ticket"
-                    style={{ width: '100%', borderRadius: 10, maxHeight: 220, objectFit: 'cover' }} />
                 </>
               )}
+              {(round.round_tickets?.length
+                ? round.round_tickets.filter(t => t.image)
+                : round.ticket_image ? [{ image: round.ticket_image }] : []
+              ).map((t, i) => (
+                <img key={i} src={t.image} alt={`Ticket ${i + 1}`}
+                  style={{ width: '100%', borderRadius: 10, maxHeight: 180, objectFit: 'cover', marginBottom: 8 }} />
+              ))}
 
               {round.winning_numbers && (
                 <>
@@ -1111,8 +1241,13 @@ export default function Admin({ user }) {
                            color: canUpload ? 'var(--tg)' : undefined, opacity: canUpload ? 1 : .4 }}
                   disabled={!canUpload}
                   onClick={() => setShowUp(true)}>
-                  <UploadIcon width={16} height={16} />
-                  Upload ticket numbers
+                  <CameraIcon width={16} height={16} />
+                  Scan tickets
+                  {round.tickets_required > 1 && (
+                    <span style={{ fontSize: 11, opacity: 0.85 }}>
+                      {' '}({round.tickets_uploaded ?? 0}/{round.tickets_required})
+                    </span>
+                  )}
                 </button>
                 <button className="btn btn-block"
                   style={{ background: canResults ? 'rgba(245,199,59,.12)' : 'var(--surface-2)',

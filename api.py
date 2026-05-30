@@ -40,10 +40,13 @@ from lottery_types import (
     build_scan_prompt,
     format_ticket_numbers_message,
     lottery_share_price,
+    merge_round_ticket_rows,
     normalize_ticket_rows,
+    parse_round_tickets,
     valid_lottery_type,
     validate_ticket_rows,
 )
+from lottery_draws import suggest_new_round
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -356,10 +359,36 @@ async def _bg_fetch_photo(telegram_id: int):
         log.debug("Background photo fetch failed for %s: %s", telegram_id, exc)
 
 
-async def _upload_ticket_to_storage(round_id: int, image_bytes: bytes, media_type: str) -> str:
+async def _round_tickets_required(db, round_) -> int:
+    """Physical tickets to upload = total shares purchased in the round."""
+    cur = await db.execute(
+        "SELECT COALESCE(SUM(shares), 0) AS n FROM participations WHERE round_id=?",
+        (round_["id"],),
+    )
+    row = await cur.fetchone()
+    total = int(row["n"] or 0)
+    if total > 0:
+        return total
+    pool = float(round_.get("pool") or 0)
+    pps = float(round_.get("price_per_share") or 5)
+    if pool > 0 and pps > 0:
+        return max(1, int(round(pool / pps)))
+    return 1
+
+
+async def _save_round_tickets_json(db, round_id: int, tickets: list[dict]) -> None:
+    await db.execute(
+        "UPDATE rounds SET round_tickets=? WHERE id=?",
+        (json.dumps(tickets), round_id),
+    )
+
+
+async def _upload_ticket_to_storage(
+    round_id: int, image_bytes: bytes, media_type: str, ticket_index: int = 0
+) -> str:
     """Upload ticket image to Supabase Storage bucket 'tickets'; return public URL."""
     ext = "jpg" if "jpeg" in media_type else media_type.split("/")[-1]
-    path = f"round-{round_id}.{ext}"
+    path = f"round-{round_id}-ticket-{ticket_index}.{ext}"
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{config.SUPABASE_URL}/storage/v1/object/tickets/{path}",
@@ -1289,7 +1318,11 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
     rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
-    rd["has_ticket_image"] = bool(rd.get("ticket_image"))
+    rd["tickets_required"] = await _round_tickets_required(db, rd)
+    saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
+    rd["tickets_uploaded"] = len(saved)
+    rd["round_tickets"] = saved
+    rd["has_ticket_image"] = bool(rd.get("ticket_image")) or any(t.get("image") for t in saved)
     rd.pop("ticket_image", None)
     rd["display_status"] = display_status(
         rd["status"], rd.get("draw_date"),
@@ -1854,6 +1887,19 @@ async def admin_rounds(x_init_data: str | None = Header(default=None)):
     return {"rounds": rounds}
 
 
+@app.get("/api/admin/round/suggest")
+async def admin_suggest_round(
+    lottery_type: str = "lotto_max",
+    x_init_data: str | None = Header(default=None),
+):
+    """Suggest next draw date and estimated jackpot for a new round."""
+    _, db, _ = await _require_group_trustee(x_init_data)
+    await db.close()
+    if not valid_lottery_type(lottery_type):
+        raise HTTPException(400, "Unknown lottery type")
+    return await suggest_new_round(lottery_type)
+
+
 @app.post("/api/admin/round/new")
 async def admin_new_round(request: Request, x_init_data: str | None = Header(default=None)):
     user, db, group = await _require_group_trustee(x_init_data)
@@ -1946,14 +1992,95 @@ async def admin_close_round(request: Request, x_init_data: str | None = Header(d
     return {"ok": True, "round_id": round_["id"]}
 
 
-@app.post("/api/admin/round/upload-ticket")
-async def admin_upload_ticket(request: Request, x_init_data: str | None = Header(default=None)):
-    """Admin uploads ticket numbers for a round (sets status to 'uploaded')."""
+@app.post("/api/admin/round/ticket")
+async def admin_save_round_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+    """Save one scanned physical ticket (image + rows) before finalizing the round."""
     user, db, group = await _require_group_trustee(x_init_data)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
-    numbers = body.get("numbers", [])
+    ticket_index = int(body.get("ticket_index", 0))
+    numbers = body.get("rows") or body.get("numbers", [])
+    image_data = body.get("image_b64", "")
+
+    if ticket_index < 0:
+        await db.close()
+        raise HTTPException(400, "Invalid ticket_index")
+
+    cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(400, "Round not found")
+
+    lottery_type = round_.get("lottery_type") or "lotto_max"
+    rows = normalize_ticket_rows(numbers, lottery_type)
+    if not rows:
+        await db.close()
+        raise HTTPException(400, "No ticket numbers provided")
+
+    image_url = None
+    if image_data:
+        media_type = "image/jpeg"
+        if image_data.startswith("data:"):
+            header, image_data = image_data.split(",", 1)
+            if "png" in header:
+                media_type = "image/png"
+            elif "webp" in header:
+                media_type = "image/webp"
+        img_bytes = base64.b64decode(image_data)
+        if config.SUPABASE_URL and config.SUPABASE_SERVICE_KEY:
+            try:
+                image_url = await _upload_ticket_to_storage(
+                    round_["id"], img_bytes, media_type, ticket_index
+                )
+            except Exception as exc:
+                log.warning("Storage upload failed for ticket %s: %s", ticket_index, exc)
+        if not image_url:
+            image_url = f"data:{media_type};base64,{image_data}"
+
+    tickets = parse_round_tickets(round_.get("round_tickets"), lottery_type)
+    entry = {"image": image_url, "rows": rows}
+    if ticket_index < len(tickets):
+        tickets[ticket_index] = entry
+    elif ticket_index == len(tickets):
+        tickets.append(entry)
+    else:
+        await db.close()
+        raise HTTPException(400, "Save tickets in order (missing earlier ticket)")
+
+    first_image = tickets[0].get("image") if tickets else None
+    await _save_round_tickets_json(db, round_["id"], tickets)
+    if first_image:
+        await db.execute(
+            "UPDATE rounds SET ticket_image=? WHERE id=?",
+            (first_image, round_["id"]),
+        )
+    draw_date = body.get("draw_date")
+    if draw_date and not round_.get("draw_date"):
+        await db.execute("UPDATE rounds SET draw_date=? WHERE id=?", (draw_date, round_["id"]))
+    await db.commit()
+
+    required = await _round_tickets_required(db, round_)
+    await db.close()
+    return {
+        "ok": True,
+        "round_id": round_["id"],
+        "ticket_index": ticket_index,
+        "tickets_uploaded": len([t for t in tickets if t.get("rows")]),
+        "tickets_required": required,
+        "rows": rows,
+    }
+
+
+@app.post("/api/admin/round/upload-ticket")
+async def admin_upload_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+    """Finalize ticket upload for a round (sets status to 'uploaded')."""
+    user, db, group = await _require_group_trustee(x_init_data)
+    gid = group["id"]
+    body = await request.json()
+    round_id = body.get("round_id")
+    numbers = body.get("numbers")
 
     if round_id:
         cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
@@ -1967,7 +2094,22 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
         raise HTTPException(400, "No suitable round found")
 
     lottery_type = round_.get("lottery_type") or "lotto_max"
-    rows = normalize_ticket_rows(numbers, lottery_type)
+    required = await _round_tickets_required(db, round_)
+
+    if numbers is not None and numbers != []:
+        rows = normalize_ticket_rows(numbers, lottery_type)
+    else:
+        saved = parse_round_tickets(round_.get("round_tickets"), lottery_type)
+        complete = [t for t in saved if t.get("rows")]
+        if len(complete) < required:
+            await db.close()
+            raise HTTPException(
+                400,
+                f"Scan {required - len(complete)} more ticket(s) — "
+                f"{len(complete)} of {required} uploaded",
+            )
+        rows = merge_round_ticket_rows(saved)
+
     if not validate_ticket_rows(rows, lottery_type):
         await db.close()
         raise HTTPException(400, "Enter all ticket numbers for every line on the ticket")
@@ -2009,26 +2151,22 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
 
 @app.post("/api/admin/round/scan-ticket")
 async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(default=None)):
-    """Scan a ticket photo with Claude Vision to extract numbers and draw date."""
+    """Upload ticket image; optional client OCR rows, else Claude Vision fallback."""
     user, db, group = await _require_group_trustee(x_init_data)
     gid = group["id"]
-
-    if not config.ANTHROPIC_API_KEY:
-        await db.close()
-        raise HTTPException(400, "Ticket scanning not configured (set ANTHROPIC_API_KEY)")
-
     body = await request.json()
     round_id = body.get("round_id")
     image_data = body.get("image_b64", "")
+    client_rows = body.get("rows")
 
     if not image_data:
         await db.close()
         raise HTTPException(400, "No image provided")
 
-    # Strip data URL prefix, detect media type
     media_type = "image/jpeg"
+    raw_b64 = image_data
     if image_data.startswith("data:"):
-        header, image_data = image_data.split(",", 1)
+        header, raw_b64 = image_data.split(",", 1)
         if "png" in header:
             media_type = "image/png"
         elif "webp" in header:
@@ -2046,62 +2184,82 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
         raise HTTPException(400, "No round found")
 
     lottery_type = round_.get("lottery_type") or "lotto_max"
-    scan_prompt = build_scan_prompt(lottery_type)
+    ticket_index = int(body.get("ticket_index", 0))
+    draw_date = body.get("draw_date")
+    result = {}
 
-    client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
-    try:
-        msg = await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {"type": "base64", "media_type": media_type, "data": image_data},
-                    },
-                    {"type": "text", "text": scan_prompt},
-                ],
-            }],
-        )
-        raw = msg.content[0].text.strip()
-        if "```" in raw:
-            raw = raw.split("```")[1].lstrip("json").strip()
-        result = json.loads(raw)
-    except json.JSONDecodeError:
+    if client_rows:
+        rows = normalize_ticket_rows(client_rows, lottery_type)
+    elif config.ANTHROPIC_API_KEY:
+        scan_prompt = build_scan_prompt(lottery_type)
+        client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
+        try:
+            msg = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": raw_b64},
+                        },
+                        {"type": "text", "text": scan_prompt},
+                    ],
+                }],
+            )
+            raw = msg.content[0].text.strip()
+            if "```" in raw:
+                raw = raw.split("```")[1].lstrip("json").strip()
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            await db.close()
+            raise HTTPException(422, "Could not read ticket data — try a clearer photo")
+        except Exception as e:
+            log.exception("Claude scan error: %s", e)
+            await db.close()
+            raise HTTPException(422, f"Scan error: {e}")
+        raw_rows = result.get("rows")
+        if not isinstance(raw_rows, list) and isinstance(result.get("numbers"), list):
+            raw_rows = [result.get("numbers")]
+        rows = normalize_ticket_rows(raw_rows or [], lottery_type)
+        draw_date = draw_date or result.get("draw_date")
+    else:
         await db.close()
-        raise HTTPException(422, "Could not read ticket data — try a clearer photo")
-    except Exception as e:
-        log.exception("Claude scan error: %s", e)
-        await db.close()
-        raise HTTPException(422, f"Scan error: {e}")
+        raise HTTPException(400, "No OCR rows — scan on device or set ANTHROPIC_API_KEY")
 
-    # Upload to Supabase Storage if configured, otherwise fall back to storing base64 in DB
-    img_bytes = base64.b64decode(image_data)
+    img_bytes = base64.b64decode(raw_b64)
+    storage_url = None
     if config.SUPABASE_URL and config.SUPABASE_SERVICE_KEY:
         try:
-            storage_url = await _upload_ticket_to_storage(round_["id"], img_bytes, media_type)
-            await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (storage_url, round_["id"]))
+            storage_url = await _upload_ticket_to_storage(
+                round_["id"], img_bytes, media_type, ticket_index
+            )
             log.info("Ticket uploaded to Storage: %s", storage_url)
         except Exception as exc:
-            log.warning("Storage upload failed, storing base64 in DB: %s", exc)
-            await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
+            log.warning("Storage upload failed: %s", exc)
+    if storage_url:
+        if ticket_index == 0:
+            await db.execute(
+                "UPDATE rounds SET ticket_image=? WHERE id=?", (storage_url, round_["id"])
+            )
     else:
-        await db.execute("UPDATE rounds SET ticket_image=? WHERE id=?", (image_data, round_["id"]))
+        await db.execute(
+            "UPDATE rounds SET ticket_image=? WHERE id=?",
+            (f"data:{media_type};base64,{raw_b64}", round_["id"]),
+        )
+    if draw_date and not round_.get("draw_date"):
+        await db.execute("UPDATE rounds SET draw_date=? WHERE id=?", (draw_date, round_["id"]))
     await db.commit()
     await db.close()
-
-    raw_rows = result.get("rows")
-    if not isinstance(raw_rows, list) and isinstance(result.get("numbers"), list):
-        raw_rows = [result.get("numbers")]
-    rows = normalize_ticket_rows(raw_rows or [], lottery_type)
 
     return {
         "ok": True,
         "round_id": round_["id"],
-        "draw_date": result.get("draw_date"),
+        "draw_date": draw_date or result.get("draw_date"),
         "rows": rows,
-        "numbers": rows[0] if rows else [],  # legacy clients
+        "numbers": rows[0] if rows else [],
+        "image_url": storage_url,
     }
 
 

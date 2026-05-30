@@ -136,11 +136,17 @@ export const api = {
     cancelSub:           ()       => req('POST', '/api/stripe/subscription/cancel'),
   },
   admin: {
+    suggestRound: (lottery_type)  => req('GET',  `/api/admin/round/suggest?lottery_type=${encodeURIComponent(lottery_type)}`),
     newRound:     (data)          => req('POST', '/api/admin/round/new', data),
     closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
-    scanTicket:   (round_id, image_b64) => req('POST', '/api/admin/round/scan-ticket', { round_id, image_b64 }),
-    uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket', { round_id, numbers }),
+    scanTicket:   (round_id, image_b64, opts = {}) => req('POST', '/api/admin/round/scan-ticket', {
+      round_id, image_b64, ticket_index: opts.ticket_index, rows: opts.rows, draw_date: opts.draw_date,
+    }),
+    saveTicket:   (round_id, ticket_index, rows, image_b64, draw_date) =>
+      req('POST', '/api/admin/round/ticket', { round_id, ticket_index, rows, image_b64, draw_date }),
+    uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket',
+      numbers != null ? { round_id, numbers } : { round_id }),
     results:      (round_id, winning_numbers, bonus_number, total_prize, free_tickets) =>
                                      req('POST', '/api/admin/round/results', {
                                        round_id, winning_numbers, bonus_number, total_prize, free_tickets,

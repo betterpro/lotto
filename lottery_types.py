@@ -168,6 +168,38 @@ def format_ticket_numbers_message(rows: list[list], lottery_type: str | None) ->
     return "\n".join(parts)
 
 
+def parse_round_tickets(raw, lottery_type: str | None = None) -> list[dict]:
+    """Parse rounds.round_tickets JSON: [{image, rows}, ...]."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+    else:
+        data = raw
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        rows = normalize_ticket_rows(item.get("rows") or [], lottery_type)
+        out.append({
+            "image": item.get("image"),
+            "rows": rows,
+        })
+    return out
+
+
+def merge_round_ticket_rows(tickets: list[dict]) -> list[list]:
+    rows: list[list] = []
+    for t in tickets:
+        rows.extend(t.get("rows") or [])
+    return rows
+
+
 def build_scan_prompt(lottery_type: str | None) -> str:
     layout = ticket_layout(lottery_type)
 

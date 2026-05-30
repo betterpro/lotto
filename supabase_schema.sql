@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS rounds (
     bonus_number     INTEGER,
     ticket_numbers   TEXT,
     ticket_image     TEXT,
+    round_tickets    TEXT,
     lottery_type          TEXT    DEFAULT 'lotto_max',
     free_tickets_won      INTEGER NOT NULL DEFAULT 0,
     free_tickets_consumed INTEGER NOT NULL DEFAULT 0,
