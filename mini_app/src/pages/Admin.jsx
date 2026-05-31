@@ -829,7 +829,7 @@ function PaymentsTab({ showToast }) {
       .catch(err => showToast(err.message, 'error'))
   }, [showToast])
 
-  async function save(extra = {}) {
+  async function save() {
     setBusy(true)
     try {
       const r = await api.admin.group.patch({
@@ -837,7 +837,6 @@ function PaymentsTab({ showToast }) {
         etransfer_min_amount: Number(minAmt) || 25,
         etransfer_email: email.trim() || null,
         free_ticket_mode: freeTicketMode,
-        ...extra,
       })
       setGroup(r.group)
       showToast('Payment settings saved', 'success')
@@ -960,7 +959,7 @@ function PaymentsTab({ showToast }) {
         </FieldLabel>
       </div>
 
-      <button className="btn btn-primary btn-block" disabled={busy} onClick={save}>
+      <button className="btn btn-primary btn-block" disabled={busy} onClick={() => save()}>
         {busy ? 'Saving…' : 'Save settings'}
       </button>
     </div>
