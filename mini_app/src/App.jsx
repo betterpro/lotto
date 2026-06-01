@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from './api.js'
 import BottomNav       from './components/BottomNav.jsx'
-import TelegramAvatar  from './components/TelegramAvatar.jsx'
 import Home      from './pages/Home.jsx'
 import Rounds    from './pages/Rounds.jsx'
 import History   from './pages/History.jsx'
@@ -10,27 +10,17 @@ import Admin     from './pages/Admin.jsx'
 import PlatformAdmin from './pages/PlatformAdmin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 import NeedsInvite from './pages/NeedsInvite.jsx'
+import Login from './pages/Login.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
+import {
+  INVITE_SLUG_KEY,
+  PAGE_PATHS,
+  parseInviteSlug,
+  pathToPage,
+  isTelegram,
+} from './routes.js'
 
 const ONB_KEY = 'lottoo_beneficiary'
-const INVITE_SLUG_KEY = 'lottoo_pending_invite_slug'
-
-function parseInviteSlug() {
-  const sp = window.Telegram?.WebApp?.initDataUnsafe?.start_param
-  if (!sp) return localStorage.getItem(INVITE_SLUG_KEY) || null
-  if (sp.startsWith('join_')) return sp.slice(5)
-  if (sp.startsWith('g_')) return sp.slice(2)
-  return null
-}
-
-const TITLE = {
-  home:    { t: 'Lotto Chee',   s: 'Group lotto · live'  },
-  rounds:  { t: 'Rounds',   s: 'All draws'           },
-  history: { t: 'Activity', s: 'Your account'        },
-  profile: { t: 'Profile',  s: 'Settings & prefs'    },
-  admin:    { t: 'Admin',    s: 'Your group dashboard' },
-  platform: { t: 'Platform', s: 'App administration'   },
-}
 
 function TGHeader({ page }) {
   const logoSrc = page === 'home' ? HOME_LOGO_SRC : LOGO_SRC
@@ -45,12 +35,61 @@ function TGHeader({ page }) {
   )
 }
 
+function JoinRedirect() {
+  const { slug } = useParams()
+  useEffect(() => {
+    if (slug) localStorage.setItem(INVITE_SLUG_KEY, slug)
+  }, [slug])
+  return <Navigate to="/" replace />
+}
+
+function AppShell({ user, onUserUpdate, loadUser, inviteSlug }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const page = pathToPage(location.pathname) ?? 'home'
+
+  useEffect(() => {
+    if (location.pathname !== '/' && !pathToPage(location.pathname)) {
+      navigate('/', { replace: true })
+    }
+  }, [location.pathname, navigate])
+
+  useEffect(() => {
+    if (page === 'admin' && !user.is_group_trustee) navigate('/', { replace: true })
+    if (page === 'platform' && !user.is_platform_admin) navigate('/', { replace: true })
+  }, [page, user.is_group_trustee, user.is_platform_admin, navigate])
+
+  const goTo = (p) => navigate(PAGE_PATHS[p] ?? '/')
+
+  return (
+    <div className="app">
+      <TGHeader page={page} />
+      <div className="scroll">
+        <Routes>
+          <Route path="/" element={<Home user={user} onUserUpdate={onUserUpdate} />} />
+          <Route path="/rounds" element={<Rounds user={user} />} />
+          <Route path="/activity" element={<History user={user} />} />
+          <Route path="/profile" element={<Profile user={user} onUserUpdate={onUserUpdate} />} />
+          <Route path="/admin" element={<Admin user={user} />} />
+          <Route path="/platform" element={<PlatformAdmin user={user} />} />
+        </Routes>
+      </div>
+      <BottomNav
+        page={page}
+        setPage={goTo}
+        isGroupTrustee={!!user.is_group_trustee}
+        isPlatformAdmin={!!user.is_platform_admin}
+      />
+    </div>
+  )
+}
+
 export default function App() {
-  const [page, setPage]   = useState('home')
+  const location = useLocation()
   const [user, setUser]   = useState(null)
   const [error, setError] = useState(null)
   const [onboarded, setOnboarded] = useState(() => !!localStorage.getItem(ONB_KEY))
-  const [inviteSlug] = useState(() => parseInviteSlug())
+  const [inviteSlug] = useState(() => parseInviteSlug(location.pathname, location.search))
   const [inviteJoinError, setInviteJoinError] = useState(null)
   const inviteJoinAttempted = useRef(false)
 
@@ -96,27 +135,17 @@ export default function App() {
   }, [user?.needs_invite, inviteSlug, loadUser])
 
   if (error) {
-    const notInTelegram = error.includes('X-Init-Data') || error.includes('initData') || error.includes('bot first')
-    if (notInTelegram) {
-      const botUsername = import.meta.env.VITE_BOT_USERNAME ?? 'LottoCheeBot'
-      return (
-        <div style={{ minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 28, textAlign: 'center' }}>
-          <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 140, height: 154, objectFit: 'contain' }} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <span style={{ fontSize: 24, fontWeight: 800, color: '#111' }}>Group Lottery, Together</span>
-            <span style={{ fontSize: 15, color: '#666', lineHeight: 1.6, maxWidth: 280 }}>
-              Pool tickets with friends and share the winnings — all inside Telegram.
-            </span>
-          </div>
-          <a
-            href={`https://t.me/${botUsername}?startapp=open`}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, background: '#E8503A', color: '#fff', fontWeight: 700, fontSize: 17, padding: '16px 32px', borderRadius: 16, textDecoration: 'none', boxShadow: '0 4px 16px rgba(232,80,58,0.35)' }}
-          >
-            Open App in Telegram
-          </a>
-          <span style={{ fontSize: 12, color: '#bbb' }}>lottochee.com · BC, Canada</span>
-        </div>
-      )
+    const needsLogin = !isTelegram() && (
+      error.includes('Not authenticated') ||
+      error.includes('Session expired') ||
+      error.includes('X-Init-Data') ||
+      error.includes('initData')
+    )
+    if (needsLogin) {
+      if (location.pathname === '/login') {
+        return <Login onLogin={loadUser} />
+      }
+      return <Navigate to="/login" replace />
     }
     return (
       <div className="center-screen" style={{ padding: 24 }}>
@@ -163,24 +192,12 @@ export default function App() {
     />
   )
 
-  const PAGES = {
-    home: Home, rounds: Rounds, history: History, profile: Profile,
-    admin: Admin, platform: PlatformAdmin,
-  }
-  const Page  = PAGES[page] ?? Home
-
   return (
-    <div className="app">
-      <TGHeader page={page} />
-      <div className="scroll">
-        <Page user={user} onUserUpdate={setUser} />
-      </div>
-      <BottomNav
-        page={page}
-        setPage={setPage}
-        isGroupTrustee={!!user.is_group_trustee}
-        isPlatformAdmin={!!user.is_platform_admin}
-      />
-    </div>
+    <Routes>
+      <Route path="/join/:slug" element={<JoinRedirect />} />
+      <Route path="/*" element={
+        <AppShell user={user} onUserUpdate={setUser} loadUser={loadUser} inviteSlug={inviteSlug} />
+      } />
+    </Routes>
   )
 }

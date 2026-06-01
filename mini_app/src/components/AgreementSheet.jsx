@@ -1,19 +1,11 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api.js'
-
-const BASE = import.meta.env.VITE_API_BASE ?? ''
-
-function initData() {
-  return window.Telegram?.WebApp?.initData ?? ''
-}
+import { authFetch } from '../api.js'
 
 async function downloadAgreementPdf(kind, roundId) {
   const path = kind === 'master'
     ? '/api/agreement/master/download'
     : `/api/agreement/round/${roundId}/download`
-  const res = await fetch(BASE + path, {
-    headers: { 'X-Init-Data': initData() },
-  })
+  const res = await authFetch(path)
   if (!res.ok) {
     const text = await res.text()
     let msg = text

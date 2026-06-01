@@ -1,8 +1,23 @@
+import { isTelegram } from './routes.js'
+
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 20000)
 
-function initData() {
-  return window.Telegram?.WebApp?.initData ?? ''
+export function authHeaders(extra = {}) {
+  const headers = { ...extra }
+  const id = window.Telegram?.WebApp?.initData
+  if (id) headers['X-Init-Data'] = id
+  return headers
+}
+
+/** Authenticated fetch — session cookie on web, initData in Telegram. */
+export function authFetch(path, options = {}) {
+  const { headers: optHeaders, ...rest } = options
+  return fetch(BASE + path, {
+    credentials: 'include',
+    ...rest,
+    headers: authHeaders(optHeaders ?? {}),
+  })
 }
 
 async function req(method, path, body) {
@@ -11,9 +26,9 @@ async function req(method, path, body) {
 
   let res
   try {
-    res = await fetch(BASE + path, {
+    res = await authFetch(path, {
       method,
-      headers: { 'Content-Type': 'application/json', 'X-Init-Data': initData() },
+      headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     })
@@ -64,6 +79,11 @@ async function reqPublic(method, path) {
 }
 
 export const api = {
+  auth: {
+    config:        () => reqPublic('GET', '/api/auth/config'),
+    telegramLogin: (data) => req('POST', '/api/auth/telegram', data),
+    logout:        () => req('POST', '/api/auth/logout'),
+  },
   me:           ()             => req('GET',  '/api/me'),
   invite:       (groupId) => req('GET', groupId ? `/api/invite?group_id=${groupId}` : '/api/invite'),
   groups: {
@@ -167,3 +187,5 @@ export const api = {
     },
   },
 }
+
+export { isTelegram, BASE }

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api.js'
+import { api, authFetch } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
@@ -9,10 +9,8 @@ function TicketPhotoModal({ roundId, onClose }) {
   const [err, setErr] = useState(false)
 
   useEffect(() => {
-    const initData = window.Telegram?.WebApp?.initData ?? ''
-    fetch(`/api/round/${roundId}/ticket-image`, {
-      headers: { 'X-Init-Data': initData },
-    }).then(r => {
+    authFetch(`/api/round/${roundId}/ticket-image`)
+      .then(r => {
       if (!r.ok) throw new Error()
       return r.blob()
     }).then(blob => setSrc(URL.createObjectURL(blob)))

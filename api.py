@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl
 
 import stripe
 from anthropic import AsyncAnthropic
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 import httpx
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -77,6 +77,13 @@ from group_context import (
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
 from database import ensure_schema, get_db
+from web_auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    create_session_token,
+    validate_telegram_login,
+    verify_session_token,
+)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -237,16 +244,8 @@ async def _assign_group_from_slug(db, telegram_id: int, slug: str) -> str | None
     return err
 
 
-async def _get_user(init_data: str, db):
-    params = _validate_init_data(init_data)
-    if params is None:
-        raise HTTPException(401, "Invalid initData")
-    user_json = params.get("user")
-    if not user_json:
-        raise HTTPException(401, "No user in initData")
-    tg = json.loads(user_json)
-    start_param = _init_start_param(params)
-    invite_slug = parse_invite_slug(start_param)
+async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
+    """Load or create user from Telegram user dict; optional invite slug join."""
     row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
     user = await row.fetchone()
     if user is None:
@@ -303,6 +302,26 @@ async def _get_user(init_data: str, db):
     elif not user.get("photo_url") and _ptb_app:
         asyncio.ensure_future(_bg_fetch_photo(tg["id"]))
     return user
+
+
+async def _get_user(init_data: str, db):
+    params = _validate_init_data(init_data)
+    if params is None:
+        raise HTTPException(401, "Invalid initData")
+    user_json = params.get("user")
+    if not user_json:
+        raise HTTPException(401, "No user in initData")
+    tg = json.loads(user_json)
+    invite_slug = parse_invite_slug(_init_start_param(params))
+    return await _sync_user_from_tg(db, tg, invite_slug)
+
+
+async def _get_user_by_id(db, telegram_id: int):
+    row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
+    user = await row.fetchone()
+    if user is None:
+        raise HTTPException(401, "User not found")
+    return dict(user)
 
 
 # ---------------------------------------------------------------------------
@@ -744,16 +763,26 @@ async def _check_etransfer_emails(db) -> dict:
     return {"checked": len(receipts), "approved": approved}
 
 
-async def _auth(x_init_data: str | None):
-    if not x_init_data:
-        raise HTTPException(401, "Missing X-Init-Data header")
+async def _auth(request: Request):
+    init_data = request.headers.get("x-init-data") or request.headers.get("X-Init-Data")
     db = await get_db()
-    user = await _get_user(x_init_data, db)
-    return user, db
+    if init_data:
+        user = await _get_user(init_data, db)
+        return user, db
+    session = request.cookies.get(SESSION_COOKIE)
+    if session:
+        telegram_id = verify_session_token(session)
+        if telegram_id is not None:
+            user = await _get_user_by_id(db, telegram_id)
+            return user, db
+        await db.close()
+        raise HTTPException(401, "Session expired")
+    await db.close()
+    raise HTTPException(401, "Not authenticated")
 
 
-async def _require_group_trustee(x_init_data):
-    user, db = await _auth(x_init_data)
+async def _require_group_trustee(request: Request):
+    user, db = await _auth(request)
     gid = await trustee_group_id(db, user)
     if not gid and user.get("group_id"):
         g = await get_group(db, user["group_id"])
@@ -769,16 +798,16 @@ async def _require_group_trustee(x_init_data):
     return user, db, group
 
 
-async def _require_platform_admin(x_init_data):
-    user, db = await _auth(x_init_data)
+async def _require_platform_admin(request: Request):
+    user, db = await _auth(request)
     if not user.get("is_platform_admin") and user["telegram_id"] not in config.PLATFORM_ADMIN_IDS:
         raise HTTPException(403, "Platform admin only")
     return user, db
 
 
 # Backward-compatible alias
-async def _require_trustee(x_init_data):
-    user, db, _group = await _require_group_trustee(x_init_data)
+async def _require_trustee(request: Request):
+    user, db, _group = await _require_group_trustee(request)
     return user, db
 
 
@@ -873,12 +902,63 @@ async def telegram_webhook(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Web auth (Telegram Login Widget + session cookie)
+# ---------------------------------------------------------------------------
+
+def _session_cookie(token: str) -> str:
+    secure = os.getenv("RENDER", "") == "true" or os.getenv("SESSION_COOKIE_SECURE", "") == "1"
+    parts = [
+        f"{SESSION_COOKIE}={token}",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        f"Max-Age={SESSION_MAX_AGE}",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
+@app.get("/api/auth/config")
+async def api_auth_config():
+    return {"bot_username": _bot_username}
+
+
+@app.post("/api/auth/telegram")
+async def api_auth_telegram(request: Request):
+    body = await request.json()
+    tg = validate_telegram_login(body)
+    if tg is None:
+        raise HTTPException(401, "Invalid Telegram login")
+    db = await get_db()
+    try:
+        user = await _sync_user_from_tg(db, tg)
+    finally:
+        await db.close()
+    token = create_session_token(user["telegram_id"])
+    return Response(
+        content=json.dumps({"ok": True, "telegram_id": user["telegram_id"]}),
+        media_type="application/json",
+        headers={"Set-Cookie": _session_cookie(token)},
+    )
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout():
+    return Response(
+        content=json.dumps({"ok": True}),
+        media_type="application/json",
+        headers={"Set-Cookie": f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # /api/me
 # ---------------------------------------------------------------------------
 
 @app.get("/api/me")
-async def api_me(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_me(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute(
         "SELECT type, amount FROM transactions WHERE user_id=?", (user["telegram_id"],)
     )
@@ -918,8 +998,8 @@ async def api_group_preview(slug: str):
 
 
 @app.post("/api/group/join")
-async def api_group_join(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_group_join(request: Request):
+    user, db = await _auth(request)
     body = await request.json()
     slug = (body.get("slug") or "").strip().lower()
     if not slug:
@@ -936,8 +1016,8 @@ async def api_group_join(request: Request, x_init_data: str | None = Header(defa
 
 
 @app.get("/api/groups")
-async def api_groups_list(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_groups_list(request: Request):
+    user, db = await _auth(request)
     memberships = await get_user_groups(db, user["telegram_id"])
     active_gid = await ensure_active_group_id(db, user)
     await db.close()
@@ -956,8 +1036,8 @@ async def api_groups_list(x_init_data: str | None = Header(default=None)):
 
 
 @app.post("/api/groups/active")
-async def api_groups_set_active(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_groups_set_active(request: Request):
+    user, db = await _auth(request)
     body = await request.json()
     group_id = body.get("group_id")
     if group_id is None:
@@ -983,11 +1063,8 @@ async def api_groups_set_active(request: Request, x_init_data: str | None = Head
 # ---------------------------------------------------------------------------
 
 @app.get("/api/invite")
-async def api_invite(
-    group_id: int | None = None,
-    x_init_data: str | None = Header(default=None),
-):
-    user, db = await _auth(x_init_data)
+async def api_invite(request: Request, group_id: int | None = None):
+    user, db = await _auth(request)
     gid = group_id or user.get("group_id")
     if not gid:
         gid = await ensure_active_group_id(db, user)
@@ -1091,9 +1168,9 @@ def _beneficiary_update_parts(body: dict, user: dict) -> tuple[list[str], list]:
 
 
 @app.patch("/api/profile/email")
-async def api_update_profile_email(request: Request, x_init_data: str | None = Header(default=None)):
+async def api_update_profile_email(request: Request):
     """Save Interac e-transfer sender email only (Profile page)."""
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     body = await request.json()
     email_addr = (body.get("email") or "").strip().lower()
     if not email_addr or "@" not in email_addr:
@@ -1110,9 +1187,9 @@ async def api_update_profile_email(request: Request, x_init_data: str | None = H
 
 
 @app.post("/api/beneficiary")
-async def api_save_beneficiary(request: Request, x_init_data: str | None = Header(default=None)):
+async def api_save_beneficiary(request: Request):
     """Persist beneficiary profile from onboarding (BCLC Group Prize Agreement)."""
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     body = await request.json()
     sets, params = _beneficiary_update_parts(body, user)
     if not sets:
@@ -1131,8 +1208,8 @@ async def api_save_beneficiary(request: Request, x_init_data: str | None = Heade
 
 
 @app.get("/api/agreement/master")
-async def api_agreement_master(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_agreement_master(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     u = dict(row) if row else dict(user)
@@ -1146,8 +1223,8 @@ async def api_agreement_master(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/agreement/master/download")
-async def api_agreement_master_download(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_agreement_master_download(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     u = dict(row) if row else dict(user)
@@ -1185,8 +1262,8 @@ async def api_agreement_master_download(x_init_data: str | None = Header(default
 
 
 @app.get("/api/agreement/round/{round_id}")
-async def api_agreement_round(round_id: int, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_agreement_round(request: Request, round_id: int):
+    user, db = await _auth(request)
     await _auto_close_round_if_due(db, round_id)
     cur = await db.execute(
         "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
@@ -1231,8 +1308,8 @@ async def api_agreement_round(round_id: int, x_init_data: str | None = Header(de
 
 
 @app.get("/api/agreement/round/{round_id}/download")
-async def api_agreement_round_download(round_id: int, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_agreement_round_download(request: Request, round_id: int):
+    user, db = await _auth(request)
     await _auto_close_round_if_due(db, round_id)
     cur = await db.execute(
         "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
@@ -1391,8 +1468,8 @@ def _payment_options_payload(group, *, stripe_configured: bool) -> dict:
 
 
 @app.get("/api/round")
-async def api_round(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_round(request: Request):
+    user, db = await _auth(request)
     gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
@@ -1414,8 +1491,8 @@ async def api_round(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/rounds/open")
-async def api_open_rounds(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_open_rounds(request: Request):
+    user, db = await _auth(request)
     gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute(
@@ -1433,8 +1510,8 @@ async def api_open_rounds(x_init_data: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/rounds")
-async def api_rounds(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_rounds(request: Request):
+    user, db = await _auth(request)
     gid = await _require_active_member_group(user, db)
     await _auto_close_all_due_rounds(db)
     cur = await db.execute("""
@@ -1475,8 +1552,8 @@ async def api_rounds(x_init_data: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/participate")
-async def api_participate(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_participate(request: Request):
+    user, db = await _auth(request)
     gid = await _require_active_member_group(user, db)
     body = await request.json()
     amount = float(body.get("amount", 0))
@@ -1554,8 +1631,8 @@ async def api_participate(request: Request, x_init_data: str | None = Header(def
 # ---------------------------------------------------------------------------
 
 @app.get("/api/transactions")
-async def api_transactions(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_transactions(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute(
         "SELECT * FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 50", (user["telegram_id"],)
     )
@@ -1569,8 +1646,8 @@ async def api_transactions(x_init_data: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/deposit")
-async def api_deposit(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_deposit(request: Request):
+    user, db = await _auth(request)
     gid = await _require_active_member_group(user, db)
     body = await request.json()
     amount = float(body.get("amount", 0))
@@ -1615,8 +1692,8 @@ def _row_to_settings(row) -> dict:
 
 
 @app.get("/api/settings")
-async def get_settings(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def get_settings(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute("SELECT * FROM user_settings WHERE user_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     await db.close()
@@ -1624,8 +1701,8 @@ async def get_settings(x_init_data: str | None = Header(default=None)):
 
 
 @app.put("/api/settings")
-async def put_settings(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def put_settings(request: Request):
+    user, db = await _auth(request)
     b = await request.json()
     lottery_pref = b.get("lottery_preference", "both")
     if lottery_pref not in _LOTTERY_SHARE_PRICE:
@@ -1669,8 +1746,8 @@ async def put_settings(request: Request, x_init_data: str | None = Header(defaul
 # ---------------------------------------------------------------------------
 
 @app.get("/api/payment/options")
-async def payment_options(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def payment_options(request: Request):
+    user, db = await _auth(request)
     try:
         _, group = await _active_group_row(user, db)
     except HTTPException:
@@ -1681,8 +1758,8 @@ async def payment_options(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/etransfer/info")
-async def etransfer_info(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def etransfer_info(request: Request):
+    user, db = await _auth(request)
     try:
         _, group = await _active_group_row(user, db)
     except HTTPException:
@@ -1698,8 +1775,8 @@ async def etransfer_info(x_init_data: str | None = Header(default=None)):
 
 
 @app.post("/api/etransfer/deposit")
-async def etransfer_deposit(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def etransfer_deposit(request: Request):
+    user, db = await _auth(request)
     gid, group = await _active_group_row(user, db)
     body = await request.json()
     amount = round(float(body.get("amount", 0)), 2)
@@ -1740,8 +1817,8 @@ async def etransfer_deposit(request: Request, x_init_data: str | None = Header(d
 # ---------------------------------------------------------------------------
 
 @app.get("/api/trustee/application")
-async def api_trustee_application_status(x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_trustee_application_status(request: Request):
+    user, db = await _auth(request)
     cur = await db.execute(
         """SELECT * FROM trustee_applications
            WHERE applicant_user_id = ? ORDER BY id DESC LIMIT 1""",
@@ -1753,8 +1830,8 @@ async def api_trustee_application_status(x_init_data: str | None = Header(defaul
 
 
 @app.post("/api/trustee/apply")
-async def api_trustee_apply(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db = await _auth(x_init_data)
+async def api_trustee_apply(request: Request):
+    user, db = await _auth(request)
     if await trustee_group_id(db, user):
         await db.close()
         raise HTTPException(400, "You already manage a group")
@@ -1783,8 +1860,8 @@ async def api_trustee_apply(request: Request, x_init_data: str | None = Header(d
 # ---------------------------------------------------------------------------
 
 @app.get("/api/admin/group")
-async def admin_get_group(x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_get_group(request: Request):
+    user, db, group = await _require_group_trustee(request)
     await db.close()
     return {
         "group": {
@@ -1795,8 +1872,8 @@ async def admin_get_group(x_init_data: str | None = Header(default=None)):
 
 
 @app.patch("/api/admin/group")
-async def admin_patch_group(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_patch_group(request: Request):
+    user, db, group = await _require_group_trustee(request)
     try:
         body = await request.json()
     except Exception:
@@ -1872,8 +1949,8 @@ async def _admin_patch_group_body(db, gid: int, body: dict):
 
 
 @app.get("/api/admin/round")
-async def admin_round(x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_round(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
         "SELECT * FROM rounds WHERE group_id=? ORDER BY id DESC LIMIT 1", (gid,)
@@ -1893,8 +1970,8 @@ async def admin_round(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/admin/rounds")
-async def admin_rounds(x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_rounds(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
         "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed','uploaded','drawn') "
@@ -1917,12 +1994,9 @@ async def admin_rounds(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/admin/round/suggest")
-async def admin_suggest_round(
-    lottery_type: str = "lotto_max",
-    x_init_data: str | None = Header(default=None),
-):
+async def admin_suggest_round(request: Request, lottery_type: str = "lotto_max"):
     """Suggest next draw date and estimated jackpot for a new round."""
-    _, db, _ = await _require_group_trustee(x_init_data)
+    _, db, _ = await _require_group_trustee(request)
     await db.close()
     if not valid_lottery_type(lottery_type):
         raise HTTPException(400, "Unknown lottery type")
@@ -1930,8 +2004,8 @@ async def admin_suggest_round(
 
 
 @app.post("/api/admin/round/new")
-async def admin_new_round(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_new_round(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     jackpot = body.get("jackpot") or 0
@@ -1990,8 +2064,8 @@ async def admin_new_round(request: Request, x_init_data: str | None = Header(def
 
 
 @app.post("/api/admin/round/close")
-async def admin_close_round(request: Request, x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_close_round(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = {}
     try:
@@ -2022,9 +2096,9 @@ async def admin_close_round(request: Request, x_init_data: str | None = Header(d
 
 
 @app.post("/api/admin/round/ticket")
-async def admin_save_round_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+async def admin_save_round_ticket(request: Request):
     """Save one scanned physical ticket (image + rows) before finalizing the round."""
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
@@ -2103,9 +2177,9 @@ async def admin_save_round_ticket(request: Request, x_init_data: str | None = He
 
 
 @app.post("/api/admin/round/upload-ticket")
-async def admin_upload_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+async def admin_upload_ticket(request: Request):
     """Finalize ticket upload for a round (sets status to 'uploaded')."""
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
@@ -2179,9 +2253,9 @@ async def admin_upload_ticket(request: Request, x_init_data: str | None = Header
 
 
 @app.post("/api/admin/round/scan-ticket")
-async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(default=None)):
+async def admin_scan_ticket(request: Request):
     """Upload ticket image; optional client OCR rows, else Claude Vision fallback."""
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
@@ -2293,9 +2367,9 @@ async def admin_scan_ticket(request: Request, x_init_data: str | None = Header(d
 
 
 @app.get("/api/round/{round_id}/ticket-image")
-async def round_ticket_image(round_id: int, x_init_data: str | None = Header(default=None)):
+async def round_ticket_image(request: Request, round_id: int):
     """Serve the stored ticket image for any authenticated user."""
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     cur = await db.execute("SELECT ticket_image FROM rounds WHERE id=?", (round_id,))
     row = await cur.fetchone()
     await db.close()
@@ -2312,9 +2386,9 @@ async def round_ticket_image(round_id: int, x_init_data: str | None = Header(def
 
 
 @app.post("/api/admin/round/results")
-async def admin_enter_results(request: Request, x_init_data: str | None = Header(default=None)):
+async def admin_enter_results(request: Request):
     """Trustee enters winning numbers, cash prize, and/or free tickets."""
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
@@ -2458,13 +2532,13 @@ async def admin_enter_results(request: Request, x_init_data: str | None = Header
 
 
 @app.post("/api/admin/round/draw")
-async def admin_draw(x_init_data: str | None = Header(default=None)):
+async def admin_draw(request: Request):
     """
     LEGACY / DEPRECATED: Old random winner-takes-all draw.
     New flow: use /api/admin/round/upload-ticket then /api/admin/round/results.
     Kept for backward compatibility only — calls results with total_prize=0.
     """
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
         "SELECT * FROM rounds WHERE group_id=? AND status IN ('closed','uploaded') ORDER BY id DESC LIMIT 1",
@@ -2506,8 +2580,8 @@ async def admin_draw(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/admin/deposits")
-async def admin_deposits(x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_deposits(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
         "SELECT dr.*, u.full_name, u.username FROM deposit_requests dr "
@@ -2522,9 +2596,9 @@ async def admin_deposits(x_init_data: str | None = Header(default=None)):
 
 @app.post("/api/admin/deposits/{req_id}")
 async def admin_resolve_deposit(
-    req_id: int, request: Request, x_init_data: str | None = Header(default=None)
+    req_id: int, request: Request
 ):
-    user, db, group = await _require_group_trustee(x_init_data)
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     action = body.get("action")
@@ -2561,8 +2635,8 @@ async def admin_resolve_deposit(
 
 
 @app.get("/api/admin/members")
-async def admin_members(x_init_data: str | None = Header(default=None)):
-    user, db, group = await _require_group_trustee(x_init_data)
+async def admin_members(request: Request):
+    user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
         """SELECT u.* FROM users u
@@ -2581,9 +2655,9 @@ async def admin_members(x_init_data: str | None = Header(default=None)):
 
 
 @app.post("/api/admin/etransfer/check")
-async def admin_check_etransfer(x_init_data: str | None = Header(default=None)):
+async def admin_check_etransfer(request: Request):
     """Manually trigger IMAP check to auto-approve matched e-transfer deposits."""
-    user, db, _group = await _require_group_trustee(x_init_data)
+    user, db, _group = await _require_group_trustee(request)
     if not config.IMAP_HOST:
         await db.close()
         raise HTTPException(400, "IMAP not configured (set IMAP_HOST, IMAP_USER, IMAP_PASS)")
@@ -2597,8 +2671,8 @@ async def admin_check_etransfer(x_init_data: str | None = Header(default=None)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/platform/overview")
-async def platform_overview(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_platform_admin(x_init_data)
+async def platform_overview(request: Request):
+    user, db = await _require_platform_admin(request)
     counts = {}
     for key, sql in [
         ("users", "SELECT COUNT(*) AS c FROM users"),
@@ -2615,8 +2689,8 @@ async def platform_overview(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/platform/groups")
-async def platform_groups(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_platform_admin(x_init_data)
+async def platform_groups(request: Request):
+    user, db = await _require_platform_admin(request)
     cur = await db.execute("""
         SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
                u.photo_url AS trustee_photo_url,
@@ -2631,8 +2705,8 @@ async def platform_groups(x_init_data: str | None = Header(default=None)):
 
 
 @app.get("/api/platform/groups/{group_id}")
-async def platform_group_detail(group_id: int, x_init_data: str | None = Header(default=None)):
-    await _require_platform_admin(x_init_data)
+async def platform_group_detail(request: Request, group_id: int):
+    await _require_platform_admin(request)
     db = await get_db()
     cur = await db.execute("""
         SELECT g.*, u.full_name AS trustee_name, u.username AS trustee_username,
@@ -2677,11 +2751,11 @@ async def platform_group_detail(group_id: int, x_init_data: str | None = Header(
 
 @app.get("/api/platform/users")
 async def platform_users(
-    x_init_data: str | None = Header(default=None),
+    request: Request,
     limit: int = 100,
     group_id: int | None = None,
 ):
-    await _require_platform_admin(x_init_data)
+    await _require_platform_admin(request)
     db = await get_db()
     sql = """
         SELECT u.*, g.name AS group_name, g.slug AS group_slug
@@ -2703,12 +2777,12 @@ async def platform_users(
 
 @app.get("/api/platform/rounds")
 async def platform_rounds(
-    x_init_data: str | None = Header(default=None),
+    request: Request,
     group_id: int | None = None,
     status: str | None = None,
     limit: int = 50,
 ):
-    user, db = await _require_platform_admin(x_init_data)
+    user, db = await _require_platform_admin(request)
     sql = """
         SELECT r.*, g.name AS group_name,
                (SELECT COUNT(*) FROM participations WHERE round_id = r.id) AS participants_count
@@ -2732,8 +2806,8 @@ async def platform_rounds(
 
 
 @app.get("/api/platform/applications")
-async def platform_applications(x_init_data: str | None = Header(default=None)):
-    user, db = await _require_platform_admin(x_init_data)
+async def platform_applications(request: Request):
+    user, db = await _require_platform_admin(request)
     cur = await db.execute("""
         SELECT a.*, u.full_name, u.username
         FROM trustee_applications a
@@ -2747,10 +2821,8 @@ async def platform_applications(x_init_data: str | None = Header(default=None)):
 
 
 @app.post("/api/platform/applications/{app_id}/approve")
-async def platform_approve_application(
-    app_id: int, x_init_data: str | None = Header(default=None)
-):
-    admin, db = await _require_platform_admin(x_init_data)
+async def platform_approve_application(app_id: int, request: Request):
+    admin, db = await _require_platform_admin(request)
     cur = await db.execute("SELECT * FROM trustee_applications WHERE id=?", (app_id,))
     app_row = await cur.fetchone()
     if not app_row or app_row["status"] != "pending":
@@ -2788,9 +2860,9 @@ async def platform_approve_application(
 
 @app.post("/api/platform/applications/{app_id}/reject")
 async def platform_reject_application(
-    app_id: int, request: Request, x_init_data: str | None = Header(default=None)
+    app_id: int, request: Request
 ):
-    admin, db = await _require_platform_admin(x_init_data)
+    admin, db = await _require_platform_admin(request)
     body = {}
     try:
         body = await request.json()
@@ -2810,9 +2882,9 @@ async def platform_reject_application(
 
 @app.patch("/api/platform/groups/{group_id}")
 async def platform_patch_group(
-    group_id: int, request: Request, x_init_data: str | None = Header(default=None)
+    group_id: int, request: Request
 ):
-    await _require_platform_admin(x_init_data)
+    await _require_platform_admin(request)
     db = await get_db()
     cur = await db.execute("SELECT * FROM groups WHERE id=?", (group_id,))
     existing = await cur.fetchone()
@@ -2894,7 +2966,7 @@ async def platform_patch_group(
 
     await db.commit()
     await db.close()
-    detail = await platform_group_detail(group_id, x_init_data)
+    detail = await platform_group_detail(request, group_id)
     return {"ok": True, **detail}
 
 
@@ -2902,9 +2974,8 @@ async def platform_patch_group(
 async def platform_patch_user(
     telegram_id: int,
     request: Request,
-    x_init_data: str | None = Header(default=None),
-):
-    admin, db = await _require_platform_admin(x_init_data)
+    ):
+    admin, db = await _require_platform_admin(request)
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,))
     target = await cur.fetchone()
     if not target:
@@ -2971,11 +3042,11 @@ async def stripe_config():
 
 @app.post("/api/stripe/payment-intent")
 async def stripe_payment_intent(
-    request: Request, x_init_data: str | None = Header(default=None)
+    request: Request
 ):
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     _, group = await _active_group_row(user, db)
     opts = _payment_options_payload(group, stripe_configured=True)
     if not opts["card_enabled"]:
@@ -3011,11 +3082,11 @@ async def stripe_payment_intent(
 
 @app.post("/api/stripe/subscription/create")
 async def stripe_create_subscription(
-    request: Request, x_init_data: str | None = Header(default=None)
+    request: Request
 ):
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
         (user["telegram_id"],),
@@ -3064,10 +3135,10 @@ async def stripe_create_subscription(
 
 
 @app.get("/api/stripe/subscription")
-async def stripe_get_subscription(x_init_data: str | None = Header(default=None)):
+async def stripe_get_subscription(request: Request):
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
         (user["telegram_id"],),
@@ -3091,11 +3162,11 @@ async def stripe_get_subscription(x_init_data: str | None = Header(default=None)
 
 @app.post("/api/stripe/subscription/update")
 async def stripe_update_subscription(
-    request: Request, x_init_data: str | None = Header(default=None)
+    request: Request
 ):
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     _, group = await _active_group_row(user, db)
     opts = _payment_options_payload(group, stripe_configured=True)
     if not opts["card_enabled"]:
@@ -3137,10 +3208,10 @@ async def stripe_update_subscription(
 
 
 @app.post("/api/stripe/subscription/cancel")
-async def stripe_cancel_subscription(x_init_data: str | None = Header(default=None)):
+async def stripe_cancel_subscription(request: Request):
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
-    user, db = await _auth(x_init_data)
+    user, db = await _auth(request)
     cur = await db.execute(
         "SELECT * FROM stripe_subscriptions WHERE user_id=? AND status='active' LIMIT 1",
         (user["telegram_id"],),
@@ -3268,8 +3339,11 @@ _CLOSE_PAGE = """<!DOCTYPE html>
   <p>{msg}</p>
   <script>
     setTimeout(() => {{
-      if (window.Telegram && window.Telegram.WebApp) window.Telegram.WebApp.close();
-      else window.close();
+      if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {{
+        window.Telegram.WebApp.close();
+      }} else {{
+        window.location.href = '/activity';
+      }}
     }}, 2000);
   </script>
 </body>
