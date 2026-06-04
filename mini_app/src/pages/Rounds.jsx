@@ -3,6 +3,7 @@ import { api, authFetch } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
+import { jackpotDisplay } from '../lottery.js'
 
 function TicketPhotoModal({ roundId, onClose }) {
   const [src, setSrc] = useState(null)
@@ -104,7 +105,7 @@ function RoundCard({ round }) {
           <div className="col gap-4">
             <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{round.id}</span>
             <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-              {fmtDate(round.draw_date)} · ${fmtBig(round.jackpot)} jackpot
+              {fmtDate(round.draw_date)} · {jackpotDisplay(round.jackpot, { suffix: ' jackpot' })}
             </span>
           </div>
         </div>

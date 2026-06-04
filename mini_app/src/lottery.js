@@ -142,3 +142,20 @@ export function removeTicketRow(layout, rows, index) {
   if (!isVariableRowLayout(layout) || rows.length <= (layout.minRows ?? 1)) return rows
   return rows.filter((_, i) => i !== index)
 }
+
+/** Shown when a round's draw is scheduled but the jackpot estimate is not published yet. */
+export const JACKPOT_PENDING_LABEL = 'Announced closer to draw'
+
+export function fmtJackpotCompact(n) {
+  const v = Number(n || 0)
+  if (!v) return ''
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(0) + 'M'
+  if (v >= 1_000) return (v / 1_000).toFixed(0) + 'K'
+  return String(v)
+}
+
+export function jackpotDisplay(jackpot, { prefix = '$', suffix = '' } = {}) {
+  const v = Number(jackpot || 0)
+  if (v > 0) return `${prefix}${fmtJackpotCompact(v)}${suffix}`
+  return JACKPOT_PENDING_LABEL
+}

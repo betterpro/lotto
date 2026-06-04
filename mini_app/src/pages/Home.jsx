@@ -5,7 +5,7 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
 import LiveRoundDeck from '../components/LiveRoundDeck.jsx'
-import { lotteryMeta } from '../lottery.js'
+import { lotteryMeta, JACKPOT_PENDING_LABEL } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import { WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
@@ -659,28 +659,22 @@ function LiveRoundCard({ round, onJoin, peek }) {
       <div className="row gap-10" style={{ alignItems: 'center' }}>
         <LotteryLogo type={round.lottery_type} height={44} style={{ width: 56, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+            Estimated jackpot
+          </div>
           {jackpot > 0 ? (
-            <>
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
-                Estimated jackpot
-              </div>
-              <div className="pool-display">
-                <span className="cur">$</span>
-                <span className="amt">{fmtBig(jackpot)}</span>
-                <span className="unit">CAD</span>
-              </div>
-            </>
+            <div className="pool-display">
+              <span className="cur">$</span>
+              <span className="amt">{fmtBig(jackpot)}</span>
+              <span className="unit">CAD</span>
+            </div>
           ) : (
-            <>
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
-                Current pool
-              </div>
-              <div className="pool-display">
-                <span className="cur">$</span>
-                <span className="amt">{fmtBig(poolRaised)}</span>
-                <span className="unit">CAD</span>
-              </div>
-            </>
+            <div style={{
+              fontSize: 15, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic',
+              lineHeight: 1.35, paddingTop: 2,
+            }}>
+              {JACKPOT_PENDING_LABEL}
+            </div>
           )}
         </div>
       </div>
@@ -695,20 +689,16 @@ function LiveRoundCard({ round, onJoin, peek }) {
         </div>
       )}
 
-      {jackpot > 0 && (
-        <>
-          <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
-            <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-              Pool · {round.tickets_target || 25} tickets target
-            </span>
-            <span className="mono" style={{ fontSize: 12 }}>
-              <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
-              <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
-            </span>
-          </div>
-          <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
-        </>
-      )}
+      <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
+        <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+          Pool · {round.tickets_target || 25} tickets target
+        </span>
+        <span className="mono" style={{ fontSize: 12 }}>
+          <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
+          <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
+        </span>
+      </div>
+      <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
 
       <div className="row between" style={{ marginTop: 14 }}>
         <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>

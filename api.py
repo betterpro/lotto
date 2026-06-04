@@ -46,7 +46,7 @@ from lottery_types import (
     valid_lottery_type,
     validate_ticket_rows,
 )
-from lottery_draws import suggest_new_round
+from lottery_draws import fetch_estimated_jackpot, next_draw_date, suggest_new_round
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -1372,6 +1372,25 @@ async def api_agreement_round_download(request: Request, round_id: int):
 # /api/round
 # ---------------------------------------------------------------------------
 
+async def _maybe_refresh_round_jackpot(db, rd: dict) -> None:
+    """Persist estimated jackpot when an open round's draw becomes the next one."""
+    if rd.get("status") != "open" or rd.get("jackpot"):
+        return
+    draw_date_str = rd.get("draw_date")
+    if not draw_date_str:
+        return
+    lt = rd.get("lottery_type") or "lotto_max"
+    next_draw = next_draw_date(lt)
+    if not next_draw or draw_date_str != next_draw.isoformat():
+        return
+    jackpot = await fetch_estimated_jackpot(lt)
+    if not jackpot:
+        return
+    await db.execute("UPDATE rounds SET jackpot=? WHERE id=?", (jackpot, rd["id"]))
+    await db.commit()
+    rd["jackpot"] = jackpot
+
+
 async def _build_round_detail(db, round_, user_id: int) -> dict:
     await _auto_close_round_if_due(db, round_["id"])
     cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_["id"],))
@@ -1379,6 +1398,7 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     if refreshed:
         round_ = refreshed
     rd = dict(round_)
+    await _maybe_refresh_round_jackpot(db, rd)
     cur = await db.execute(
         "SELECT p.*, u.username, u.full_name FROM participations p "
         "JOIN users u ON u.telegram_id=p.user_id WHERE p.round_id=? ORDER BY p.amount DESC",
@@ -1975,8 +1995,7 @@ async def admin_rounds(request: Request):
     gid = group["id"]
     cur = await db.execute(
         "SELECT * FROM rounds WHERE group_id=? AND status IN ('open','closed','uploaded','drawn') "
-        "ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'closed' THEN 1 WHEN 'uploaded' THEN 2 ELSE 3 END, "
-        f"{_OPEN_ROUNDS_ORDER}",
+        "ORDER BY id DESC",
         (gid,),
     )
     rows = await cur.fetchall()
@@ -1994,13 +2013,17 @@ async def admin_rounds(request: Request):
 
 
 @app.get("/api/admin/round/suggest")
-async def admin_suggest_round(request: Request, lottery_type: str = "lotto_max"):
-    """Suggest next draw date and estimated jackpot for a new round."""
+async def admin_suggest_round(
+    request: Request,
+    lottery_type: str = "lotto_max",
+    draw_date: str | None = None,
+):
+    """Suggest draw date and estimated jackpot for a new round."""
     _, db, _ = await _require_group_trustee(request)
     await db.close()
     if not valid_lottery_type(lottery_type):
         raise HTTPException(400, "Unknown lottery type")
-    return await suggest_new_round(lottery_type)
+    return await suggest_new_round(lottery_type, draw_date=draw_date)
 
 
 @app.post("/api/admin/round/new")
@@ -2008,7 +2031,6 @@ async def admin_new_round(request: Request):
     user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
-    jackpot = body.get("jackpot") or 0
     tickets_target = body.get("tickets_target") or 25
     price_per_share = body.get("price_per_share") or 5.0
     draw_date = body.get("draw_date") or None
@@ -2016,6 +2038,14 @@ async def admin_new_round(request: Request):
     if not valid_lottery_type(lottery_type):
         await db.close()
         raise HTTPException(400, "Unknown lottery type")
+    if not draw_date:
+        await db.close()
+        raise HTTPException(400, "Draw date is required")
+    suggestion = await suggest_new_round(lottery_type, draw_date=draw_date)
+    if suggestion.get("error"):
+        await db.close()
+        raise HTTPException(400, "Invalid draw date for this lottery")
+    jackpot = suggestion.get("jackpot") or 0
     cur = await db.execute(
         """INSERT INTO rounds
            (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type, group_id)
@@ -2051,7 +2081,11 @@ async def admin_new_round(request: Request):
             )
 
     draw_str = f" · Draw {draw_date}" if draw_date else ""
-    jackpot_str = f" · ${jackpot/1_000_000:.0f}M jackpot" if jackpot else ""
+    jackpot_str = (
+        f" · ${jackpot/1_000_000:.0f}M jackpot"
+        if jackpot
+        else " · jackpot announced closer to draw"
+    )
     await _notify_all(db,
         f"🎟 <b>New round opened — #{round_id}</b>{draw_str}{jackpot_str}\n"
         f"${price_per_share:.0f}/share · target {tickets_target} tickets",

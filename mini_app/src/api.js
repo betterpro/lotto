@@ -160,7 +160,11 @@ export const api = {
     cancelSub:           ()       => req('POST', '/api/stripe/subscription/cancel'),
   },
   admin: {
-    suggestRound: (lottery_type)  => req('GET',  `/api/admin/round/suggest?lottery_type=${encodeURIComponent(lottery_type)}`),
+    suggestRound: (lottery_type, draw_date) => {
+      const q = new URLSearchParams({ lottery_type })
+      if (draw_date) q.set('draw_date', draw_date)
+      return req('GET', `/api/admin/round/suggest?${q}`)
+    },
     newRound:     (data)          => req('POST', '/api/admin/round/new', data),
     closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy

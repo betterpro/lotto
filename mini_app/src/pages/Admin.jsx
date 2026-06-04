@@ -7,6 +7,7 @@ import {
   LOTTERY_TYPES, lotteryMeta, ticketLayout, emptyTicketRows,
   parseTicketNumbers, ticketRowsValid, ticketRowsToNumbers, mergeScannedRows,
   isVariableRowLayout, rowSpecForIndex, addTicketRow, removeTicketRow,
+  JACKPOT_PENDING_LABEL, fmtJackpotCompact,
 } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import CameraCapture from '../components/CameraCapture.jsx'
@@ -125,7 +126,8 @@ function SummaryRow({ k, v, mono }) {
 function NewRoundSheet({ onClose, onCreated, showToast }) {
   const [lotteryType, setLotteryType] = useState('lotto_max')
   const [date,     setDate]     = useState('')
-  const [jackpot,  setJackpot]  = useState('')
+  const [jackpot,  setJackpot]  = useState(0)
+  const [jackpotAvailable, setJackpotAvailable] = useState(false)
   const [target,   setTarget]   = useState('25')
   const [price,    setPrice]    = useState('6')
   const [busy,     setBusy]     = useState(false)
@@ -134,29 +136,36 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
   useEffect(() => {
     let cancelled = false
     setSuggesting(true)
-    api.admin.suggestRound(lotteryType)
+    api.admin.suggestRound(lotteryType, date || undefined)
       .then(res => {
         if (cancelled) return
-        if (res.draw_date) setDate(res.draw_date)
-        if (res.jackpot) setJackpot(String(res.jackpot))
+        if (!date && res.draw_date) setDate(res.draw_date)
+        setJackpotAvailable(!!res.jackpot_available)
+        setJackpot(res.jackpot || 0)
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setSuggesting(false) })
     return () => { cancelled = true }
-  }, [lotteryType])
+  }, [lotteryType, date])
 
   function selectType(lt) {
     setLotteryType(lt.id)
     setPrice(String(lt.price))
+    setDate('')
+    setJackpot(0)
+    setJackpotAvailable(false)
   }
 
   async function submit() {
+    if (!date) {
+      showToast('Choose a draw date', 'error')
+      return
+    }
     setBusy(true)
     try {
       const res = await api.admin.newRound({
         lottery_type:    lotteryType,
-        jackpot:         Number(jackpot) || 0,
-        draw_date:       date || undefined,
+        draw_date:       date,
         tickets_target:  Number(target)  || 25,
         price_per_share: Number(price)   || 6,
       })
@@ -166,6 +175,12 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
     } catch (err) { showToast(err.message, 'error') }
     finally { setBusy(false) }
   }
+
+  const jackpotText = suggesting
+    ? 'Loading…'
+    : jackpotAvailable
+      ? `$${fmtJackpotCompact(jackpot)} CAD`
+      : JACKPOT_PENDING_LABEL
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
@@ -204,9 +219,20 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               </div>
             </FieldLabel>
 
-            <FieldLabel label={`Estimated jackpot (CAD)${suggesting ? ' · loading…' : ''}`}>
-              <input className="input mono" type="number" value={jackpot}
-                onChange={e => setJackpot(e.target.value)} placeholder="10000000" />
+            <FieldLabel label="Draw date">
+              <input className="input" type="date" min={TODAY} value={date}
+                onChange={e => setDate(e.target.value)} required />
+            </FieldLabel>
+
+            <FieldLabel label={`Estimated jackpot${suggesting ? ' · loading…' : ''}`}>
+              <div className="input" style={{
+                display: 'flex', alignItems: 'center', minHeight: 44,
+                color: jackpotAvailable ? 'var(--tx-1)' : 'var(--tx-3)',
+                fontStyle: jackpotAvailable ? 'normal' : 'italic',
+                fontWeight: jackpotAvailable ? 600 : 400,
+              }}>
+                {jackpotText}
+              </div>
             </FieldLabel>
             <div className="row gap-8">
               <FieldLabel label="Pool target (tickets)" flex>
@@ -218,12 +244,8 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                   onChange={e => setPrice(e.target.value)} placeholder="6" />
               </FieldLabel>
             </div>
-            <FieldLabel label="Draw date (optional)">
-              <input className="input" type="date" min={TODAY} value={date}
-                onChange={e => setDate(e.target.value)} />
-            </FieldLabel>
           </div>
-          <button className="btn btn-primary btn-block" disabled={busy} onClick={submit}>
+          <button className="btn btn-primary btn-block" disabled={busy || !date} onClick={submit}>
             <PlusIcon width={16} height={16} />
             {busy ? 'Opening…' : 'Open round'}
           </button>
@@ -1159,7 +1181,7 @@ export default function Admin({ user }) {
                 {[
                   ['Pool',         fmtCAD(round.pool)],
                   ['Participants', round.participants?.length ?? 0],
-                  ['Jackpot',      round.jackpot ? `$${(round.jackpot / 1_000_000).toFixed(0)}M` : '—'],
+                  ['Jackpot',      round.jackpot ? `$${fmtJackpotCompact(round.jackpot)}` : JACKPOT_PENDING_LABEL],
                   ['Draw date',    round.draw_date ? fmtDate(round.draw_date) : '—'],
                 ].map(([k, v]) => (
                   <div key={k} className="col gap-4">

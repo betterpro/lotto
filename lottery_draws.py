@@ -91,12 +91,61 @@ async def fetch_estimated_jackpot(lottery_type: str) -> int | None:
         return None
 
 
-async def suggest_new_round(lottery_type: str, *, from_dt: datetime | None = None) -> dict:
+def is_valid_draw_date(
+    lottery_type: str, draw: date, *, from_dt: datetime | None = None
+) -> bool:
+    """True if draw is a scheduled draw day on or after today (Pacific cutoff)."""
+    if not valid_lottery_type(lottery_type):
+        return False
+    sched = DRAW_SCHEDULE[lottery_type]
+    now = (from_dt or datetime.now(PT)).astimezone(PT)
+    if draw < now.date():
+        return False
+    if draw.weekday() not in sched["weekdays"]:
+        return False
+    if draw == now.date():
+        cutoff = now.replace(
+            hour=sched["hour"], minute=sched["minute"], second=0, microsecond=0
+        )
+        if now >= cutoff:
+            return False
+    return True
+
+
+async def suggest_new_round(
+    lottery_type: str,
+    *,
+    draw_date: str | date | None = None,
+    from_dt: datetime | None = None,
+) -> dict:
     """Suggested draw_date and jackpot for opening a new round."""
-    draw = next_draw_date(lottery_type, from_dt=from_dt)
-    jackpot = await fetch_estimated_jackpot(lottery_type)
+    next_draw = next_draw_date(lottery_type, from_dt=from_dt)
+
+    if draw_date:
+        selected = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
+        if not is_valid_draw_date(lottery_type, selected, from_dt=from_dt):
+            return {
+                "lottery_type": lottery_type,
+                "draw_date": None,
+                "next_draw_date": next_draw.isoformat() if next_draw else None,
+                "jackpot": 0,
+                "jackpot_available": False,
+                "error": "invalid_draw_date",
+            }
+    else:
+        selected = next_draw
+
+    jackpot_available = bool(next_draw and selected == next_draw)
+    jackpot = 0
+    if jackpot_available:
+        fetched = await fetch_estimated_jackpot(lottery_type)
+        jackpot = fetched or 0
+        jackpot_available = jackpot > 0
+
     return {
         "lottery_type": lottery_type,
-        "draw_date": draw.isoformat() if draw else None,
-        "jackpot": jackpot or 0,
+        "draw_date": selected.isoformat() if selected else None,
+        "next_draw_date": next_draw.isoformat() if next_draw else None,
+        "jackpot": jackpot,
+        "jackpot_available": jackpot_available,
     }
