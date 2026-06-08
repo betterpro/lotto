@@ -103,7 +103,7 @@ export default function CameraCapture({ onCapture, onClose, onError }) {
     >
       <div
         className="sheet"
-        style={{ maxHeight: '92vh' }}
+        style={{ maxHeight: 'var(--sheet-max-h)' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="handle" />

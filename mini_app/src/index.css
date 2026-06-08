@@ -51,6 +51,9 @@ button { font-family: inherit; }
   /* App height — Telegram viewportStableHeight via JS, else dynamic vh.
      telegram.js overrides --tg-viewport-stable-height with the real px value. */
   --app-h: var(--tg-viewport-stable-height, 100dvh);
+  /* Bottom-sheet cap — real visible height minus the unobscured top inset, so a
+     sheet's pinned footer never lands under the Telegram header or below the fold. */
+  --sheet-max-h: calc(var(--app-h) - var(--sat) - 12px);
 }
 
 /* ── Base ───────────────────────────────────────────────────────────────── */
@@ -313,7 +316,7 @@ html, body {
 .sheet {
   background: var(--bg-2); border-radius: 18px 18px 0 0;
   padding: 0 0 max(var(--sab), 24px);
-  width: 100%; max-height: 88dvh;
+  width: 100%; max-height: var(--sheet-max-h);
   display: flex; flex-direction: column;
   min-height: 0; overflow: hidden;
   animation: slideup .28s cubic-bezier(.2,.8,.2,1);
