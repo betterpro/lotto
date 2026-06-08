@@ -47,6 +47,10 @@ button { font-family: inherit; }
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
   --tabbar-h: calc(56px + max(calc(var(--sab) + 8px), 28px));
+
+  /* App height — Telegram viewportStableHeight via JS, else dynamic vh.
+     telegram.js overrides --tg-viewport-stable-height with the real px value. */
+  --app-h: var(--tg-viewport-stable-height, 100dvh);
 }
 
 /* ── Base ───────────────────────────────────────────────────────────────── */
@@ -68,10 +72,10 @@ html, body {
 .grow { flex: 1; }
 
 /* ── Layout ─────────────────────────────────────────────────────────────── */
-#root { min-height: 100dvh; }
+#root { min-height: var(--app-h); }
 
 .app {
-  display: flex; flex-direction: column; height: 100dvh;
+  display: flex; flex-direction: column; height: var(--app-h);
   box-sizing: border-box;
   padding-top: var(--sat);
   padding-left: var(--sal);
@@ -452,7 +456,7 @@ html, body {
 @keyframes spin { to { transform: rotate(360deg); } }
 .center-screen {
   display: flex; flex-direction: column; align-items: center;
-  justify-content: center; min-height: 100dvh; gap: 14px; text-align: center;
+  justify-content: center; min-height: var(--app-h); gap: 14px; text-align: center;
   box-sizing: border-box;
   padding: calc(var(--sat) + 24px) calc(var(--sar) + 24px) calc(var(--sab) + 24px) calc(var(--sal) + 24px);
 }

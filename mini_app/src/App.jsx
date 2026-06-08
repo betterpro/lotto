@@ -104,8 +104,6 @@ export default function App() {
 
   useEffect(() => {
     if (inviteSlug) localStorage.setItem(INVITE_SLUG_KEY, inviteSlug)
-    window.Telegram?.WebApp?.ready()
-    window.Telegram?.WebApp?.expand()
     loadUser()
   }, [loadUser, inviteSlug])
 

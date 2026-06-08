@@ -50,7 +50,7 @@ export default function Login({ onLogin }) {
 
   return (
     <div style={{
-      minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column',
+      minHeight: 'var(--app-h)', background: '#fff', display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
       padding: 'calc(32px + var(--sat)) calc(24px + var(--sar)) calc(32px + var(--sab)) calc(24px + var(--sal))',
       gap: 28, textAlign: 'center',

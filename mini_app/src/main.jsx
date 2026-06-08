@@ -4,11 +4,9 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App.jsx'
 import { ToastProvider } from './components/Toast.jsx'
 import './index.css'
-import { initSafeArea } from './safeArea.js'
+import { initTelegram } from './telegram.js'
 
-const tg = window.Telegram?.WebApp
-if (tg) { tg.ready(); tg.expand() }
-initSafeArea()
+initTelegram()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
