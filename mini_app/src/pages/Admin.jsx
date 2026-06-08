@@ -100,8 +100,6 @@ function TicketNumbersView({ ticketNumbers, lotteryType, selectable, selectedMai
   )
 }
 
-const TODAY = new Date().toISOString().slice(0, 10)
-
 function FieldLabel({ label, children, flex }) {
   return (
     <div className="col gap-4" style={{ flex: flex ? 1 : 'initial', minWidth: 0 }}>
@@ -126,8 +124,10 @@ function SummaryRow({ k, v, mono }) {
 function NewRoundSheet({ onClose, onCreated, showToast }) {
   const [lotteryType, setLotteryType] = useState('lotto_max')
   const [date,     setDate]     = useState('')
+  const [drawDates, setDrawDates] = useState([])
   const [jackpot,  setJackpot]  = useState(0)
   const [jackpotAvailable, setJackpotAvailable] = useState(false)
+  const [nextDrawDate, setNextDrawDate] = useState('')
   const [target,   setTarget]   = useState('25')
   const [price,    setPrice]    = useState('6')
   const [busy,     setBusy]     = useState(false)
@@ -139,9 +139,13 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
     api.admin.suggestRound(lotteryType, date || undefined)
       .then(res => {
         if (cancelled) return
+        const dates = res.draw_dates || []
+        setDrawDates(dates)
         if (!date && res.draw_date) setDate(res.draw_date)
+        else if (date && dates.length && !dates.includes(date)) setDate(res.draw_date || dates[0] || '')
         setJackpotAvailable(!!res.jackpot_available)
         setJackpot(res.jackpot || 0)
+        setNextDrawDate(res.next_draw_date || '')
       })
       .catch(() => {})
       .finally(() => { if (!cancelled) setSuggesting(false) })
@@ -152,8 +156,10 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
     setLotteryType(lt.id)
     setPrice(String(lt.price))
     setDate('')
+    setDrawDates([])
     setJackpot(0)
     setJackpotAvailable(false)
+    setNextDrawDate('')
   }
 
   async function submit() {
@@ -181,6 +187,7 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
     : jackpotAvailable
       ? `$${fmtJackpotCompact(jackpot)} CAD`
       : JACKPOT_PENDING_LABEL
+  const isFutureDraw = date && nextDrawDate && date !== nextDrawDate
 
   return (
     <div className="sheet-overlay" onClick={onClose}>
@@ -219,9 +226,42 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               </div>
             </FieldLabel>
 
-            <FieldLabel label="Draw date">
-              <input className="input" type="date" min={TODAY} value={date}
-                onChange={e => setDate(e.target.value)} required />
+            <FieldLabel label={`Draw date${suggesting && !drawDates.length ? ' · loading…' : ''}`}>
+              {drawDates.length === 0 ? (
+                <div className="input" style={{ color: 'var(--tx-3)', fontStyle: 'italic' }}>
+                  {suggesting ? 'Loading draws…' : 'No upcoming draws'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+                  {drawDates.map((d, i) => {
+                    const sel = d === date
+                    return (
+                      <button key={d} type="button" onClick={() => setDate(d)} style={{
+                        flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start',
+                        gap: 2, padding: '10px 12px', borderRadius: 10, cursor: 'pointer', border: 'none',
+                        background: sel ? 'rgba(46,166,255,.16)' : 'var(--surface-2)',
+                        outline: sel ? '1.5px solid var(--tg)' : '1.5px solid transparent',
+                        fontFamily: 'inherit', textAlign: 'left', minWidth: 96,
+                      }}>
+                        {i === 0 && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: '.4px',
+                            textTransform: 'uppercase', color: sel ? 'var(--tg)' : 'var(--money)',
+                          }}>
+                            Next
+                          </span>
+                        )}
+                        <span style={{
+                          fontSize: 13, fontWeight: 600,
+                          color: sel ? 'var(--tg)' : 'var(--tx-1)',
+                        }}>
+                          {fmtDate(d)}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </FieldLabel>
 
             <FieldLabel label={`Estimated jackpot${suggesting ? ' · loading…' : ''}`}>
@@ -230,9 +270,19 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                 color: jackpotAvailable ? 'var(--tx-1)' : 'var(--tx-3)',
                 fontStyle: jackpotAvailable ? 'normal' : 'italic',
                 fontWeight: jackpotAvailable ? 600 : 400,
+                opacity: jackpotAvailable ? 1 : 0.72,
+                background: jackpotAvailable ? undefined : 'var(--bg-3)',
+                cursor: 'not-allowed',
               }}>
                 {jackpotText}
               </div>
+              {!suggesting && !jackpotAvailable && (
+                <span style={{ fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.45 }}>
+                  {isFutureDraw
+                    ? 'Not published for this draw yet. You can open the round now and set the jackpot later.'
+                    : 'Not published yet. Open the round and set it later, or it will fill in automatically when lotto.ca publishes it.'}
+                </span>
+              )}
             </FieldLabel>
             <div className="row gap-8">
               <FieldLabel label="Pool target (tickets)" flex>
@@ -245,12 +295,85 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               </FieldLabel>
             </div>
           </div>
-          <button className="btn btn-primary btn-block" disabled={busy || !date} onClick={submit}>
+          <button className="btn btn-primary btn-block" disabled={busy || !date || !drawDates.length} onClick={submit}>
             <PlusIcon width={16} height={16} />
             {busy ? 'Opening…' : 'Open round'}
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function RoundJackpotEditor({ round, onUpdated, showToast }) {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  if (!round?.jackpot_pending) {
+    return (
+      <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+        ${fmtJackpotCompact(round.jackpot)}
+      </span>
+    )
+  }
+
+  async function saveManual() {
+    const jackpot = Number(value)
+    if (!jackpot || jackpot < 1) {
+      showToast('Enter jackpot in CAD (e.g. 15000000)', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      await api.admin.setJackpot(round.id, { jackpot })
+      showToast('Jackpot saved', 'success')
+      setValue('')
+      await onUpdated()
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setBusy(false) }
+  }
+
+  async function fetchFromSite() {
+    setBusy(true)
+    try {
+      const res = await api.admin.setJackpot(round.id, { fetch: true })
+      showToast(`Jackpot set · $${fmtJackpotCompact(res.jackpot)}`, 'success')
+      await onUpdated()
+    } catch (err) { showToast(err.message, 'error') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="col gap-8">
+      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic' }}>
+        {JACKPOT_PENDING_LABEL}
+      </span>
+      <input
+        className="input mono"
+        type="number"
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        placeholder="15000000"
+        disabled={busy}
+      />
+      <span style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: -4 }}>
+        Full amount in CAD · e.g. 15000000 for $15M
+      </span>
+      <div className="row gap-8">
+        <button className="btn btn-secondary" style={{ flex: 1 }} disabled={busy} onClick={saveManual}>
+          Save jackpot
+        </button>
+        {round.jackpot_fetchable && (
+          <button className="btn btn-secondary" style={{ flex: 1 }} disabled={busy} onClick={fetchFromSite}>
+            {busy ? '…' : 'Fetch from lotto site'}
+          </button>
+        )}
+      </div>
+      {!round.jackpot_fetchable && (
+        <span style={{ fontSize: 10, color: 'var(--tx-3)', lineHeight: 1.4 }}>
+          Auto-fetch becomes available when this draw is the next one on lotto.ca.
+        </span>
+      )}
     </div>
   )
 }
@@ -1181,7 +1304,6 @@ export default function Admin({ user }) {
                 {[
                   ['Pool',         fmtCAD(round.pool)],
                   ['Participants', round.participants?.length ?? 0],
-                  ['Jackpot',      round.jackpot ? `$${fmtJackpotCompact(round.jackpot)}` : JACKPOT_PENDING_LABEL],
                   ['Draw date',    round.draw_date ? fmtDate(round.draw_date) : '—'],
                 ].map(([k, v]) => (
                   <div key={k} className="col gap-4">
@@ -1190,6 +1312,25 @@ export default function Admin({ user }) {
                   </div>
                 ))}
               </div>
+
+              {(round.jackpot_pending && (st === 'open' || st === 'closed')) ? (
+                <div style={{ marginBottom: 12 }}>
+                  <span style={{
+                    display: 'block', fontSize: 10, color: 'var(--tx-3)',
+                    textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8,
+                  }}>
+                    Jackpot
+                  </span>
+                  <RoundJackpotEditor round={round} onUpdated={loadRounds} showToast={showToast} />
+                </div>
+              ) : (
+                <div className="col gap-4" style={{ marginBottom: 12 }}>
+                  <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Jackpot</span>
+                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+                    {round.jackpot ? `$${fmtJackpotCompact(round.jackpot)}` : JACKPOT_PENDING_LABEL}
+                  </span>
+                </div>
+              )}
 
               {round.participants?.length > 0 && (
                 <>

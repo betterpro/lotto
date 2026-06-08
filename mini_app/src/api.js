@@ -166,6 +166,8 @@ export const api = {
       return req('GET', `/api/admin/round/suggest?${q}`)
     },
     newRound:     (data)          => req('POST', '/api/admin/round/new', data),
+    setJackpot:   (round_id, opts) => req('POST', '/api/admin/round/jackpot',
+      opts?.fetch ? { round_id, fetch: true } : { round_id, jackpot: opts.jackpot }),
     closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
     scanTicket:   (round_id, image_b64, opts = {}) => req('POST', '/api/admin/round/scan-ticket', {

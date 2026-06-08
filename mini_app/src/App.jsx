@@ -148,7 +148,7 @@ export default function App() {
       return <Navigate to="/login" replace />
     }
     return (
-      <div className="center-screen" style={{ padding: 24 }}>
+      <div className="center-screen">
         <span style={{ fontSize: 48 }}>⚠️</span>
         <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
         <button className="primary" onClick={loadUser} style={{ marginTop: 12 }}>

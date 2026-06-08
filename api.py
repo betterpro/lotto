@@ -1372,23 +1372,41 @@ async def api_agreement_round_download(request: Request, round_id: int):
 # /api/round
 # ---------------------------------------------------------------------------
 
-async def _maybe_refresh_round_jackpot(db, rd: dict) -> None:
-    """Persist estimated jackpot when an open round's draw becomes the next one."""
-    if rd.get("status") != "open" or rd.get("jackpot"):
-        return
+async def _try_fetch_round_jackpot(rd: dict) -> int | None:
+    """Return estimated jackpot from lotto site when this round is the next draw."""
     draw_date_str = rd.get("draw_date")
     if not draw_date_str:
-        return
+        return None
     lt = rd.get("lottery_type") or "lotto_max"
     next_draw = next_draw_date(lt)
     if not next_draw or draw_date_str != next_draw.isoformat():
+        return None
+    return await fetch_estimated_jackpot(lt)
+
+
+async def _maybe_refresh_round_jackpot(db, rd: dict) -> None:
+    """Persist estimated jackpot when a round's draw becomes the next one."""
+    if rd.get("jackpot") or rd.get("status") not in ("open", "closed"):
         return
-    jackpot = await fetch_estimated_jackpot(lt)
+    jackpot = await _try_fetch_round_jackpot(rd)
     if not jackpot:
         return
     await db.execute("UPDATE rounds SET jackpot=? WHERE id=?", (jackpot, rd["id"]))
     await db.commit()
     rd["jackpot"] = jackpot
+
+
+def _round_jackpot_fetchable(rd: dict) -> bool:
+    if rd.get("jackpot"):
+        return False
+    if rd.get("status") not in ("open", "closed"):
+        return False
+    draw_date_str = rd.get("draw_date")
+    if not draw_date_str:
+        return False
+    lt = rd.get("lottery_type") or "lotto_max"
+    next_draw = next_draw_date(lt)
+    return bool(next_draw and draw_date_str == next_draw.isoformat())
 
 
 async def _build_round_detail(db, round_, user_id: int) -> dict:
@@ -1445,6 +1463,8 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
         rd["winner_name"] = (w["full_name"] or w["username"]) if w else None
     else:
         rd["winner_name"] = None
+    rd["jackpot_pending"] = not rd.get("jackpot")
+    rd["jackpot_fetchable"] = _round_jackpot_fetchable(rd)
     return rd
 
 
@@ -2095,6 +2115,49 @@ async def admin_new_round(request: Request):
 
     await db.close()
     return {"ok": True, "round_id": round_id}
+
+
+@app.post("/api/admin/round/jackpot")
+async def admin_round_jackpot(request: Request):
+    """Set or fetch the estimated jackpot for a round."""
+    user, db, group = await _require_group_trustee(request)
+    gid = group["id"]
+    body = await request.json()
+    round_id = body.get("round_id")
+    if not round_id:
+        await db.close()
+        raise HTTPException(400, "round_id required")
+    cur = await db.execute(
+        "SELECT * FROM rounds WHERE id=? AND group_id=?",
+        (int(round_id), gid),
+    )
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    rd = dict(round_)
+    if rd.get("status") not in ("open", "closed"):
+        await db.close()
+        raise HTTPException(400, "Jackpot cannot be updated for this round")
+
+    if body.get("fetch"):
+        jackpot = await _try_fetch_round_jackpot(rd)
+        if not jackpot:
+            await db.close()
+            raise HTTPException(404, "Jackpot not published on lotto site yet")
+    else:
+        try:
+            jackpot = int(body.get("jackpot") or 0)
+        except (TypeError, ValueError):
+            jackpot = 0
+        if jackpot < 1:
+            await db.close()
+            raise HTTPException(400, "Enter a valid jackpot amount (CAD)")
+
+    await db.execute("UPDATE rounds SET jackpot=? WHERE id=?", (jackpot, rd["id"]))
+    await db.commit()
+    await db.close()
+    return {"ok": True, "jackpot": jackpot}
 
 
 @app.post("/api/admin/round/close")

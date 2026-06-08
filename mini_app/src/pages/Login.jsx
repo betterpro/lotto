@@ -51,7 +51,9 @@ export default function Login({ onLogin }) {
   return (
     <div style={{
       minHeight: '100dvh', background: '#fff', display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', padding: '32px 24px', gap: 28, textAlign: 'center',
+      alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
+      padding: 'calc(32px + var(--sat)) calc(24px + var(--sar)) calc(32px + var(--sab)) calc(24px + var(--sal))',
+      gap: 28, textAlign: 'center',
     }}>
       <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 140, height: 154, objectFit: 'contain' }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

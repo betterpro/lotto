@@ -53,6 +53,26 @@ def next_draw_date(lottery_type: str, *, from_dt: datetime | None = None) -> dat
     return None
 
 
+def upcoming_draw_dates(
+    lottery_type: str,
+    *,
+    count: int = 12,
+    from_dt: datetime | None = None,
+) -> list[date]:
+    """Return the next scheduled draw dates for a lottery type."""
+    if not valid_lottery_type(lottery_type) or count < 1:
+        return []
+    dates: list[date] = []
+    probe = from_dt or datetime.now(PT)
+    for _ in range(count):
+        nd = next_draw_date(lottery_type, from_dt=probe)
+        if not nd:
+            break
+        dates.append(nd)
+        probe = datetime.combine(nd + timedelta(days=1), datetime.min.time(), PT)
+    return dates
+
+
 def _parse_wclc_jackpot_millions(html: str, section: str) -> int | None:
     marker = f'nextJackpotDetails{section}'
     start = html.find(marker)
@@ -120,6 +140,8 @@ async def suggest_new_round(
 ) -> dict:
     """Suggested draw_date and jackpot for opening a new round."""
     next_draw = next_draw_date(lottery_type, from_dt=from_dt)
+    available_dates = upcoming_draw_dates(lottery_type, from_dt=from_dt)
+    available_iso = [d.isoformat() for d in available_dates]
 
     if draw_date:
         selected = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
@@ -127,6 +149,7 @@ async def suggest_new_round(
             return {
                 "lottery_type": lottery_type,
                 "draw_date": None,
+                "draw_dates": available_iso,
                 "next_draw_date": next_draw.isoformat() if next_draw else None,
                 "jackpot": 0,
                 "jackpot_available": False,
@@ -145,6 +168,7 @@ async def suggest_new_round(
     return {
         "lottery_type": lottery_type,
         "draw_date": selected.isoformat() if selected else None,
+        "draw_dates": available_iso,
         "next_draw_date": next_draw.isoformat() if next_draw else None,
         "jackpot": jackpot,
         "jackpot_available": jackpot_available,
