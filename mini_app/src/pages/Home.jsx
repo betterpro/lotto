@@ -173,8 +173,8 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
 
   // ── E-transfer instructions ──
   if (step === 'sent' && etxInfo) return (
-    <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
+    <div className="sheet-overlay full" onClick={onClose}>
+      <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
           <span className="sheet-title">E-Transfer Details</span>
@@ -212,8 +212,8 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
 
   // ── Stripe card form ──
   if (step === 'card' && clientSecret && stripePromise) return (
-    <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
+    <div className="sheet-overlay full" onClick={onClose}>
+      <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
           <button onClick={resetMethod}
@@ -240,8 +240,8 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
 
   // ── Main selection screen ──
   return (
-    <div className="sheet-overlay" onClick={onClose}>
-      <div className="sheet" onClick={e => e.stopPropagation()}>
+    <div className="sheet-overlay full" onClick={onClose}>
+      <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
           <span className="sheet-title">Top up credit</span>
