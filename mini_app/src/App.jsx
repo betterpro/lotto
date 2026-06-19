@@ -6,6 +6,7 @@ import Home      from './pages/Home.jsx'
 import Rounds    from './pages/Rounds.jsx'
 import History   from './pages/History.jsx'
 import Profile   from './pages/Profile.jsx'
+import TopUp     from './pages/TopUp.jsx'
 import Admin     from './pages/Admin.jsx'
 import PlatformAdmin from './pages/PlatformAdmin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
@@ -67,6 +68,7 @@ function AppShell({ user, onUserUpdate, loadUser, inviteSlug }) {
       <div className="scroll">
         <Routes>
           <Route path="/" element={<Home user={user} onUserUpdate={onUserUpdate} />} />
+          <Route path="/topup" element={<TopUp user={user} onUserUpdate={onUserUpdate} />} />
           <Route path="/rounds" element={<Rounds user={user} />} />
           <Route path="/activity" element={<History user={user} />} />
           <Route path="/profile" element={<Profile user={user} onUserUpdate={onUserUpdate} />} />

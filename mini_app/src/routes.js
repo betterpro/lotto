@@ -16,9 +16,16 @@ const PATH_PAGES = Object.fromEntries(
   Object.entries(PAGE_PATHS).map(([page, path]) => [path, page]),
 )
 
+// Full-screen sub-routes that aren't bottom-nav tabs. They map to an existing
+// nav page so the tab bar stays highlighted and the route guard doesn't bounce
+// them back home.
+const SUBROUTE_PAGES = {
+  '/topup': 'home',
+}
+
 /** Map URL pathname to bottom-nav page id. */
 export function pathToPage(pathname) {
-  return PATH_PAGES[pathname] ?? null
+  return PATH_PAGES[pathname] ?? SUBROUTE_PAGES[pathname] ?? null
 }
 
 export const INVITE_SLUG_KEY = 'lottoo_pending_invite_slug'

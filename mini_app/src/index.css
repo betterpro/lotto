@@ -353,25 +353,21 @@ html, body {
   border-top: .5px solid var(--hairline);
 }
 
-/* ── Full-screen modal variant ───────────────────────────────────────────────
-   Telegram on iOS reports a viewport height taller than what is actually
-   visible, so a bottom sheet's pinned footer (e.g. the Pay / e-transfer button)
-   slips below the fold and becomes untappable. Rendering payment flows
-   full-screen pins the header to the top safe-area and the footer to the bottom
-   safe-area, with only the body scrolling — guaranteeing both stay on screen. */
-.sheet-overlay.full { align-items: stretch; }
-.sheet.full {
-  height: 100%;
-  max-height: 100%;
-  width: 100%;
-  border-radius: 0;
-  padding: var(--sat) 0 max(var(--sab), 16px);
-  box-shadow: none;
-  animation: slideup-full .26s cubic-bezier(.2,.8,.2,1);
+/* ── Sub-screen header (back affordance for full routes like Top-up) ────────── */
+.screen-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px 12px; margin-bottom: 4px;
+  border-bottom: .5px solid var(--hairline);
 }
-@keyframes slideup-full { from { transform: translateY(24px); opacity: 0; } }
-.sheet.full .handle { display: none; }
-.sheet.full .sheet-head { padding-top: 12px; }
+.screen-back {
+  width: 32px; height: 32px; border-radius: 50%; border: none;
+  background: var(--bg-3); color: var(--tx-1); cursor: pointer;
+  font-size: 18px; line-height: 1; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.screen-back:active { background: var(--surface-2); }
+.screen-title { font-size: 17px; font-weight: 700; }
+.screen-body { padding: 16px; }
 
 /* ── Round row card ──────────────────────────────────────────────────────── */
 .round-row {

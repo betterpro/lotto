@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react'
-import { createPortal } from 'react-dom'
-import { loadStripe } from '@stripe/stripe-js'
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { Countdown } from '../components/Countdown.jsx'
@@ -10,14 +8,6 @@ import { lotteryMeta, JACKPOT_PENDING_LABEL } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import { WalletIcon, BoltIcon, PlusIcon, ShareIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
-
-const STRIPE_APPEARANCE = {
-  theme: 'night',
-  variables: {
-    colorPrimary: '#2EA6FF', colorBackground: '#1f2c3a',
-    colorText: '#ffffff', colorDanger: '#F25C5C', borderRadius: '10px',
-  },
-}
 
 function fmtCAD(n, decimals = 2) {
   return '$' + Number(n || 0).toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
@@ -37,334 +27,6 @@ function playerCount(round) {
   if (Array.isArray(round.participants)) return round.participants.length
   const n = round.participants_count ?? round.participants
   return typeof n === 'number' ? n : 0
-}
-
-// ─── Stripe payment form ────────────────────────────────────────────────────
-function PaymentForm({ onSuccess, onError }) {
-  const stripe = useStripe(), elements = useElements()
-  const [busy, setBusy] = useState(false)
-  async function submit(e) {
-    e.preventDefault()
-    if (!stripe || !elements) return
-    setBusy(true)
-    const { error } = await stripe.confirmPayment({
-      elements,
-      confirmParams: { return_url: window.location.origin },
-      redirect: 'if_required',
-    })
-    setBusy(false)
-    if (error) onError(error.message)
-    else onSuccess()
-  }
-  return (
-    <form onSubmit={submit}>
-      <PaymentElement options={{ layout: 'tabs' }} />
-      <button type="submit" disabled={busy || !stripe}
-        className="btn btn-primary btn-block" style={{ marginTop: 16 }}>
-        {busy ? 'Processing…' : 'Pay Now'}
-      </button>
-    </form>
-  )
-}
-
-// Render into <body> so the fixed overlay is anchored to the viewport. Nesting a
-// position:fixed element inside the app's -webkit-overflow-scrolling:touch scroll
-// container traps it on iOS (Telegram), leaving the footer button under the tab bar.
-function Portal({ children }) {
-  return createPortal(children, document.body)
-}
-
-// ─── Top-up sheet ───────────────────────────────────────────────────────────
-const CARD_AMOUNTS = [25, 50, 100, 250]
-
-function suggestTopUpAmount(shortfall, presets) {
-  const list = presets?.length ? presets : CARD_AMOUNTS
-  const needed = Math.max(list[0], Math.ceil(shortfall))
-  return list.find(p => p >= needed) ?? list[list.length - 1]
-}
-
-function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
-  const [tab, setTab]           = useState('once')
-  const [amount, setAmount]     = useState(50)
-  const [customInput, setCustomInput] = useState('')
-  const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
-  const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
-  const [stripePromise, setSP]  = useState(null)
-  const [clientSecret, setCS]   = useState(null)
-  const [etxInfo, setEtxInfo]   = useState(null)     // { admin_email, amount }
-  const [payOpts, setPayOpts]   = useState(null)
-
-  useEffect(() => {
-    if (!open) { setCS(null); setEtxInfo(null); setStep('select'); setPayOpts(null); setCustomInput(''); return }
-    api.payment.options().then(opts => {
-      setPayOpts(opts)
-      const presets = opts.card_enabled ? opts.card_amounts : opts.etransfer_amounts
-      if (initialAmount != null) {
-        const suggested = suggestTopUpAmount(initialAmount, presets)
-        setAmount(suggested)
-        setCustomInput(presets.includes(suggested) ? '' : String(suggested))
-      } else {
-        setAmount(presets?.[1] ?? presets?.[0] ?? 50)
-        setCustomInput('')
-      }
-      if (opts.card_enabled) setMethod('card')
-      else if (opts.etransfer_enabled) setMethod('etransfer')
-    }).catch(() => setPayOpts({ card_enabled: true, etransfer_enabled: true, card_amounts: CARD_AMOUNTS, etransfer_amounts: CARD_AMOUNTS }))
-    api.stripe.config().then(cfg => setSP(loadStripe(cfg.publishable_key))).catch(() => {})
-  }, [open, initialAmount])
-
-  function resetMethod() { setCS(null); setStep('select') }
-
-  const cardAmounts = payOpts?.card_amounts ?? CARD_AMOUNTS
-  const etxAmounts = (payOpts?.etransfer_amounts?.length ? payOpts.etransfer_amounts : cardAmounts)
-  const presets = method === 'card' ? cardAmounts : etxAmounts
-  const chargeAmt = amount
-  const etxMin = payOpts?.etransfer_min_amount ?? 25
-  const usingCustomAmt = method === 'etransfer' && customInput !== ''
-
-  useEffect(() => {
-    if (!payOpts || !presets.length || method === 'etransfer') return
-    setCustomInput('')
-    setAmount(prev => (presets.includes(prev) ? prev : suggestTopUpAmount(prev, presets)))
-  }, [method, payOpts])
-
-  function selectPreset(p) {
-    setAmount(p)
-    setCustomInput('')
-  }
-
-  function onCustomAmountChange(raw) {
-    setCustomInput(raw)
-    const n = parseFloat(raw)
-    if (!isNaN(n) && n > 0) setAmount(Math.round(n * 100) / 100)
-  }
-
-  function selectMethod(id) {
-    setMethod(id)
-    if (id === 'card') setCustomInput('')
-  }
-
-  const methodChoices = [
-    payOpts?.card_enabled && { id: 'card', icon: '💳', label: 'Card' },
-    payOpts?.etransfer_enabled && { id: 'etransfer', icon: '🏦', label: 'E-Transfer' },
-  ].filter(Boolean)
-
-  const etxAmountInvalid = method === 'etransfer' && (
-    amount <= 0 || amount < etxMin || (usingCustomAmt && (isNaN(parseFloat(customInput)) || parseFloat(customInput) <= 0))
-  )
-
-  async function proceed() {
-    if (method === 'card') {
-      try {
-        const r = tab === 'once'
-          ? await api.stripe.createPaymentIntent(amount)
-          : await api.stripe.createSubscription(amount)
-        setCS(r.client_secret)
-        setStep('card')
-      } catch (e) { showToast(e.message, 'error') }
-    } else {
-      try {
-        const r = await api.etransfer.deposit(amount)
-        setEtxInfo(r)
-        setStep('sent')
-      } catch (e) { showToast(e.message, 'error') }
-    }
-  }
-
-  function copy(text, label = 'Copied') {
-    navigator.clipboard?.writeText(text)
-      .then(() => showToast(label, 'success'))
-      .catch(() => showToast('Could not copy', 'error'))
-  }
-
-  if (!open) return null
-
-  // ── E-transfer instructions ──
-  if (step === 'sent' && etxInfo) return (
-    <Portal>
-    <div className="sheet-overlay full" onClick={onClose}>
-      <div className="sheet full" onClick={e => e.stopPropagation()}>
-        <div className="handle" />
-        <div className="sheet-head">
-          <span className="sheet-title">E-Transfer Details</span>
-          <button className="sheet-close" onClick={onClose}>✕</button>
-        </div>
-        <div className="body">
-          <div style={{ textAlign: 'center', fontSize: 36, marginBottom: 8 }}>🏦</div>
-          <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--tx-2)', marginBottom: 18 }}>
-            Send <strong style={{ color: '#fff' }}>${amount.toFixed(2)} CAD</strong> via Interac e-Transfer
-          </p>
-          <div className="card" style={{ marginBottom: 16 }}>
-            <div className="row between" style={{ marginBottom: 4 }}>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Send to</span>
-              <button onClick={() => copy(etxInfo.admin_email, 'Email copied')}
-                style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
-                Copy
-              </button>
-            </div>
-            <span className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
-          </div>
-          <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
-            borderRadius: 10, padding: '12px 14px', fontSize: 12,
-            color: 'var(--money)', lineHeight: 1.6 }}>
-            ✓ Your account will be credited automatically once we detect your transfer. Usually within minutes.
-          </div>
-        </div>
-        <div className="sheet-foot">
-          <button className="btn btn-primary btn-block" onClick={() => { onSuccess(amount, 'etransfer'); onClose() }}>
-            Done — I've sent it
-          </button>
-        </div>
-      </div>
-    </div>
-    </Portal>
-  )
-
-  // ── Stripe card form ──
-  if (step === 'card' && clientSecret && stripePromise) return (
-    <Portal>
-    <div className="sheet-overlay full" onClick={onClose}>
-      <div className="sheet full" onClick={e => e.stopPropagation()}>
-        <div className="handle" />
-        <div className="sheet-head">
-          <button onClick={resetMethod}
-            style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 18, cursor: 'pointer', padding: '0 8px 0 0' }}>
-            ←
-          </button>
-          <span className="sheet-title">Pay ${amount.toFixed(2)} by card</span>
-          <button className="sheet-close" onClick={onClose}>✕</button>
-        </div>
-        <div className="body">
-          <Elements stripe={stripePromise} options={{ clientSecret, appearance: STRIPE_APPEARANCE }}>
-            <PaymentForm
-              onSuccess={() => { setCS(null); onSuccess(amount, tab); onClose() }}
-              onError={msg => showToast(msg, 'error')}
-            />
-          </Elements>
-          <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
-            🔒 Secured by Stripe · ${amount.toFixed(2)} credit
-          </div>
-        </div>
-      </div>
-    </div>
-    </Portal>
-  )
-
-  // ── Main selection screen ──
-  return (
-    <Portal>
-    <div className="sheet-overlay full" onClick={onClose}>
-      <div className="sheet full" onClick={e => e.stopPropagation()}>
-        <div className="handle" />
-        <div className="sheet-head">
-          <span className="sheet-title">Top up credit</span>
-          <button className="sheet-close" onClick={onClose}>✕</button>
-        </div>
-        <div className="body">
-          {methodChoices.length > 1 && (
-            <>
-              <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 8 }}>
-                {methodChoices.map(m => (
-                  <button key={m.id} type="button" onClick={() => selectMethod(m.id)} style={{
-                    flex: 1, padding: '10px 0', borderRadius: 7, border: 0, cursor: 'pointer',
-                    background: method === m.id ? 'var(--surface-2)' : 'transparent',
-                    color: method === m.id ? '#fff' : 'var(--tx-2)',
-                    fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  }}>
-                    <span style={{ fontSize: 16 }}>{m.icon}</span>{m.label}
-                  </button>
-                ))}
-              </div>
-              <p style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
-                {method === 'card'
-                  ? `Charged $${chargeAmt.toFixed(2)} · instant`
-                  : `Min $${etxMin} · 0–24 h approval`}
-              </p>
-            </>
-          )}
-
-          {payOpts?.card_enabled && method === 'card' && (
-          <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 16 }}>
-            {[['once','One-time'],['monthly','Monthly']].map(([k,l]) => (
-              <button key={k} onClick={() => { setTab(k); setCS(null) }} style={{
-                flex: 1, padding: '9px 0', borderRadius: 7, border: 0, cursor: 'pointer',
-                background: tab === k ? 'var(--surface-2)' : 'transparent',
-                color: tab === k ? '#fff' : 'var(--tx-2)',
-                fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
-              }}>{l}</button>
-            ))}
-          </div>
-          )}
-
-          {/* Amount presets */}
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Amount</div>
-          {presets.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16 }}>
-              No payment amounts available. Ask your trustee to configure payments.
-            </p>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(presets.length, 4)},1fr)`, gap: 8, marginBottom: method === 'etransfer' ? 12 : 16 }}>
-              {presets.map(p => (
-                <button key={p} type="button" onClick={() => selectPreset(p)} style={{
-                  padding: '14px 0', borderRadius: 12, cursor: 'pointer',
-                  border: `.5px solid ${!usingCustomAmt && amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
-                  background: !usingCustomAmt && amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
-                  color: !usingCustomAmt && amount === p ? 'var(--tg)' : '#fff',
-                  fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
-                }}>${p}</button>
-              ))}
-            </div>
-          )}
-
-          {method === 'etransfer' && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
-                Custom amount
-              </div>
-              <div style={{ position: 'relative' }}>
-                <span className="mono" style={{
-                  position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
-                  color: usingCustomAmt ? 'var(--tg)' : 'var(--tx-2)', fontSize: 15, fontWeight: 700,
-                }}>$</span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={etxMin}
-                  step="0.01"
-                  className="input"
-                  placeholder={`Min $${etxMin}`}
-                  value={customInput}
-                  onChange={e => onCustomAmountChange(e.target.value)}
-                  style={{
-                    paddingLeft: 28,
-                    fontFamily: 'var(--mono)',
-                    borderColor: usingCustomAmt ? 'var(--tg)' : undefined,
-                    background: usingCustomAmt ? 'rgba(46,166,255,.08)' : undefined,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {method === 'etransfer' && etxAmountInvalid && (
-            <p style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8, lineHeight: 1.5 }}>
-              Minimum e-transfer: ${etxMin}
-            </p>
-          )}
-        </div>
-        <div className="sheet-foot">
-          <button className="btn btn-primary btn-block" onClick={proceed}
-            disabled={!presets.length || methodChoices.length === 0 || etxAmountInvalid}>
-            {method === 'card'
-              ? tab === 'once' ? `Pay $${amount.toFixed(2)} by card` : `Subscribe · $${amount.toFixed(2)}/mo`
-              : `Get e-transfer details`}
-          </button>
-        </div>
-      </div>
-    </div>
-    </Portal>
-  )
 }
 
 // ─── Join sheet ──────────────────────────────────────────────────────────────
@@ -747,10 +409,9 @@ export default function Home({ user, onUserUpdate }) {
   const [roundIndex, setRoundIndex] = useState(0)
   const [lastDrawn, setLastDrawn] = useState(null)
   const [sub, setSub]       = useState(null)
-  const [topUp, setTopUp]           = useState(false)
-  const [topUpInitial, setTopUpInitial] = useState(null)
   const [join, setJoin]             = useState(false)
   const showToast = useToast()
+  const navigate = useNavigate()
 
   const round = liveRounds?.[roundIndex] ?? null
 
@@ -811,7 +472,7 @@ export default function Home({ user, onUserUpdate }) {
           <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Welcome back</span>
           <span style={{ fontSize: 15, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>
         </div>
-        <div className="chip chip-money" onClick={() => setTopUp(true)} style={{ cursor: 'pointer', gap: 6 }}>
+        <div className="chip chip-money" onClick={() => navigate('/topup')} style={{ cursor: 'pointer', gap: 6 }}>
           <WalletIcon width={13} height={13} />
           <span className="mono">{fmtCAD(user.credit ?? 0)}</span>
         </div>
@@ -888,7 +549,7 @@ export default function Home({ user, onUserUpdate }) {
           <span className="k">Wallet</span>
           <span className="v">{fmtCAD(user.credit ?? 0)}</span>
           <span className="delta" style={{ color: 'var(--tg)', cursor: 'pointer' }}
-            onClick={() => setTopUp(true)}>Tap to top up →</span>
+            onClick={() => navigate('/topup')}>Tap to top up →</span>
         </div>
         <div className="stat">
           <span className="k">Status</span>
@@ -947,24 +608,6 @@ export default function Home({ user, onUserUpdate }) {
           </div>
         </>
       )}
-
-      <TopUpSheet
-        open={topUp}
-        onClose={() => { setTopUp(false); setTopUpInitial(null) }}
-        showToast={showToast}
-        initialAmount={topUpInitial}
-        onSuccess={(amt, plan) => {
-          setTopUpInitial(null)
-          if (plan === 'once') {
-            showToast(`Added $${amt} credit — open Join when you are ready`, 'success')
-          } else if (plan === 'etransfer') {
-            showToast('After approval, top up completes — then join the round from Home', 'info')
-          } else {
-            showToast(`Subscribed · $${amt}/mo`, 'success')
-          }
-          setTimeout(() => api.me().then(onUserUpdate), 3000)
-        }}
-      />
 
       <JoinSheet
         open={join}
