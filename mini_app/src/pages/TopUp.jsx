@@ -78,6 +78,7 @@ export default function TopUp({ user, onUserUpdate }) {
   const [clientSecret, setCS]   = useState(null)
   const [etxInfo, setEtxInfo]   = useState(null)     // { admin_email, amount }
   const [payOpts, setPayOpts]   = useState(null)
+  const [senderEmail, setSenderEmail] = useState(user?.email || '')
 
   useEffect(() => {
     api.payment.options().then(opts => {
@@ -143,6 +144,13 @@ export default function TopUp({ user, onUserUpdate }) {
     amount <= 0 || amount < etxMin || (usingCustomAmt && (isNaN(parseFloat(customInput)) || parseFloat(customInput) <= 0))
   )
 
+  // Each user must register the email they'll send the Interac e-Transfer from,
+  // so incoming transfers can be auto-matched. Collect it here when missing
+  // rather than dead-ending on the server's "set it in Profile" error.
+  const hasSenderEmail = !!user?.email
+  const senderEmailValid = senderEmail.trim().includes('@') && senderEmail.trim().length >= 3
+  const emailBlocksEtx = method === 'etransfer' && !hasSenderEmail && !senderEmailValid
+
   async function proceed() {
     if (method === 'card') {
       try {
@@ -154,6 +162,10 @@ export default function TopUp({ user, onUserUpdate }) {
       } catch (e) { showToast(e.message, 'error') }
     } else {
       try {
+        if (!hasSenderEmail) {
+          if (!senderEmailValid) { showToast('Enter a valid e-transfer email', 'error'); return }
+          await api.profile.updateEmail(senderEmail.trim().toLowerCase())
+        }
         const r = await api.etransfer.deposit(amount)
         setEtxInfo(r)
         setStep('sent')
@@ -313,8 +325,29 @@ export default function TopUp({ user, onUserUpdate }) {
           </p>
         )}
 
+        {method === 'etransfer' && !hasSenderEmail && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
+              Your e-transfer email
+            </div>
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              className="input mono"
+              placeholder="you@example.com"
+              value={senderEmail}
+              onChange={e => setSenderEmail(e.target.value)}
+              style={{ borderColor: senderEmailValid ? 'var(--money)' : undefined }}
+            />
+            <p style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 6, lineHeight: 1.5 }}>
+              The address you'll send the Interac e-Transfer from — we use it to credit your deposit automatically.
+            </p>
+          </div>
+        )}
+
         <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}
-          disabled={!presets.length || methodChoices.length === 0 || etxAmountInvalid}>
+          disabled={!presets.length || methodChoices.length === 0 || etxAmountInvalid || emailBlocksEtx}>
           {method === 'card'
             ? tab === 'once' ? `Pay $${amount.toFixed(2)} by card` : `Subscribe · $${amount.toFixed(2)}/mo`
             : `Get e-transfer details`}
