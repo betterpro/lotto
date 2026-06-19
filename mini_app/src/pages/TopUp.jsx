@@ -200,9 +200,12 @@ export default function TopUp({ user, onUserUpdate }) {
         </div>
         <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
           borderRadius: 10, padding: '12px 14px', fontSize: 12,
-          color: 'var(--money)', lineHeight: 1.6, marginBottom: 20 }}>
+          color: 'var(--money)', lineHeight: 1.6 }}>
           ✓ Your account will be credited automatically once we detect your transfer. Usually within minutes.
         </div>
+      </div>
+
+      <div className="screen-cta">
         <button className="btn btn-primary btn-block" onClick={() => handleSuccess(amount, 'etransfer')}>
           Done — I've sent it
         </button>
@@ -345,8 +348,10 @@ export default function TopUp({ user, onUserUpdate }) {
             </p>
           </div>
         )}
+      </div>
 
-        <button className="btn btn-primary btn-block" style={{ marginTop: 8 }} onClick={proceed}
+      <div className="screen-cta">
+        <button className="btn btn-primary btn-block" onClick={proceed}
           disabled={!presets.length || methodChoices.length === 0 || etxAmountInvalid || emailBlocksEtx}>
           {method === 'card'
             ? tab === 'once' ? `Pay $${amount.toFixed(2)} by card` : `Subscribe · $${amount.toFixed(2)}/mo`

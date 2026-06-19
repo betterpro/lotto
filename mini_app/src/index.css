@@ -369,6 +369,17 @@ html, body {
 .screen-title { font-size: 17px; font-weight: 700; }
 .screen-body { padding: 16px; }
 
+/* Pinned call-to-action: stays on screen as the page scrolls, so the primary
+   action (Pay / Get e-transfer details) is always reachable on short or tall
+   viewports alike. Sticky (not fixed) keeps it inside normal flow, avoiding the
+   iOS scroll-container trapping that hid the old modal footer. */
+.screen-cta {
+  position: sticky; bottom: 0;
+  padding: 12px 16px calc(14px + var(--sab));
+  margin-top: 4px;
+  background: linear-gradient(to top, var(--bg) 72%, rgba(13,20,27,0));
+}
+
 /* ── Round row card ──────────────────────────────────────────────────────── */
 .round-row {
   background: var(--surface); border: .5px solid var(--hairline-2);
