@@ -3461,4 +3461,24 @@ async def payment_cancel():
 # Static files — must be last
 # ---------------------------------------------------------------------------
 
-app.mount("/", StaticFiles(directory="mini_app/dist", html=True), name="static")
+class _SPAStaticFiles(StaticFiles):
+    """Serve the built Mini App, but never let HTML be cached.
+
+    Asset files are content-hashed (index-<hash>.js/.css) so they cache safely
+    forever, but index.html references those hashes. If a client — especially
+    Telegram's in-app webview, which caches aggressively — holds a stale
+    index.html, it keeps loading the old bundle and never sees new deploys.
+    Forcing no-cache on HTML guarantees the latest build is always picked up.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        media = response.headers.get("content-type", "")
+        if path in (".", "") or path.endswith(".html") or media.startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+app.mount("/", _SPAStaticFiles(directory="mini_app/dist", html=True), name="static")
