@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { loadStripe } from '@stripe/stripe-js'
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { api } from '../api.js'
@@ -64,6 +65,13 @@ function PaymentForm({ onSuccess, onError }) {
       </button>
     </form>
   )
+}
+
+// Render into <body> so the fixed overlay is anchored to the viewport. Nesting a
+// position:fixed element inside the app's -webkit-overflow-scrolling:touch scroll
+// container traps it on iOS (Telegram), leaving the footer button under the tab bar.
+function Portal({ children }) {
+  return createPortal(children, document.body)
 }
 
 // ─── Top-up sheet ───────────────────────────────────────────────────────────
@@ -173,6 +181,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
 
   // ── E-transfer instructions ──
   if (step === 'sent' && etxInfo) return (
+    <Portal>
     <div className="sheet-overlay full" onClick={onClose}>
       <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
@@ -208,10 +217,12 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
         </div>
       </div>
     </div>
+    </Portal>
   )
 
   // ── Stripe card form ──
   if (step === 'card' && clientSecret && stripePromise) return (
+    <Portal>
     <div className="sheet-overlay full" onClick={onClose}>
       <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
@@ -236,10 +247,12 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
         </div>
       </div>
     </div>
+    </Portal>
   )
 
   // ── Main selection screen ──
   return (
+    <Portal>
     <div className="sheet-overlay full" onClick={onClose}>
       <div className="sheet full" onClick={e => e.stopPropagation()}>
         <div className="handle" />
@@ -350,6 +363,7 @@ function TopUpSheet({ open, onClose, onSuccess, showToast, initialAmount }) {
         </div>
       </div>
     </div>
+    </Portal>
   )
 }
 
