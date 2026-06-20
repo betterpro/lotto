@@ -163,6 +163,11 @@ _SCHEMA_STATEMENTS = [
     "UPDATE rounds SET free_tickets_consumed = 0 WHERE free_tickets_consumed IS NULL",
     "UPDATE participations SET free_ticket_shares = 0 WHERE free_ticket_shares IS NULL",
     "UPDATE participations SET free_tickets_awarded = 0 WHERE free_tickets_awarded IS NULL",
+    # Notification preferences + per-round reminder dedup flags
+    "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_contribution INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_round_closed INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_48h_sent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_24h_sent INTEGER NOT NULL DEFAULT 0",
 ]
 
 _schema_ready = False

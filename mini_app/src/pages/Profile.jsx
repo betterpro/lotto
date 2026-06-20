@@ -106,6 +106,7 @@ const DEFAULTS = {
   lottery_preference: 'both',
   notif_new_round: true, notif_reminder: true,
   notif_ticket: true, notif_results: true,
+  notif_contribution: true, notif_round_closed: true,
 }
 
 export default function Profile({ user, onUserUpdate }) {
@@ -400,20 +401,30 @@ export default function Profile({ user, onUserUpdate }) {
                   sub: 'Alert when admin starts a new draw',
                 },
                 {
-                  key: 'notif_ticket', icon: '✅',
-                  label: 'Ticket purchased',
-                  sub: 'Confirmation when ticket is bought',
+                  key: 'notif_contribution', icon: '💸',
+                  label: 'Pool activity',
+                  sub: 'When another member adds to a round you joined',
                 },
                 {
                   key: 'notif_reminder', icon: '⏰',
-                  label: 'Draw reminder',
-                  sub: 'Reminder when draw date is near',
+                  label: 'Closing reminders',
+                  sub: '48h & 24h before a round closes to entries',
+                },
+                {
+                  key: 'notif_ticket', icon: '✅',
+                  label: 'Ticket purchased',
+                  sub: 'Confirmation when ticket is bought',
                 },
                 {
                   key: 'notif_results', icon: '🏆',
                   label: 'Results & prizes',
                   sub: 'Your winnings when results are entered',
                 },
+                ...(user?.is_group_trustee ? [{
+                  key: 'notif_round_closed', icon: '🎫',
+                  label: 'Round closed — buy ticket',
+                  sub: 'Alert you when a round closes so you can buy the ticket',
+                }] : []),
               ].map(({ key, icon, label, sub }, i, arr) => (
                 <div key={key} style={{
                   display: 'flex', alignItems: 'center', gap: 12,

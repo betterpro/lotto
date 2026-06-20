@@ -8,6 +8,7 @@ import base64
 import email as _email_lib
 import hashlib
 import hmac
+import html
 import imaplib
 import json
 import logging
@@ -211,6 +212,7 @@ async def _auto_close_round_if_due(db, round_id: int) -> None:
             (round_id,),
         )
         await db.commit()
+        await _notify_round_closed(db, round_id)
 
 
 async def _auto_close_all_due_rounds(db) -> None:
@@ -450,6 +452,111 @@ async def _notify_all(db, text: str, setting_col: str | None = None, group_id: i
             cur = await db.execute("SELECT telegram_id FROM users")
     for row in await cur.fetchall():
         await _notify(row["telegram_id"], text)
+
+
+async def _notify_round_contribution(db, round_d: dict, contributor: dict):
+    """Tell the round's other participants that a member added to the pool."""
+    rid = round_d["id"]
+    name = contributor.get("full_name") or contributor.get("username") or "A member"
+    pool = float(round_d.get("pool") or 0)
+    text = (
+        f"💸 <b>{html.escape(name)}</b> just contributed to Round #{rid}\n"
+        f"Pool is now ${pool:.0f}"
+    )
+    cur = await db.execute(
+        """SELECT p.user_id FROM participations p
+           LEFT JOIN user_settings s ON s.user_id = p.user_id
+           WHERE p.round_id = ? AND p.user_id != ?
+             AND COALESCE(s.notif_contribution, 1) = 1""",
+        (rid, contributor["telegram_id"]),
+    )
+    for row in await cur.fetchall():
+        await _notify(row["user_id"], text)
+
+
+async def _notify_round_closed(db, round_id: int):
+    """Tell the group's trustee a round closed so they can buy the physical ticket."""
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    round_ = await cur.fetchone()
+    if not round_:
+        return
+    round_d = dict(round_)
+    gid = round_d.get("group_id")
+    if gid is None:
+        return
+    cur = await db.execute("SELECT trustee_user_id FROM groups WHERE id=?", (gid,))
+    grow = await cur.fetchone()
+    if not grow or not grow["trustee_user_id"]:
+        return
+    trustee_id = grow["trustee_user_id"]
+    cur = await db.execute(
+        "SELECT COALESCE(notif_round_closed, 1) AS enabled FROM user_settings WHERE user_id=?",
+        (trustee_id,),
+    )
+    srow = await cur.fetchone()
+    if srow is not None and not srow["enabled"]:
+        return
+    tickets = await _round_tickets_required(db, round_d)
+    pool = float(round_d.get("pool") or 0)
+    draw = round_d.get("draw_date")
+    draw_str = f" · draw {html.escape(str(draw))}" if draw else ""
+    await _notify(
+        trustee_id,
+        f"🎫 <b>Round #{round_id} closed — time to buy the ticket</b>\n"
+        f"Pool ${pool:.0f} · {tickets} ticket{'s' if tickets != 1 else ''} to purchase{draw_str}",
+    )
+
+
+async def _remind_non_contributors(db, round_d: dict, hours: int):
+    """Nudge group members who haven't joined this round yet, before entries close."""
+    rid = round_d["id"]
+    gid = round_d.get("group_id")
+    if gid is None:
+        return
+    emoji = "⏰" if hours >= 48 else "⏳"
+    jackpot = int(round_d.get("jackpot") or 0)
+    jp = f" · ${jackpot:,} jackpot" if jackpot else ""
+    text = (
+        f"{emoji} <b>Round #{rid} closes in ~{hours}h</b>\n"
+        f"You haven't joined yet — add your shares before entries close{jp}."
+    )
+    cur = await db.execute(
+        """SELECT u.telegram_id FROM users u
+           JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
+           LEFT JOIN user_settings s ON s.user_id = u.telegram_id
+           WHERE COALESCE(s.notif_reminder, 1) = 1
+             AND NOT EXISTS (
+                 SELECT 1 FROM participations p
+                 WHERE p.round_id = ? AND p.user_id = u.telegram_id
+             )""",
+        (gid, rid),
+    )
+    for row in await cur.fetchall():
+        await _notify(row["telegram_id"], text)
+
+
+async def _send_round_reminders(db):
+    """Send 48h / 24h pre-close reminders once each, tracked by per-round flags."""
+    cur = await db.execute(
+        """SELECT id, group_id, draw_date, jackpot, pool,
+                  COALESCE(reminder_48h_sent, 0) AS r48,
+                  COALESCE(reminder_24h_sent, 0) AS r24
+           FROM rounds WHERE status='open' AND draw_date IS NOT NULL"""
+    )
+    for r in await cur.fetchall():
+        days = _days_until_draw(r["draw_date"])
+        if days is None:
+            continue
+        # Rounds auto-close ~1 day before the draw, so 3 days out ≈ 48h before
+        # close and 2 days out ≈ 24h before close.
+        if days == 3 and not r["r48"]:
+            await _remind_non_contributors(db, dict(r), 48)
+            await db.execute("UPDATE rounds SET reminder_48h_sent=1 WHERE id=?", (r["id"],))
+            await db.commit()
+        elif days == 2 and not r["r24"]:
+            await _remind_non_contributors(db, dict(r), 24)
+            await db.execute("UPDATE rounds SET reminder_24h_sent=1 WHERE id=?", (r["id"],))
+            await db.commit()
 
 
 async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: int | None = None):
@@ -832,6 +939,27 @@ async def _get_or_create_customer(user: dict, db) -> str:
 _ptb_app: Application | None = None
 _bot_username: str | None = None
 _etransfer_task: asyncio.Task | None = None
+_round_task: asyncio.Task | None = None
+
+# How often to close due rounds and send pre-close reminders. Reminders are
+# day-granular, so a half-hour cadence is plenty and stays cheap.
+ROUND_MAINTENANCE_INTERVAL_SECONDS = 1800
+
+
+async def _round_maintenance_loop():
+    while True:
+        try:
+            db = await get_db()
+            try:
+                await _auto_close_all_due_rounds(db)
+                await _send_round_reminders(db)
+            finally:
+                await db.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Background round maintenance failed")
+        await asyncio.sleep(ROUND_MAINTENANCE_INTERVAL_SECONDS)
 
 
 async def _etransfer_poll_loop():
@@ -853,7 +981,7 @@ async def _etransfer_poll_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ptb_app, _bot_username, _etransfer_task
+    global _ptb_app, _bot_username, _etransfer_task, _round_task
     try:
         await ensure_schema()
         log.info("Database schema verified")
@@ -875,13 +1003,16 @@ async def lifespan(app: FastAPI):
     if all([config.IMAP_HOST, config.IMAP_USER, config.IMAP_PASS]):
         _etransfer_task = asyncio.create_task(_etransfer_poll_loop())
         log.info("Background e-transfer checker started")
+    _round_task = asyncio.create_task(_round_maintenance_loop())
+    log.info("Background round maintenance started")
     yield
-    if _etransfer_task:
-        _etransfer_task.cancel()
-        try:
-            await _etransfer_task
-        except asyncio.CancelledError:
-            pass
+    for _task in (_etransfer_task, _round_task):
+        if _task:
+            _task.cancel()
+            try:
+                await _task
+            except asyncio.CancelledError:
+                pass
     await _ptb_app.stop()
     await _ptb_app.shutdown()
 
@@ -1662,6 +1793,8 @@ async def api_participate(request: Request):
     )
     my = await cur.fetchone()
     my_pct = round((my["amount"] / pool) * 100, 1) if my and pool else 0
+    round_d["pool"] = pool
+    await _notify_round_contribution(db, round_d, user)
     await db.close()
     return {"ok": True, "my_pct": my_pct}
 
@@ -1710,9 +1843,19 @@ _SETTING_DEFAULTS = dict(
     auto_participate=False, shares_per_round=1, max_rounds_per_month=4,
     preferred_day=None, lottery_preference="both",
     notif_new_round=True, notif_reminder=True, notif_ticket=True, notif_results=True,
+    notif_contribution=True, notif_round_closed=True,
 )
 
 _LOTTERY_SHARE_PRICE = LOTTERY_PREFERENCE_PRICES
+
+
+def _row_get(row, key, default=None):
+    """Safe column access for DB rows that may predate a newly-added column."""
+    try:
+        val = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if val is None else val
 
 
 def _row_to_settings(row) -> dict:
@@ -1728,6 +1871,8 @@ def _row_to_settings(row) -> dict:
         "notif_reminder":       bool(row["notif_reminder"]),
         "notif_ticket":         bool(row["notif_ticket"]),
         "notif_results":        bool(row["notif_results"]),
+        "notif_contribution":   bool(_row_get(row, "notif_contribution", 1)),
+        "notif_round_closed":   bool(_row_get(row, "notif_round_closed", 1)),
     }
 
 
@@ -1751,8 +1896,9 @@ async def put_settings(request: Request):
         INSERT INTO user_settings
             (user_id, auto_participate, shares_per_round, max_rounds_per_month,
              preferred_day, lottery_preference,
-             notif_new_round, notif_reminder, notif_ticket, notif_results, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))
+             notif_new_round, notif_reminder, notif_ticket, notif_results,
+             notif_contribution, notif_round_closed, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
         ON CONFLICT(user_id) DO UPDATE SET
             auto_participate=excluded.auto_participate,
             shares_per_round=excluded.shares_per_round,
@@ -1763,6 +1909,8 @@ async def put_settings(request: Request):
             notif_reminder=excluded.notif_reminder,
             notif_ticket=excluded.notif_ticket,
             notif_results=excluded.notif_results,
+            notif_contribution=excluded.notif_contribution,
+            notif_round_closed=excluded.notif_round_closed,
             updated_at=excluded.updated_at
     """, (
         user["telegram_id"],
@@ -1775,6 +1923,8 @@ async def put_settings(request: Request):
         int(bool(b.get("notif_reminder",   True))),
         int(bool(b.get("notif_ticket",     True))),
         int(bool(b.get("notif_results",    True))),
+        int(bool(b.get("notif_contribution", True))),
+        int(bool(b.get("notif_round_closed", True))),
     ))
     await db.commit()
     await db.close()
@@ -2188,6 +2338,7 @@ async def admin_close_round(request: Request):
         (round_["id"],),
     )
     await db.commit()
+    await _notify_round_closed(db, round_["id"])
     await db.close()
     return {"ok": True, "round_id": round_["id"]}
 

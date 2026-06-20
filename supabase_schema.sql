@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS user_settings (
     notif_reminder       INTEGER NOT NULL DEFAULT 1,
     notif_ticket         INTEGER NOT NULL DEFAULT 1,
     notif_results        INTEGER NOT NULL DEFAULT 1,
+    notif_contribution   INTEGER NOT NULL DEFAULT 1,
+    notif_round_closed   INTEGER NOT NULL DEFAULT 1,
     updated_at           TEXT    NOT NULL
                          DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
 );
@@ -102,6 +104,8 @@ CREATE TABLE IF NOT EXISTS rounds (
     lottery_type          TEXT    DEFAULT 'lotto_max',
     free_tickets_won      INTEGER NOT NULL DEFAULT 0,
     free_tickets_consumed INTEGER NOT NULL DEFAULT 0,
+    reminder_48h_sent     INTEGER NOT NULL DEFAULT 0,
+    reminder_24h_sent     INTEGER NOT NULL DEFAULT 0,
     group_id              BIGINT  NOT NULL REFERENCES groups(id)
 );
 
