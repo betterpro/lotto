@@ -143,7 +143,6 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
   const [inviteGroupId, setInviteGroupId] = useState(activeId)
   const [newGroupName, setNewGroupName] = useState('')
   const [applyBusy, setApplyBusy] = useState(false)
-  const [trusteeApp, setTrusteeApp] = useState(null)
   const [joinCode, setJoinCode] = useState(null)
 
   useEffect(() => {
@@ -168,12 +167,6 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
       showToast(`Join code: ${joinCode}`, 'success')
     }
   }
-
-  useEffect(() => {
-    if (!user.is_group_trustee) {
-      api.trustee.application().then(r => setTrusteeApp(r.application)).catch(() => {})
-    }
-  }, [user.is_group_trustee])
 
   async function shareInvite() {
     const g = groups.find(x => x.id === inviteGroupId) || groups[0]
@@ -299,50 +292,38 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
           <div className="section"><div className="label">Create your own group</div></div>
           <div className="stack">
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
-              {trusteeApp?.status === 'pending' ? (
-                <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>
-                  Your request for <strong>{trusteeApp.proposed_group_name}</strong> is pending platform approval.
-                </p>
-              ) : trusteeApp?.status === 'rejected' ? (
-                <p style={{ fontSize: 13, color: 'var(--danger)', margin: '0 0 10px' }}>
-                  Request rejected{trusteeApp.review_notes ? `: ${trusteeApp.review_notes}` : '.'}
-                </p>
-              ) : (
-                <>
-                  <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
-                    Apply to run your own group: open rounds, approve deposits, and invite members.
-                    You can still stay in other groups as a player.
-                  </p>
-                  <input
-                    className="input"
-                    placeholder="Your group name"
-                    value={newGroupName}
-                    onChange={e => setNewGroupName(e.target.value)}
-                    style={{ marginBottom: 10 }}
-                  />
-                  <button
-                    className="btn btn-primary btn-sm btn-block"
-                    type="button"
-                    disabled={applyBusy || !newGroupName.trim()}
-                    onClick={async () => {
-                      setApplyBusy(true)
-                      try {
-                        await api.trustee.apply(newGroupName.trim())
-                        const r = await api.trustee.application()
-                        setTrusteeApp(r.application)
-                        setNewGroupName('')
-                        showToast('Application submitted', 'success')
-                      } catch (e) {
-                        showToast(e.message, 'error')
-                      } finally {
-                        setApplyBusy(false)
-                      }
-                    }}
-                  >
-                    {applyBusy ? 'Submitting…' : 'Request new group'}
-                  </button>
-                </>
-              )}
+              <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                Run your own group: open rounds, approve deposits, and invite members with a
+                join code. You can still stay in other groups as a player.
+              </p>
+              <input
+                className="input"
+                placeholder="Your group name"
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                style={{ marginBottom: 10 }}
+              />
+              <button
+                className="btn btn-primary btn-sm btn-block"
+                type="button"
+                disabled={applyBusy || !newGroupName.trim()}
+                onClick={async () => {
+                  setApplyBusy(true)
+                  try {
+                    const r = await api.groups.create(newGroupName.trim())
+                    setNewGroupName('')
+                    onUserUpdate(prev => ({ ...prev, ...r }))
+                    onActiveGroupChange?.()
+                    showToast('Group created — you’re the trustee', 'success')
+                  } catch (e) {
+                    showToast(e.message, 'error')
+                  } finally {
+                    setApplyBusy(false)
+                  }
+                }}
+              >
+                {applyBusy ? 'Creating…' : 'Create group'}
+              </button>
             </div>
           </div>
         </>

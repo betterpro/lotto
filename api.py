@@ -2207,6 +2207,58 @@ async def api_trustee_application_status(request: Request):
     return {"application": dict(app_row) if app_row else None}
 
 
+async def _create_group_for_user(db, name: str, trustee_id: int) -> dict:
+    """Create an active group with `trustee_id` as its trustee; return the group row."""
+    base_slug = slugify(name)
+    slug = base_slug
+    n = 0
+    while True:
+        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
+        if not await cur.fetchone():
+            break
+        n += 1
+        slug = f"{base_slug}-{n}"
+    join_code = generate_join_code()
+    while True:
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
+        if not await cur.fetchone():
+            break
+        join_code = generate_join_code()
+    cur = await db.execute(
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code)
+           VALUES (?,?,?, 'active', ?) RETURNING id""",
+        (name, slug, trustee_id, join_code),
+    )
+    group_id = cur.lastrowid
+    await db.execute("UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, trustee_id))
+    await add_group_member(db, group_id, trustee_id, "trustee")
+    await db.commit()
+    return await get_group(db, group_id)
+
+
+@app.post("/api/groups/create")
+async def api_groups_create(request: Request):
+    user, db = await _auth(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        await db.close()
+        raise HTTPException(400, "Group name required")
+    name = name[:60]
+    group = await _create_group_for_user(db, name, user["telegram_id"])
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    ctx = await enrich_user_context(db, dict(row))
+    await db.close()
+    return {
+        "ok": True,
+        "group_id": group["id"],
+        "slug": group["slug"],
+        "join_code": group["join_code"],
+        **ctx,
+    }
+
+
 @app.post("/api/trustee/apply")
 async def api_trustee_apply(request: Request):
     user, db = await _auth(request)
@@ -3265,31 +3317,7 @@ async def platform_approve_application(app_id: int, request: Request):
         await db.close()
         raise HTTPException(404, "Pending application not found")
     applicant_id = app_row["applicant_user_id"]
-    base_slug = slugify(app_row["proposed_group_name"])
-    slug = base_slug
-    n = 0
-    while True:
-        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
-        if not await cur.fetchone():
-            break
-        n += 1
-        slug = f"{base_slug}-{n}"
-    join_code = generate_join_code()
-    while True:
-        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
-        if not await cur.fetchone():
-            break
-        join_code = generate_join_code()
-    cur = await db.execute(
-        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code)
-           VALUES (?,?,?, 'active', ?) RETURNING id""",
-        (app_row["proposed_group_name"], slug, applicant_id, join_code),
-    )
-    group_id = cur.lastrowid
-    await db.execute(
-        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
-    )
-    await add_group_member(db, group_id, applicant_id, "trustee")
+    group = await _create_group_for_user(db, app_row["proposed_group_name"], applicant_id)
     await db.execute(
         """UPDATE trustee_applications SET status='approved', reviewed_by=?,
            reviewed_at=datetime('now') WHERE id=?""",
@@ -3297,7 +3325,7 @@ async def platform_approve_application(app_id: int, request: Request):
     )
     await db.commit()
     await db.close()
-    return {"ok": True, "group_id": group_id, "slug": slug}
+    return {"ok": True, "group_id": group["id"], "slug": group["slug"]}
 
 
 @app.post("/api/platform/applications/{app_id}/reject")

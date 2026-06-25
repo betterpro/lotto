@@ -92,6 +92,7 @@ export const api = {
   groups: {
     list:      () => req('GET', '/api/groups'),
     setActive: (group_id) => req('POST', '/api/groups/active', { group_id }),
+    create:    (name) => req('POST', '/api/groups/create', { name }),
   },
   group: {
     preview: (slug) => reqPublic('GET', `/api/group/preview?slug=${encodeURIComponent(slug)}`),
