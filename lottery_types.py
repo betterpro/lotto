@@ -12,11 +12,9 @@ LOTTERY_TYPES: dict[str, dict] = {
 TICKET_LAYOUTS: dict[str, dict] = {
     "lotto_max": {
         "label": "Lotto Max",
-        "rows": [
-            {"label": "Line 1", "count": 7, "min": 1, "max": 52},
-            {"label": "Line 2", "count": 7, "min": 1, "max": 52},
-            {"label": "Line 3", "count": 7, "min": 1, "max": 52},
-        ],
+        "repeat_row": {"label": "Line", "count": 7, "min": 1, "max": 52},
+        "min_rows": 1,
+        "max_rows": 10,
     },
     "649": {
         "label": "Lotto 6/49",
@@ -214,6 +212,23 @@ def build_scan_prompt(lottery_type: str | None) -> str:
             "- rows: array of arrays — one inner array per classic draw line, top to bottom, "
             "each with exactly 6 integers\n"
             'Example: {"draw_date":"2026-05-27","rows":[[10,14,22,25,44,45],[5,10,12,27,32,42],[13,14,27,35,41,45]]}'
+        )
+
+    if is_variable_row_layout(layout):
+        spec = layout["repeat_row"]
+        return (
+            f"This is a Canadian {layout['label']} lottery ticket. "
+            f"Extract EVERY horizontal player selection line on the ticket — there may be "
+            f"3, 4, or more lines, so read them ALL, top to bottom. "
+            f"Each line has exactly {spec['count']} numbers from {spec['min']} to {spec['max']} "
+            "(ignore leading zeros, e.g. 05 → 5). "
+            "Ignore barcodes, long serial/encore codes, prices, and the draw-date text. "
+            "Return ONLY a JSON object with no extra text:\n"
+            "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
+            f"- rows: array of arrays — one inner array per selection line, "
+            f"each with exactly {spec['count']} integers\n"
+            f'Example: {{"draw_date":"2025-03-14","rows":'
+            f'[[3,14,22,31,38,45,49],[1,12,13,14,15,16,17],[8,9,10,11,12,13,14],[2,7,19,28,33,40,51]]}}'
         )
 
     row_lines = "\n".join(

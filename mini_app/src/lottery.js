@@ -28,11 +28,9 @@ export function lotterySharePrice(type) {
 /** Ticket row layout per game — keep in sync with lottery_types.py */
 export const TICKET_LAYOUTS = {
   lotto_max: {
-    rows: [
-      { label: 'Line 1', count: 7, min: 1, max: 52 },
-      { label: 'Line 2', count: 7, min: 1, max: 52 },
-      { label: 'Line 3', count: 7, min: 1, max: 52 },
-    ],
+    repeatRow: { label: 'Line', count: 7, min: 1, max: 52 },
+    minRows: 1,
+    maxRows: 10,
   },
   '649': {
     repeatRow: { label: 'Classic', count: 6, min: 1, max: 49 },

@@ -81,6 +81,30 @@ function RoundDetail({ round, onClose }) {
             </>
           )}
 
+          {(() => {
+            const imgs = (round.round_tickets || []).map(t => t?.image).filter(Boolean)
+            if (!imgs.length) return null
+            return (
+              <>
+                <div className="label" style={{ marginTop: 12 }}>Lottery ticket</div>
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 10, lineHeight: 1.5 }}>
+                    Photo of the official ticket{imgs.length > 1 ? 's' : ''} bought for this round —
+                    tap to view full size.
+                  </div>
+                  <div className="col" style={{ gap: 8 }}>
+                    {imgs.map((src, i) => (
+                      <a key={i} href={src} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+                        <img src={src} alt={`Ticket ${i + 1}`} loading="lazy"
+                          style={{ width: '100%', borderRadius: 10, display: 'block', border: '.5px solid var(--bd, #2a3441)' }} />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )
+          })()}
+
           <div className="label">All participants</div>
           <div className="card">
             {(round.participants || []).map(p => (

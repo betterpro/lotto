@@ -430,20 +430,33 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     setScanning(true)
     setOcrPct(0)
     try {
-      const scanned = await scanTicketImage(dataUrl, round.lottery_type, setOcrPct)
+      // Fast path: server-side vision scan reads every line in one call.
+      // Falls back to on-device OCR only if the server scan is unavailable.
+      let scanned = []
+      let date = null
+      try {
+        const r = await api.admin.scanTicket(round.id, dataUrl, {
+          ticket_index: ticketIndex, preview: true,
+        })
+        scanned = Array.isArray(r.rows) ? r.rows : []
+        date = r.draw_date || null
+      } catch (serverErr) {
+        scanned = await scanTicketImage(dataUrl, round.lottery_type, setOcrPct)
+      }
       const merged = scanned.length ? mergeScannedRows(scanned, layout) : emptyTicketRows(layout)
       setRows(merged)
+      if (date) setScanDate(date)
       if (scanned.length) {
         const filled = ticketRowsValid(merged, layout)
         const n = merged.length
         showToast(
           filled
-            ? `OCR found ${n} line${n === 1 ? '' : 's'} — review and save`
-            : `OCR found ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
+            ? `Scanned ${n} line${n === 1 ? '' : 's'} — review and save`
+            : `Scanned ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
           filled ? 'success' : 'info',
         )
       } else {
-        showToast('OCR could not read numbers — enter them manually', 'info')
+        showToast('Could not read numbers — enter them manually', 'info')
       }
       // Image + rows are persisted when trustee taps Save ticket
     } catch (err) {

@@ -2768,6 +2768,20 @@ async def admin_scan_ticket(request: Request):
         await db.close()
         raise HTTPException(400, "No OCR rows — scan on device or set ANTHROPIC_API_KEY")
 
+    # Preview scan: just return the read numbers; the trustee reviews them and the
+    # canonical image+rows are persisted later via /api/admin/round/ticket. This
+    # keeps scanning fast and avoids re-uploading the image on every retake.
+    if body.get("preview"):
+        await db.close()
+        return {
+            "ok": True,
+            "round_id": round_["id"],
+            "draw_date": draw_date or result.get("draw_date"),
+            "rows": rows,
+            "numbers": rows[0] if rows else [],
+            "image_url": None,
+        }
+
     img_bytes = base64.b64decode(raw_b64)
     storage_url = None
     if config.SUPABASE_URL and config.SUPABASE_SERVICE_KEY:

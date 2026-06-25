@@ -175,7 +175,8 @@ export const api = {
     closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
     scanTicket:   (round_id, image_b64, opts = {}) => req('POST', '/api/admin/round/scan-ticket', {
-      round_id, image_b64, ticket_index: opts.ticket_index, rows: opts.rows, draw_date: opts.draw_date,
+      round_id, image_b64, ticket_index: opts.ticket_index, rows: opts.rows,
+      draw_date: opts.draw_date, preview: opts.preview,
     }),
     saveTicket:   (round_id, ticket_index, rows, image_b64, draw_date) =>
       req('POST', '/api/admin/round/ticket', { round_id, ticket_index, rows, image_b64, draw_date }),
