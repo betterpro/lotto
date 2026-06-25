@@ -144,10 +144,30 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
   const [newGroupName, setNewGroupName] = useState('')
   const [applyBusy, setApplyBusy] = useState(false)
   const [trusteeApp, setTrusteeApp] = useState(null)
+  const [joinCode, setJoinCode] = useState(null)
 
   useEffect(() => {
     setInviteGroupId(activeId)
   }, [activeId])
+
+  useEffect(() => {
+    if (!inviteGroupId) { setJoinCode(null); return }
+    let cancelled = false
+    api.invite(inviteGroupId)
+      .then(r => { if (!cancelled) setJoinCode(r.join_code || null) })
+      .catch(() => { if (!cancelled) setJoinCode(null) })
+    return () => { cancelled = true }
+  }, [inviteGroupId])
+
+  async function copyCode() {
+    if (!joinCode) return
+    try {
+      await navigator.clipboard.writeText(joinCode)
+      showToast('Join code copied', 'success')
+    } catch {
+      showToast(`Join code: ${joinCode}`, 'success')
+    }
+  }
 
   useEffect(() => {
     if (!user.is_group_trustee) {
@@ -239,6 +259,30 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
                   </select>
                 </label>
               )}
+              {joinCode && (
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: 10, padding: '10px 12px', marginBottom: 10, borderRadius: 12,
+                    background: 'var(--bg-2, #f5f5f7)', border: '1px solid var(--bd, #e5e5e5)',
+                  }}
+                >
+                  <div className="col" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                      Join code
+                    </span>
+                    <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: 4, fontFamily: 'monospace' }}>
+                      {joinCode}
+                    </span>
+                  </div>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={copyCode}>
+                    Copy
+                  </button>
+                </div>
+              )}
+              <p style={{ fontSize: 11, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                Share this code with friends — they enter it on the “Join your group” screen to join.
+              </p>
               <button className="btn btn-ghost btn-block btn-sm" type="button" onClick={shareInvite}>
                 <ShareIcon width={14} height={14} />
                 {inviteGroup

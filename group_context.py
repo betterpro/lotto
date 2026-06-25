@@ -1,7 +1,21 @@
 """Group / trustee context helpers for multi-tenant lottery pools."""
 import re
+import secrets
 
 import config
+
+
+# Join codes use an unambiguous alphabet (no 0/O/1/I/L) so they are easy to
+# read aloud and type. Codes are stored uppercase and matched case-insensitively.
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def generate_join_code(length: int = 6) -> str:
+    return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(length))
+
+
+def normalize_join_code(code: str | None) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
 
 
 def parse_invite_slug(start_param: str | None) -> str | None:
@@ -30,6 +44,29 @@ async def get_group(db, group_id: int | None):
 async def get_group_by_slug(db, slug: str):
     cur = await db.execute("SELECT * FROM groups WHERE slug = ?", (slug.lower(),))
     return await cur.fetchone()
+
+
+async def get_group_by_join_code(db, code: str):
+    code = normalize_join_code(code)
+    if not code:
+        return None
+    cur = await db.execute("SELECT * FROM groups WHERE join_code = ?", (code,))
+    return await cur.fetchone()
+
+
+async def ensure_join_code(db, group: dict) -> str:
+    """Return the group's join code, allocating a unique one on first use."""
+    if group.get("join_code"):
+        return group["join_code"]
+    for _ in range(12):
+        code = generate_join_code()
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code = ?", (code,))
+        if await cur.fetchone():
+            continue
+        await db.execute("UPDATE groups SET join_code = ? WHERE id = ?", (code, group["id"]))
+        await db.commit()
+        return code
+    raise RuntimeError("Could not allocate a unique join code")
 
 
 async def get_trustee_user(db, trustee_user_id: int):
@@ -71,6 +108,7 @@ def group_public(group_row) -> dict | None:
         "etransfer_min_amount": float(group_row.get("etransfer_min_amount") or 25),
         "etransfer_email": group_row.get("etransfer_email"),
         "free_ticket_mode": normalize_free_ticket_mode(group_row.get("free_ticket_mode")),
+        "join_code": group_row.get("join_code"),
     }
 
 
@@ -170,6 +208,26 @@ async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | Non
     group = await get_group_by_slug(db, slug)
     if not group:
         return "Invalid invite link", None
+    if group["status"] != "active":
+        return "This group is not accepting members", None
+    role = "trustee" if group["trustee_user_id"] == telegram_id else "member"
+    await add_group_member(db, group["id"], telegram_id, role)
+    cur = await db.execute("SELECT group_id FROM users WHERE telegram_id = ?", (telegram_id,))
+    row = await cur.fetchone()
+    if not row or not row["group_id"]:
+        await db.execute(
+            "UPDATE users SET group_id = ? WHERE telegram_id = ?",
+            (group["id"], telegram_id),
+        )
+    await db.commit()
+    return None, group
+
+
+async def join_group_by_code(db, telegram_id: int, code: str) -> tuple[str | None, dict | None]:
+    """Add membership via a group join code. Returns (error, group_row)."""
+    group = await get_group_by_join_code(db, code)
+    if not group:
+        return "That code didn’t match any group. Check it with your trustee.", None
     if group["status"] != "active":
         return "This group is not accepting members", None
     role = "trustee" if group["trustee_user_id"] == telegram_id else "member"

@@ -60,12 +60,16 @@ from group_context import (
     add_group_member,
     enrich_user_context,
     ensure_active_group_id,
+    ensure_join_code,
+    generate_join_code,
     get_group,
+    get_group_by_join_code,
     get_group_by_slug,
     get_trustee_user,
     get_user_groups,
     group_allows_payment,
     group_public,
+    join_group_by_code,
     is_valid_card_deposit_amount,
     join_group_by_slug,
     member_group_public,
@@ -1367,22 +1371,42 @@ async def api_invite(request: Request, group_id: int | None = None):
         await db.close()
         raise HTTPException(403, "Join this group before sharing invites")
     group = await get_group(db, gid)
-    await db.close()
-    if not _bot_username:
-        raise HTTPException(500, "Bot not available")
     if not group:
+        await db.close()
         raise HTTPException(404, "Group not found")
+    join_code = await ensure_join_code(db, group)
+    await db.close()
     slug = group["slug"]
-    app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}"
-    bot_link = f"https://t.me/{_bot_username}?start=g_{slug}"
+    app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}" if _bot_username else None
+    bot_link = f"https://t.me/{_bot_username}?start=g_{slug}" if _bot_username else None
     return {
         "link": app_link,
         "app_link": app_link,
         "bot_link": bot_link,
         "slug": slug,
+        "join_code": join_code,
         "group_id": gid,
         "group_name": group["name"],
     }
+
+
+@app.post("/api/group/join-code")
+async def api_group_join_code(request: Request):
+    user, db = await _auth(request)
+    body = await request.json()
+    code = (body.get("code") or "").strip()
+    if not code:
+        await db.close()
+        raise HTTPException(400, "Enter a join code")
+    err, group = await join_group_by_code(db, user["telegram_id"], code)
+    if err:
+        await db.close()
+        raise HTTPException(400, err)
+    cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
+    row = await cur.fetchone()
+    ctx = await enrich_user_context(db, dict(row))
+    await db.close()
+    return {"ok": True, "group_name": group["name"], **ctx}
 
 
 # ---------------------------------------------------------------------------
@@ -3250,10 +3274,16 @@ async def platform_approve_application(app_id: int, request: Request):
             break
         n += 1
         slug = f"{base_slug}-{n}"
+    join_code = generate_join_code()
+    while True:
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
+        if not await cur.fetchone():
+            break
+        join_code = generate_join_code()
     cur = await db.execute(
-        """INSERT INTO groups (name, slug, trustee_user_id, status)
-           VALUES (?,?,?, 'active') RETURNING id""",
-        (app_row["proposed_group_name"], slug, applicant_id),
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code)
+           VALUES (?,?,?, 'active', ?) RETURNING id""",
+        (app_row["proposed_group_name"], slug, applicant_id, join_code),
     )
     group_id = cur.lastrowid
     await db.execute(

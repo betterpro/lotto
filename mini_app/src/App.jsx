@@ -174,7 +174,7 @@ export default function App() {
         </div>
       )
     }
-    return <NeedsInvite error={inviteJoinError} />
+    return <NeedsInvite error={inviteJoinError} onJoined={loadUser} />
   }
 
   const serverOnboarded = user.onboarded || !!user.agreement_accepted_at

@@ -178,6 +178,9 @@ _SCHEMA_STATEMENTS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users (google_sub) WHERE google_sub IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_sub ON users (apple_sub) WHERE apple_sub IS NOT NULL",
     "CREATE SEQUENCE IF NOT EXISTS web_user_id_seq START 1",
+    # Group join codes: trustee shares a short code, members type it to join.
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS join_code TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_join_code ON groups (join_code) WHERE join_code IS NOT NULL",
 ]
 
 _schema_ready = False

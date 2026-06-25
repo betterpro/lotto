@@ -96,6 +96,7 @@ export const api = {
   group: {
     preview: (slug) => reqPublic('GET', `/api/group/preview?slug=${encodeURIComponent(slug)}`),
     join:    (slug) => req('POST', '/api/group/join', { slug }),
+    joinByCode: (code) => req('POST', '/api/group/join-code', { code }),
   },
   trustee: {
     application: () => req('GET', '/api/trustee/application'),
