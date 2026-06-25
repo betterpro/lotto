@@ -9,7 +9,9 @@ function TicketPhotoModal({ round, onClose }) {
   // Render the stored ticket image(s) directly. round_tickets[].image are public
   // Supabase URLs (or data URIs) that an <img> can show without auth/CORS — unlike
   // fetching the auth-protected endpoint, which fails on a cross-origin redirect.
-  const imgs = (round.round_tickets || []).map(t => t?.image).filter(Boolean)
+  const imgs = round.ticket_images?.length
+    ? round.ticket_images
+    : (round.round_tickets || []).map(t => t?.image).filter(Boolean)
   const sources = imgs.length
     ? imgs
     : [`${import.meta.env.VITE_API_BASE ?? ''}/api/round/${round.id}/ticket-image`]

@@ -82,7 +82,9 @@ function RoundDetail({ round, onClose }) {
           )}
 
           {(() => {
-            const imgs = (round.round_tickets || []).map(t => t?.image).filter(Boolean)
+            const imgs = round.ticket_images?.length
+              ? round.ticket_images
+              : (round.round_tickets || []).map(t => t?.image).filter(Boolean)
             if (!imgs.length) return null
             return (
               <>

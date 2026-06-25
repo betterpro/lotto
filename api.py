@@ -1762,7 +1762,11 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
     rd["tickets_uploaded"] = len(saved)
     rd["round_tickets"] = saved
-    rd["has_ticket_image"] = bool(rd.get("ticket_image")) or any(t.get("image") for t in saved)
+    ticket_images = [t["image"] for t in saved if t.get("image")]
+    if not ticket_images and rd.get("ticket_image"):
+        ticket_images = [rd["ticket_image"]]
+    rd["ticket_images"] = ticket_images
+    rd["has_ticket_image"] = bool(ticket_images)
     rd.pop("ticket_image", None)
     rd["display_status"] = display_status(
         rd["status"], rd.get("draw_date"),
@@ -1900,8 +1904,14 @@ async def api_rounds(request: Request):
         rd["participants_count"] = int(rd.get("participants_count") or 0)
         rd["participants"] = rd["participants_count"]
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
-        rd["has_ticket_image"] = bool(rd.get("ticket_image"))
+        saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
+        ticket_images = [t["image"] for t in saved if t.get("image")]
+        if not ticket_images and rd.get("ticket_image"):
+            ticket_images = [rd["ticket_image"]]
+        rd["ticket_images"] = ticket_images
+        rd["has_ticket_image"] = bool(ticket_images)
         rd.pop("ticket_image", None)
+        rd.pop("round_tickets", None)
         rounds.append(rd)
     await db.close()
     return {"rounds": rounds}
