@@ -201,34 +201,46 @@ def merge_round_ticket_rows(tickets: list[dict]) -> list[list]:
 def build_scan_prompt(lottery_type: str | None) -> str:
     layout = ticket_layout(lottery_type)
 
+    # Shared rules — accuracy matters more than anything (real money rides on it).
+    preamble = (
+        "You are transcribing the player's chosen numbers from a photo of a Canadian "
+        "lottery ticket. The photo is often ROTATED or SIDEWAYS — first mentally rotate "
+        "it so the printed text reads upright, then read it. "
+        "Numbers are printed zero-padded as two digits (04 = 4, 05 = 5); strip leading "
+        "zeros. Read the digits EXACTLY as printed — do NOT guess, estimate, round, "
+        "re-order, or invent any number. If you cannot clearly read a line, OMIT that "
+        "line rather than fabricating it. Returning fewer correct lines is far better "
+        "than returning made-up numbers. Never copy the numbers from the example below. "
+    )
+
     if lottery_type == "649":
         return (
-            "This is a Canadian Lotto 6/49 lottery ticket. "
-            "Extract EVERY horizontal row under the CLASSIC DRAW section. "
-            "Each classic row has exactly 6 main numbers from 1 to 49 (ignore leading zeros, e.g. 05 → 5). "
-            "Do NOT include Gold Ball Draw serial codes (10-digit codes like 09533128-01). "
-            "Return ONLY a JSON object with no extra text:\n"
+            preamble
+            + "This is a Lotto 6/49 ticket. Read EVERY row under the CLASSIC DRAW section. "
+            "Each classic row has exactly 6 numbers from 1 to 49. "
+            "Do NOT include Gold Ball / ENCORE serial codes (long codes like 09533128-01). "
+            "Return ONLY a JSON object, no extra text:\n"
             "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
-            "- rows: array of arrays — one inner array per classic draw line, top to bottom, "
+            "- rows: array of arrays — one inner array per classic line, top to bottom, "
             "each with exactly 6 integers\n"
-            'Example: {"draw_date":"2026-05-27","rows":[[10,14,22,25,44,45],[5,10,12,27,32,42],[13,14,27,35,41,45]]}'
+            'Example shape only: {"draw_date":"2026-05-27","rows":[[10,14,22,25,44,45],[5,10,12,27,32,42]]}'
         )
 
     if is_variable_row_layout(layout):
         spec = layout["repeat_row"]
         return (
-            f"This is a Canadian {layout['label']} lottery ticket. "
-            f"Extract EVERY horizontal player selection line on the ticket — there may be "
-            f"3, 4, or more lines, so read them ALL, top to bottom. "
-            f"Each line has exactly {spec['count']} numbers from {spec['min']} to {spec['max']} "
-            "(ignore leading zeros, e.g. 05 → 5). "
-            "Ignore barcodes, long serial/encore codes, prices, and the draw-date text. "
-            "Return ONLY a JSON object with no extra text:\n"
+            preamble
+            + f"This is a {layout['label']} ticket. The player's selections are a block of "
+            f"rows; read EVERY selection row, top to bottom — there may be 3, 4, 5 or more. "
+            f"Each row has exactly {spec['count']} numbers from {spec['min']} to {spec['max']}. "
+            "Ignore everything that is NOT a selection row: the game logo, the draw date, "
+            "the word EXTRA and its 47-67-75-96 numbers, ENCORE, TOTAL/prices, the Wager ID, "
+            "the Retailer number, and any long barcode or serial numbers. "
+            "Return ONLY a JSON object, no extra text:\n"
             "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
-            f"- rows: array of arrays — one inner array per selection line, "
-            f"each with exactly {spec['count']} integers\n"
-            f'Example: {{"draw_date":"2025-03-14","rows":'
-            f'[[3,14,22,31,38,45,49],[1,12,13,14,15,16,17],[8,9,10,11,12,13,14],[2,7,19,28,33,40,51]]}}'
+            f"- rows: array of arrays — one inner array per selection row, each with exactly "
+            f"{spec['count']} integers\n"
+            'Example shape only: {"draw_date":"2026-06-26","rows":[[1,2,3,4,5,6,7],[8,9,10,11,12,13,14]]}'
         )
 
     row_lines = "\n".join(
@@ -237,10 +249,10 @@ def build_scan_prompt(lottery_type: str | None) -> str:
     )
     n = len(layout["rows"])
     return (
-        f"This is a Canadian {layout['label']} lottery ticket. "
-        "Extract ALL player selection lines visible on the ticket. "
-        "Return ONLY a JSON object with no extra text:\n"
+        preamble
+        + f"This is a {layout['label']} ticket. Read ALL player selection lines visible. "
+        "Return ONLY a JSON object, no extra text:\n"
         "- draw_date: the draw date as YYYY-MM-DD (null if not visible)\n"
         f"- rows: array of exactly {n} arrays (one per line below):\n{row_lines}\n"
-        'Example: {"draw_date":"2025-03-14","rows":[[3,14,22,31,38,45,49],[1,12,13,14,15,16,17],[8,9,10,11,12,13,14]]}'
+        'Example shape only: {"draw_date":"2026-06-26","rows":[[3,14,22,31,38],[6]]}'
     )

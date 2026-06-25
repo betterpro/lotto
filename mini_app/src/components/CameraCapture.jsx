@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-function captureVideoFrame(video, maxPx = 1200, quality = 0.82) {
+function captureVideoFrame(video, maxPx = 1568, quality = 0.9) {
   let w = video.videoWidth
   let h = video.videoHeight
   if (!w || !h) throw new Error('Camera not ready')

@@ -17,7 +17,7 @@ import {
   CheckIcon, XIcon, PlusIcon, UploadIcon, SearchIcon, CameraIcon,
 } from '../components/Icon.jsx'
 
-function compressImage(file, maxPx = 1200, quality = 0.82) {
+function compressImage(file, maxPx = 1568, quality = 0.9) {
   return new Promise(resolve => {
     const reader = new FileReader()
     reader.onload = e => {

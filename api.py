@@ -2735,8 +2735,9 @@ async def admin_scan_ticket(request: Request):
         client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
         try:
             msg = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=1024,
+                temperature=0,
                 messages=[{
                     "role": "user",
                     "content": [
