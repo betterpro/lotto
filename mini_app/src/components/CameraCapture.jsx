@@ -15,11 +15,28 @@ function captureVideoFrame(video, maxPx = 1568, quality = 0.9) {
   return canvas.toDataURL('image/jpeg', quality)
 }
 
-export default function CameraCapture({ onCapture, onClose, onError }) {
+const TIPS = [
+  'Lay the ticket flat on a dark surface',
+  'Fill the frame — every number row visible',
+  'Avoid glare, shadows and blur',
+]
+
+/**
+ * Full-screen ticket camera.
+ * - series=true keeps the camera open after each shot so the trustee can
+ *   capture several physical tickets in a row, then tap Done.
+ * - onCapture(dataUrl) fires per shot; onClose() when finished/cancelled.
+ */
+export default function CameraCapture({
+  onCapture, onClose, onError,
+  series = false, captured = 0, target = 0, thumbs = [],
+}) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const [ready, setReady] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [cooldown, setCooldown] = useState(false)
+  const [flash, setFlash] = useState(false)
+  const [showTips, setShowTips] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -32,27 +49,21 @@ export default function CameraCapture({ onCapture, onClose, onError }) {
       ]
       let lastErr
       for (const constraints of tries) {
-        try {
-          return await navigator.mediaDevices.getUserMedia(constraints)
-        } catch (e) {
-          lastErr = e
-        }
+        try { return await navigator.mediaDevices.getUserMedia(constraints) }
+        catch (e) { lastErr = e }
       }
       throw lastErr
     }
 
     async function start() {
       if (!navigator.mediaDevices?.getUserMedia) {
-        onError?.('Camera not supported here — use Upload photo and pick Camera from the menu')
+        onError?.('Camera not supported here — use Upload photo instead')
         onClose?.()
         return
       }
       try {
         const stream = await getStream()
-        if (cancelled) {
-          stream.getTracks().forEach(t => t.stop())
-          return
-        }
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
         streamRef.current = stream
         const video = videoRef.current
         if (video) {
@@ -64,7 +75,7 @@ export default function CameraCapture({ onCapture, onClose, onError }) {
         const name = err?.name || ''
         let msg = 'Could not open camera'
         if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-          msg = 'Camera permission denied — allow camera access for Telegram in system settings'
+          msg = 'Camera permission denied — allow camera access in settings'
         } else if (name === 'NotFoundError') {
           msg = 'No camera found on this device'
         }
@@ -83,74 +94,155 @@ export default function CameraCapture({ onCapture, onClose, onError }) {
 
   function snap() {
     const video = videoRef.current
-    if (!video || busy) return
-    setBusy(true)
+    if (!video || cooldown || !ready) return
+    let dataUrl
     try {
-      const dataUrl = captureVideoFrame(video)
-      streamRef.current?.getTracks().forEach(t => t.stop())
-      onCapture(dataUrl)
+      dataUrl = captureVideoFrame(video)
     } catch (err) {
       onError?.(err.message || 'Could not capture photo')
-      setBusy(false)
+      return
+    }
+    setFlash(true)
+    setTimeout(() => setFlash(false), 150)
+    setShowTips(false)
+    if (series) {
+      setCooldown(true)
+      setTimeout(() => setCooldown(false), 450)
+      onCapture(dataUrl)
+    } else {
+      streamRef.current?.getTracks().forEach(t => t.stop())
+      onCapture(dataUrl)
     }
   }
 
+  const recentThumbs = thumbs.slice(-4)
+
   return (
-    <div
-      className="sheet-overlay"
-      style={{ zIndex: 1200 }}
-      onClick={onClose}
-    >
-      <div
-        className="sheet"
-        style={{ maxHeight: 'var(--sheet-max-h)' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="handle" />
-        <div className="sheet-head">
-          <span className="sheet-title">Take ticket photo</span>
-          <button type="button" className="sheet-close" onClick={onClose}>✕</button>
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 2000, background: '#000',
+      display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Live camera */}
+      <video
+        ref={videoRef}
+        autoPlay playsInline muted
+        style={{
+          position: 'absolute', inset: 0, width: '100%', height: '100%',
+          objectFit: 'cover', opacity: ready ? 1 : 0.25,
+        }}
+      />
+
+      {/* Shutter flash */}
+      {flash && <div style={{ position: 'absolute', inset: 0, background: '#fff', opacity: 0.5 }} />}
+
+      {/* Framing guide */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <div style={{
+          position: 'absolute', top: '16%', bottom: '24%', left: '7%', right: '7%',
+          borderRadius: 16, boxShadow: '0 0 0 100vmax rgba(0,0,0,.35)',
+        }}>
+          {[
+            { top: -2, left: -2, borderWidth: '3px 0 0 3px', borderRadius: '16px 0 0 0' },
+            { top: -2, right: -2, borderWidth: '3px 3px 0 0', borderRadius: '0 16px 0 0' },
+            { bottom: -2, left: -2, borderWidth: '0 0 3px 3px', borderRadius: '0 0 0 16px' },
+            { bottom: -2, right: -2, borderWidth: '0 3px 3px 0', borderRadius: '0 0 16px 0' },
+          ].map((pos, i) => (
+            <span key={i} style={{
+              position: 'absolute', width: 28, height: 28,
+              borderStyle: 'solid', borderColor: 'rgba(255,255,255,.9)', ...pos,
+            }} />
+          ))}
         </div>
-        <div className="body" style={{ paddingTop: 0 }}>
-          <div style={{
-            position: 'relative', borderRadius: 12, overflow: 'hidden',
-            background: '#000', aspectRatio: '4/3', marginBottom: 12,
-          }}>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{
-                width: '100%', height: '100%', objectFit: 'cover',
-                opacity: ready ? 1 : 0.3,
-              }}
-            />
-            {!ready && (
-              <div style={{
-                position: 'absolute', inset: 0, display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-              }}>
-                <div className="spinner" />
+      </div>
+
+      {/* Top bar */}
+      <div style={{
+        position: 'relative', zIndex: 2, display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', padding: '14px 16px',
+        background: 'linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0))',
+        paddingTop: 'max(14px, env(safe-area-inset-top))',
+      }}>
+        <button type="button" onClick={onClose}
+          style={{ background: 'rgba(0,0,0,.4)', border: 'none', color: '#fff',
+            borderRadius: 20, padding: '8px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          Close
+        </button>
+        <span style={{ color: '#fff', fontSize: 14, fontWeight: 700, textShadow: '0 1px 3px rgba(0,0,0,.6)' }}>
+          {series && target
+            ? `Ticket ${Math.min(captured + 1, target)} of ${target}`
+            : 'Take ticket photo'}
+        </span>
+        <div style={{ width: 64 }} />
+      </div>
+
+      {/* Guidelines */}
+      {showTips && (
+        <div style={{
+          position: 'relative', zIndex: 2, margin: '8px 16px 0', alignSelf: 'center',
+          maxWidth: 360, background: 'rgba(0,0,0,.55)', borderRadius: 14, padding: '12px 14px',
+          backdropFilter: 'blur(2px)',
+        }}>
+          <div style={{ color: '#fff', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+            How to get a clean scan
+          </div>
+          {TIPS.map(t => (
+            <div key={t} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
+              <span style={{ color: 'var(--money, #4ed07a)', fontSize: 13, lineHeight: '18px' }}>✓</span>
+              <span style={{ color: 'rgba(255,255,255,.9)', fontSize: 12, lineHeight: '18px' }}>{t}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ flex: 1 }} />
+
+      {/* Bottom controls */}
+      <div style={{
+        position: 'relative', zIndex: 2,
+        padding: '16px 20px', paddingBottom: 'max(20px, env(safe-area-inset-bottom))',
+        background: 'linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.6))',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+      }}>
+        {/* Left: captured filmstrip / count */}
+        <div style={{ width: 96, display: 'flex', alignItems: 'center', gap: 4 }}>
+          {series && captured > 0 ? (
+            <>
+              <div style={{ display: 'flex' }}>
+                {recentThumbs.map((src, i) => (
+                  <img key={i} src={src} alt="" style={{
+                    width: 34, height: 34, borderRadius: 6, objectFit: 'cover',
+                    border: '1.5px solid #fff', marginLeft: i ? -12 : 0,
+                  }} />
+                ))}
               </div>
-            )}
-          </div>
-          <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--tx-2)', lineHeight: 1.5, textAlign: 'center' }}>
-            Frame the full ticket so all number rows are visible
-          </p>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="btn btn-block"
-              style={{ background: 'var(--surface-2)' }}
-              disabled={busy}
-              onClick={onClose}>
-              Cancel
+              <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>{captured}</span>
+            </>
+          ) : null}
+        </div>
+
+        {/* Center: shutter */}
+        <button type="button" onClick={snap} disabled={!ready || cooldown} aria-label="Capture"
+          style={{
+            width: 72, height: 72, borderRadius: '50%', border: '4px solid rgba(255,255,255,.85)',
+            background: ready && !cooldown ? '#fff' : 'rgba(255,255,255,.4)',
+            cursor: ready && !cooldown ? 'pointer' : 'default', flexShrink: 0,
+            boxShadow: '0 2px 12px rgba(0,0,0,.4)',
+          }}>
+          {!ready && <span className="spinner" style={{ margin: '0 auto' }} />}
+        </button>
+
+        {/* Right: done (series) */}
+        <div style={{ width: 96, display: 'flex', justifyContent: 'flex-end' }}>
+          {series ? (
+            <button type="button" onClick={onClose} disabled={captured === 0}
+              style={{
+                background: captured > 0 ? 'var(--tg, #2ea6ff)' : 'rgba(255,255,255,.18)',
+                color: '#fff', border: 'none', borderRadius: 20, padding: '10px 16px',
+                fontSize: 14, fontWeight: 700, cursor: captured > 0 ? 'pointer' : 'default',
+              }}>
+              Done{captured > 0 ? ` (${captured})` : ''}
             </button>
-            <button type="button" className="btn btn-primary btn-block"
-              disabled={!ready || busy}
-              onClick={snap}>
-              {busy ? 'Capturing…' : 'Capture'}
-            </button>
-          </div>
+          ) : null}
         </div>
       </div>
     </div>

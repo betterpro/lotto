@@ -379,154 +379,146 @@ function RoundJackpotEditor({ round, onUpdated, showToast }) {
 }
 
 // ── Upload Ticket Sheet (camera + Tesseract OCR, multi-ticket) ───────────
+/** Order-independent signature of a ticket's rows, for duplicate detection. */
+function rowsSignature(rows) {
+  const norm = (rows || [])
+    .map(r => (r || []).map(Number).filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b))
+    .filter(r => r.length)
+    .map(r => r.join('-'))
+    .sort()
+  return norm.length ? norm.join('|') : ''
+}
+
 function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   const layout = ticketLayout(round?.lottery_type)
+  const variableRows = isVariableRowLayout(layout)
   const required = round?.tickets_required ?? 1
-  const alreadySaved = (round?.round_tickets || []).filter(t => t?.rows?.length).length
-  const [ticketIndex, setTicketIndex] = useState(alreadySaved)
-  const [savedCount, setSavedCount] = useState(alreadySaved)
-  const [rows, setRows] = useState(() => emptyTicketRows(layout))
-  const [busy, setBusy] = useState(false)
-  const [scanning, setScanning] = useState(false)
-  const [ocrPct, setOcrPct] = useState(0)
-  const [preview, setPreview] = useState(null)
-  const [previewB64, setPreviewB64] = useState(null)
-  const [scanDate, setScanDate] = useState(null)
+  const savedTickets = (round?.round_tickets || []).filter(t => t?.rows?.length)
+  const alreadySaved = savedTickets.length
+  const savedSignatures = savedTickets.map(t => rowsSignature(t.rows)).filter(Boolean)
+
+  // Each collected ticket: { id, image, rows, drawDate, scanning, error }
+  const [tickets, setTickets] = useState([])
   const [cameraOpen, setCameraOpen] = useState(false)
-  const [showNextPrompt, setShowNextPrompt] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const idRef = useRef(0)
   const galleryRef = useRef()
   const cameraFileRef = useRef()
 
-  const ticketNum = Math.min(ticketIndex + 1, required)
-  const allDone = savedCount >= required
-
-  function resetForNextScan() {
-    setRows(emptyTicketRows(layout))
-    setPreview(null)
-    setPreviewB64(null)
-    setShowNextPrompt(false)
-  }
-
-  function setNum(rowIdx, colIdx, v, spec) {
-    const maxLen = spec.max >= 10 ? 2 : 1
-    const next = rows.map((row, ri) =>
-      ri === rowIdx
-        ? row.map((cell, ci) => (ci === colIdx ? v.replace(/\D/g, '').slice(0, maxLen) : cell))
-        : [...row],
-    )
-    setRows(next)
-    const val = v.replace(/\D/g, '').slice(0, maxLen)
-    if (val.length >= maxLen && colIdx < spec.count - 1) {
-      document.getElementById(`tn-${rowIdx}-${colIdx + 1}`)?.focus()
-    } else if (val.length >= maxLen && rowIdx < rows.length - 1) {
-      document.getElementById(`tn-${rowIdx + 1}-0`)?.focus()
+  // Map of ticketId -> duplicate reason ('saved' | 'batch'), derived each render.
+  const dups = (() => {
+    const seen = new Map()
+    savedSignatures.forEach(sig => seen.set(sig, 'saved'))
+    const out = {}
+    for (const t of tickets) {
+      const sig = rowsSignature(t.rows)
+      if (!sig) continue
+      if (seen.has(sig)) out[t.id] = seen.get(sig) === 'saved' ? 'saved' : 'batch'
+      else seen.set(sig, t.id)
     }
-  }
+    return out
+  })()
 
-  async function processDataUrl(dataUrl) {
-    if (!dataUrl) return
-    setPreview(dataUrl)
-    setPreviewB64(dataUrl)
-    setScanning(true)
-    setOcrPct(0)
+  async function scanInto(id, dataUrl) {
     try {
-      // Fast path: server-side vision scan reads every line in one call.
-      // Falls back to on-device OCR only if the server scan is unavailable.
       let scanned = []
       let date = null
       try {
-        const r = await api.admin.scanTicket(round.id, dataUrl, {
-          ticket_index: ticketIndex, preview: true,
-        })
+        const r = await api.admin.scanTicket(round.id, dataUrl, { preview: true })
         scanned = Array.isArray(r.rows) ? r.rows : []
         date = r.draw_date || null
-      } catch (serverErr) {
-        scanned = await scanTicketImage(dataUrl, round.lottery_type, setOcrPct)
+      } catch {
+        scanned = await scanTicketImage(dataUrl, round.lottery_type, () => {})
       }
       const merged = scanned.length ? mergeScannedRows(scanned, layout) : emptyTicketRows(layout)
-      setRows(merged)
-      if (date) setScanDate(date)
-      if (scanned.length) {
-        const filled = ticketRowsValid(merged, layout)
-        const n = merged.length
-        showToast(
-          filled
-            ? `Scanned ${n} line${n === 1 ? '' : 's'} — review and save`
-            : `Scanned ${n} line${n === 1 ? '' : 's'} — fill any missing numbers`,
-          filled ? 'success' : 'info',
-        )
-      } else {
-        showToast('Could not read numbers — enter them manually', 'info')
+      let isDup = false
+      setTickets(ts => {
+        const next = ts.map(t => t.id === id
+          ? { ...t, rows: merged, drawDate: date || t.drawDate, scanning: false }
+          : t)
+        const sig = rowsSignature(merged)
+        if (sig) {
+          const others = next.filter(t => t.id !== id).map(t => rowsSignature(t.rows))
+          isDup = savedSignatures.includes(sig) || others.includes(sig)
+        }
+        return next
+      })
+      if (isDup) {
+        queueMicrotask(() => showToast('Duplicate ticket — it won’t be saved twice', 'info'))
       }
-      // Image + rows are persisted when trustee taps Save ticket
-    } catch (err) {
-      showToast('Scan failed: ' + err.message, 'error')
-    } finally {
-      setScanning(false)
-      setOcrPct(0)
+    } catch (e) {
+      setTickets(ts => ts.map(t => t.id === id ? { ...t, scanning: false, error: e.message } : t))
     }
   }
 
-  async function processImage(file) {
-    if (!file) return
-    await processDataUrl(await compressImage(file))
+  function addCapture(dataUrl) {
+    if (!dataUrl) return
+    const id = ++idRef.current
+    setTickets(ts => [...ts, {
+      id, image: dataUrl, rows: emptyTicketRows(layout), drawDate: null, scanning: true,
+    }])
+    scanInto(id, dataUrl)
   }
 
-  function handleFilePick(e) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    processImage(file)
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || [])
+    for (const f of files) {
+      // eslint-disable-next-line no-await-in-loop
+      addCapture(await compressImage(f))
+    }
   }
 
   function openCamera() {
-    if (navigator.mediaDevices?.getUserMedia) {
-      setCameraOpen(true)
-      return
-    }
+    if (navigator.mediaDevices?.getUserMedia) { setCameraOpen(true); return }
     cameraFileRef.current?.click()
   }
 
-  const scanBtnStyle = {
-    flex: 1, gap: 8, background: 'rgba(46,166,255,.12)', color: 'var(--tg)',
-    border: '.5px solid rgba(46,166,255,.25)',
-  }
-
-  const valid = ticketRowsValid(rows, layout)
-  const variableRows = isVariableRowLayout(layout)
-
-  async function saveCurrentTicket() {
-    if (!valid || !previewB64) return
-    setBusy(true)
-    try {
-      const nums = ticketRowsToNumbers(rows)
-      const res = await api.admin.saveTicket(
-        round.id, ticketIndex, nums, previewB64, scanDate || undefined,
-      )
-      const uploaded = res.tickets_uploaded ?? savedCount + 1
-      setSavedCount(uploaded)
-      showToast(`Ticket ${ticketNum} of ${required} saved`, 'success')
-      if (uploaded >= required) {
-        await finalizeUpload()
-        return
-      }
-      setShowNextPrompt(true)
-    } catch (err) {
-      showToast(err.message, 'error')
-    } finally {
-      setBusy(false)
+  function setTicketNum(id, rowIdx, colIdx, value, spec) {
+    const maxLen = spec.max >= 10 ? 2 : 1
+    const v = value.replace(/\D/g, '').slice(0, maxLen)
+    setTickets(ts => ts.map(t => {
+      if (t.id !== id) return t
+      const rows = t.rows.map((row, ri) =>
+        ri === rowIdx ? row.map((c, ci) => (ci === colIdx ? v : c)) : [...row])
+      return { ...t, rows }
+    }))
+    if (v.length >= maxLen && colIdx < spec.count - 1) {
+      document.getElementById(`tn-${id}-${rowIdx}-${colIdx + 1}`)?.focus()
     }
   }
 
-  async function finalizeUpload() {
+  function updateTicketRows(id, fn) {
+    setTickets(ts => ts.map(t => t.id === id ? { ...t, rows: fn(t.rows) } : t))
+  }
+  function removeTicket(id) {
+    setTickets(ts => ts.filter(t => t.id !== id))
+  }
+
+  const anyScanning = tickets.some(t => t.scanning)
+  const readyTickets = tickets.filter(t => !t.scanning && !dups[t.id] && ticketRowsValid(t.rows, layout))
+  const dupCount = Object.keys(dups).length
+  const invalidCount = tickets.filter(t => !t.scanning && !dups[t.id] && !ticketRowsValid(t.rows, layout)).length
+  const totalAfterSave = alreadySaved + readyTickets.length
+  const mismatchDates = [...new Set(tickets.map(t => t.drawDate).filter(Boolean))]
+    .filter(d => round?.draw_date && d !== round.draw_date)
+
+  async function saveAll() {
+    if (busy || !readyTickets.length) return
     setBusy(true)
     try {
-      await api.admin.uploadTicket(round.id)
-      showToast(
-        savedCount >= required
-          ? `All ${required} ticket${required === 1 ? '' : 's'} uploaded!`
-          : 'Ticket numbers uploaded!',
-        'success',
-      )
+      let idx = alreadySaved
+      for (const t of readyTickets) {
+        const nums = ticketRowsToNumbers(t.rows)
+        // eslint-disable-next-line no-await-in-loop
+        await api.admin.saveTicket(round.id, idx, nums, t.image, t.drawDate || undefined)
+        idx++
+      }
+      if (idx >= required) {
+        await api.admin.uploadTicket(round.id)
+        showToast(`All ${required} ticket${required === 1 ? '' : 's'} uploaded!`, 'success')
+      } else {
+        showToast(`Saved ${idx} of ${required} — scan ${required - idx} more`, 'info')
+      }
       onUploaded()
       onClose()
     } catch (err) {
@@ -536,227 +528,187 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     }
   }
 
-  function onNextTicket() {
-    setTicketIndex(i => i + 1)
-    resetForNextScan()
-  }
-
-  const dateMismatch = scanDate && round?.draw_date && scanDate !== round.draw_date
-
-  if (showNextPrompt) {
-    const remaining = required - savedCount
-    return (
-      <div className="sheet-overlay" onClick={onClose}>
-        <div className="sheet" onClick={e => e.stopPropagation()}>
-          <div className="handle" />
-          <div className="sheet-head">
-            <span className="sheet-title">Ticket {ticketNum} saved</span>
-            <button className="sheet-close" onClick={onClose}>✕</button>
-          </div>
-          <div className="body">
-            <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.5, marginBottom: 16 }}>
-              {savedCount} of {required} ticket{required === 1 ? '' : 's'} uploaded.
-              {remaining > 0
-                ? ` Scan ${remaining} more physical ticket${remaining === 1 ? '' : 's'} purchased for this round.`
-                : ''}
-            </p>
-            <div className="col" style={{ gap: 8 }}>
-              {remaining > 0 && (
-                <button type="button" className="btn btn-primary btn-block" onClick={onNextTicket}>
-                  <CameraIcon width={16} height={16} />
-                  Next ticket ({savedCount + 1} of {required})
-                </button>
-              )}
-              <button type="button" className="btn btn-block"
-                style={{ background: 'var(--surface-2)' }}
-                disabled={busy || savedCount < required}
-                onClick={finalizeUpload}>
-                <CheckIcon width={16} height={16} />
-                {busy ? 'Finishing…' : savedCount < required
-                  ? `Need ${remaining} more ticket${remaining === 1 ? '' : 's'}`
-                  : 'Finished — notify group'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="sheet-overlay" onClick={onClose}>
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">
-            Ticket {ticketNum} of {required} · Round #{round?.id}
-          </span>
+          <span className="sheet-title">Scan tickets · Round #{round?.id}</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
 
           <div style={{
             fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
-            background: allDone ? 'rgba(78,208,122,.1)' : 'rgba(46,166,255,.1)',
-            color: allDone ? 'var(--money)' : 'var(--tg)',
-            border: `.5px solid ${allDone ? 'rgba(78,208,122,.3)' : 'rgba(46,166,255,.25)'}`,
+            background: totalAfterSave >= required ? 'rgba(78,208,122,.1)' : 'rgba(46,166,255,.1)',
+            color: totalAfterSave >= required ? 'var(--money)' : 'var(--tg)',
+            border: `.5px solid ${totalAfterSave >= required ? 'rgba(78,208,122,.3)' : 'rgba(46,166,255,.25)'}`,
           }}>
-            {savedCount} of {required} ticket{required === 1 ? '' : 's'} saved
-            {required > 1 && ' · one scan per physical ticket bought in the pool'}
+            {totalAfterSave} of {required} ticket{required === 1 ? '' : 's'} ready
+            {required > 1 && ' · capture one photo per physical ticket bought in the pool'}
           </div>
 
-          <input ref={galleryRef} type="file" accept="image/*"
-            style={{ display: 'none' }} onChange={handleFilePick} />
+          <input ref={galleryRef} type="file" accept="image/*" multiple
+            style={{ display: 'none' }}
+            onChange={e => { handleFiles(e.target.files); e.target.value = '' }} />
           <input ref={cameraFileRef} type="file" accept="image/*" capture="environment"
-            style={{ display: 'none' }} onChange={handleFilePick} />
+            style={{ display: 'none' }}
+            onChange={e => { handleFiles(e.target.files); e.target.value = '' }} />
 
           {cameraOpen && (
             <CameraCapture
+              series
+              captured={alreadySaved + tickets.length}
+              target={required}
+              thumbs={tickets.map(t => t.image)}
+              onCapture={addCapture}
               onClose={() => setCameraOpen(false)}
-              onCapture={dataUrl => {
-                setCameraOpen(false)
-                processDataUrl(dataUrl)
-              }}
               onError={msg => showToast(msg, 'error')}
             />
           )}
 
-          {preview ? (
-            <div style={{ position: 'relative', marginBottom: 14 }}>
-              <img src={preview} alt="ticket"
-                style={{ width: '100%', borderRadius: 12, maxHeight: 200, objectFit: 'cover' }} />
-              {scanning && (
-                <div style={{
-                  position: 'absolute', inset: 0, borderRadius: 12,
-                  background: 'rgba(13,20,27,.75)',
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10,
-                }}>
-                  <div className="spinner" />
-                  <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
-                    Reading ticket…{ocrPct ? ` ${ocrPct}%` : ''}
-                  </span>
+          {tickets.length === 0 ? (
+            <>
+              <div style={{
+                fontSize: 12, color: 'var(--tx-2)', lineHeight: 1.6, marginBottom: 14,
+                background: 'var(--bg-3)', borderRadius: 12, padding: 12,
+              }}>
+                <div style={{ fontWeight: 700, color: 'var(--tx-1)', marginBottom: 6 }}>
+                  📸 Tips for a clean scan
                 </div>
-              )}
-              {!scanning && (
-                <div style={{
-                  position: 'absolute', bottom: 8, left: 8, right: 8,
-                  display: 'flex', gap: 8,
-                }}>
-                  <button type="button" className="btn" disabled={scanning}
-                    onClick={openCamera}
-                    style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700,
-                      background: 'rgba(46,166,255,.95)', color: '#fff', border: 'none', gap: 6 }}>
-                    <CameraIcon width={14} height={14} /> Retake
-                  </button>
-                  <button type="button" className="btn" disabled={scanning}
-                    onClick={() => galleryRef.current?.click()}
-                    style={{ flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 700,
-                      background: 'rgba(13,20,27,.85)', color: '#fff', border: 'none', gap: 6 }}>
-                    <UploadIcon width={14} height={14} /> Replace
-                  </button>
-                </div>
-              )}
-            </div>
+                • Lay each ticket flat on a dark surface<br />
+                • Fill the frame so every number row shows<br />
+                • Avoid glare, shadows and blur<br />
+                {required > 1 && <>• Capture all {required} tickets in one go — no need to come back</>}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="btn btn-primary btn-block" onClick={openCamera}>
+                  <CameraIcon width={18} height={18} />
+                  {required > 1 ? `Scan ${required} tickets` : 'Scan ticket'}
+                </button>
+                <button type="button" className="btn btn-block"
+                  style={{ flex: 1, gap: 8, background: 'rgba(46,166,255,.12)', color: 'var(--tg)',
+                    border: '.5px solid rgba(46,166,255,.25)' }}
+                  onClick={() => galleryRef.current?.click()}>
+                  <UploadIcon width={18} height={18} /> Upload
+                </button>
+              </div>
+            </>
           ) : (
-            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-              <button type="button" className="btn btn-block" disabled={scanning}
-                onClick={openCamera} style={scanBtnStyle}>
-                <CameraIcon width={18} height={18} />
-                Take photo
-              </button>
-              <button type="button" className="btn btn-block" disabled={scanning}
-                onClick={() => galleryRef.current?.click()} style={scanBtnStyle}>
-                <UploadIcon width={18} height={18} />
-                Upload photo
-              </button>
-            </div>
-          )}
-
-          {scanDate && (
-            <div style={{
-              fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
-              background: dateMismatch ? 'rgba(242,163,59,.1)' : 'rgba(78,208,122,.1)',
-              color: dateMismatch ? 'var(--warn)' : 'var(--money)',
-              border: `.5px solid ${dateMismatch ? 'rgba(242,163,59,.3)' : 'rgba(78,208,122,.3)'}`,
-            }}>
-              {dateMismatch
-                ? `⚠ Ticket draw date ${scanDate} differs from round draw date ${round.draw_date}`
-                : `✓ Draw date confirmed: ${fmtDate(scanDate)}`}
-            </div>
-          )}
-
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
-                        textTransform: 'uppercase', marginBottom: 8 }}>
-            Numbers on this ticket
-          </div>
-          <div className="col" style={{ gap: 14, marginBottom: 16, maxHeight: 280, overflowY: 'auto' }}>
-            {rows.map((_, rowIdx) => {
-              const spec = rowSpecForIndex(layout, rowIdx)
-              return (
-                <div key={`row-${rowIdx}`}>
-                  <div className="row between" style={{ marginBottom: 6 }}>
-                    <div style={{ fontSize: 10, color: 'var(--tx-3)', fontWeight: 600,
-                      textTransform: 'uppercase', letterSpacing: '.3px' }}>
-                      {spec.label} ({spec.min}–{spec.max})
-                    </div>
-                    {variableRows && rows.length > 1 && (
-                      <button type="button" onClick={() => setRows(removeTicketRow(layout, rows, rowIdx))}
-                        style={{ background: 'none', border: 'none', color: 'var(--danger)',
-                          fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: `repeat(${spec.count}, 1fr)`,
-                    gap: 6,
-                  }}>
-                    {(rows[rowIdx] || []).map((v, colIdx) => (
-                      <input
-                        key={colIdx}
-                        id={`tn-${rowIdx}-${colIdx}`}
-                        value={v}
-                        maxLength={spec.max >= 10 ? 2 : 1}
-                        inputMode="numeric"
-                        onChange={e => setNum(rowIdx, colIdx, e.target.value, spec)}
-                        className="input num-input"
-                        style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
-                      />
-                    ))}
-                  </div>
+            <>
+              {(dupCount > 0 || mismatchDates.length > 0) && (
+                <div style={{
+                  fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+                  background: 'rgba(242,163,59,.1)', color: 'var(--warn)',
+                  border: '.5px solid rgba(242,163,59,.3)', lineHeight: 1.5,
+                }}>
+                  {dupCount > 0 && <div>⚠ {dupCount} duplicate ticket{dupCount === 1 ? '' : 's'} found — won’t be saved.</div>}
+                  {mismatchDates.length > 0 && (
+                    <div>⚠ Some tickets show a different draw date ({mismatchDates.join(', ')}) than this round.</div>
+                  )}
                 </div>
-              )
-            })}
-            {variableRows && rows.length < (layout.maxRows ?? 10) && (
+              )}
+
+              <div className="col" style={{ gap: 12, marginBottom: 14 }}>
+                {tickets.map((t, i) => {
+                  const dup = dups[t.id]
+                  const valid = ticketRowsValid(t.rows, layout)
+                  const border = dup ? 'rgba(242,163,59,.5)'
+                    : t.scanning ? 'var(--hairline)'
+                    : valid ? 'rgba(78,208,122,.4)' : 'rgba(242,107,107,.4)'
+                  return (
+                    <div key={t.id} className="card" style={{ border: `.5px solid ${border}`, padding: 10 }}>
+                      <div className="row between" style={{ marginBottom: 8 }}>
+                        <div className="row gap-10" style={{ alignItems: 'center' }}>
+                          <img src={t.image} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover' }} />
+                          <div className="col">
+                            <span style={{ fontSize: 13, fontWeight: 700 }}>Ticket {i + 1}</span>
+                            <span style={{ fontSize: 11,
+                              color: dup ? 'var(--warn)' : t.scanning ? 'var(--tx-3)' : valid ? 'var(--money)' : 'var(--danger)' }}>
+                              {t.scanning ? 'Reading…' : dup ? (dup === 'saved' ? 'Already saved' : 'Duplicate') : valid ? 'Ready' : 'Check numbers'}
+                            </span>
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => removeTicket(t.id)}
+                          style={{ background: 'none', border: 'none', color: 'var(--danger)',
+                            fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 4 }}>
+                          Remove
+                        </button>
+                      </div>
+
+                      {t.scanning ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', color: 'var(--tx-2)', fontSize: 12 }}>
+                          <div className="spinner" style={{ width: 16, height: 16 }} /> Reading numbers…
+                        </div>
+                      ) : (
+                        <div className="col" style={{ gap: 10 }}>
+                          {t.rows.map((_, rowIdx) => {
+                            const spec = rowSpecForIndex(layout, rowIdx)
+                            return (
+                              <div key={rowIdx}>
+                                <div className="row between" style={{ marginBottom: 4 }}>
+                                  <span style={{ fontSize: 10, color: 'var(--tx-3)', fontWeight: 600,
+                                    textTransform: 'uppercase', letterSpacing: '.3px' }}>
+                                    {spec.label} ({spec.min}–{spec.max})
+                                  </span>
+                                  {variableRows && t.rows.length > 1 && (
+                                    <button type="button"
+                                      onClick={() => updateTicketRows(t.id, rows => removeTicketRow(layout, rows, rowIdx))}
+                                      style={{ background: 'none', border: 'none', color: 'var(--danger)',
+                                        fontSize: 10, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                                      Remove line
+                                    </button>
+                                  )}
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${spec.count}, 1fr)`, gap: 5 }}>
+                                  {(t.rows[rowIdx] || []).map((v, colIdx) => (
+                                    <input key={colIdx} id={`tn-${t.id}-${rowIdx}-${colIdx}`}
+                                      value={v} maxLength={spec.max >= 10 ? 2 : 1} inputMode="numeric"
+                                      onChange={e => setTicketNum(t.id, rowIdx, colIdx, e.target.value, spec)}
+                                      className="input num-input"
+                                      style={{ padding: 0, textAlign: 'center', fontSize: 15, fontWeight: 700, height: 40 }} />
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })}
+                          {variableRows && t.rows.length < (layout.maxRows ?? 10) && (
+                            <button type="button" className="btn btn-block"
+                              style={{ background: 'var(--surface-2)', fontSize: 12, padding: '6px' }}
+                              onClick={() => updateTicketRows(t.id, rows => addTicketRow(layout, rows))}>
+                              <PlusIcon width={13} height={13} /> Add line
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
               <button type="button" className="btn btn-block"
-                style={{ background: 'var(--surface-2)', fontSize: 13 }}
-                onClick={() => setRows(addTicketRow(layout, rows))}>
-                <PlusIcon width={14} height={14} /> Add line
+                style={{ marginBottom: 10, gap: 8, background: 'rgba(46,166,255,.12)',
+                  color: 'var(--tg)', border: '.5px solid rgba(46,166,255,.25)' }}
+                onClick={openCamera}>
+                <CameraIcon width={16} height={16} /> Scan more
               </button>
-            )}
-          </div>
 
-          <div className="card" style={{ marginBottom: 16 }}>
-            <SummaryRow k="Shares bought"  v={required} mono />
-            <SummaryRow k="Pool total"     v={fmtCAD(round?.pool)} mono />
-            <SummaryRow k="Draw date"      v={round?.draw_date ? fmtDate(round.draw_date) : '—'} />
-          </div>
-
-          <button className="btn btn-primary btn-block"
-            disabled={!valid || busy || scanning || !previewB64}
-            onClick={saveCurrentTicket}>
-            <UploadIcon width={16} height={16} />
-            {busy ? 'Saving…' : scanning ? 'Scanning…' : `Save ticket ${ticketNum}`}
-          </button>
-          {savedCount > 0 && (
-            <button type="button" className="btn btn-block" style={{ marginTop: 8, background: 'var(--surface-2)' }}
-              disabled={busy || savedCount < required}
-              onClick={finalizeUpload}>
-              {savedCount < required
-                ? `Finished (${savedCount}/${required} — need ${required - savedCount} more)`
-                : 'Finished — notify group'}
-            </button>
+              <button className="btn btn-primary btn-block"
+                disabled={busy || anyScanning || !readyTickets.length}
+                onClick={saveAll}>
+                <UploadIcon width={16} height={16} />
+                {busy ? 'Saving…'
+                  : anyScanning ? 'Reading…'
+                  : totalAfterSave >= required
+                    ? `Save & notify group (${readyTickets.length})`
+                    : `Save ${readyTickets.length} ticket${readyTickets.length === 1 ? '' : 's'}`}
+              </button>
+              {invalidCount > 0 && (
+                <p style={{ fontSize: 11, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
+                  {invalidCount} ticket{invalidCount === 1 ? '' : 's'} need fixing before they can be saved.
+                </p>
+              )}
+            </>
           )}
         </div>
       </div>

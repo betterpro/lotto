@@ -2591,6 +2591,17 @@ async def admin_save_round_ticket(request: Request):
 
     tickets = parse_round_tickets(round_.get("round_tickets"), lottery_type)
     entry = {"image": image_url, "rows": rows}
+
+    # Duplicate guard: reject identical numbers already saved at another index.
+    def _sig(rs):
+        return "|".join(sorted("-".join(str(n) for n in sorted(r)) for r in rs if r))
+    new_sig = _sig(rows)
+    if new_sig:
+        for j, t in enumerate(tickets):
+            if j != ticket_index and t.get("rows") and _sig(t["rows"]) == new_sig:
+                await db.close()
+                raise HTTPException(409, "Duplicate ticket — these numbers were already saved")
+
     if ticket_index < len(tickets):
         tickets[ticket_index] = entry
     elif ticket_index == len(tickets):
