@@ -598,7 +598,7 @@ export default function Home({ user, onUserUpdate }) {
         <div className="stat">
           <span className="k">Status</span>
           <span className="v" style={{ fontSize: 16 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
-          <span className="delta">ID: {user.telegram_id}</span>
+          <span className="delta">{(groups.find(g => g.id === activeId) || groups[0])?.name || 'No group yet'}</span>
         </div>
         {sub && (
           <div className="stat" style={{ gridColumn: 'span 2' }}>

@@ -3,6 +3,7 @@ import { CheckIcon, ShieldIcon, ArrowDownIcon } from '../components/Icon.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 import { api } from '../api.js'
 import { LOGO_SRC } from '../brand.js'
+import { isTelegram } from '../routes.js'
 
 function Section({ title, children }) {
   return (
@@ -346,7 +347,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
                     <div className="ob-sig-box">
                       <span className="mono" style={{ color: 'var(--tg)' }}>{info.fullName || '—'}</span>
                       <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>
-                        Digitally signed via Telegram · {new Date().toLocaleDateString('en-CA')}
+                        Digitally signed{isTelegram() ? ' via Telegram' : ''} · {new Date().toLocaleDateString('en-CA')}
                       </span>
                     </div>
                   </div>

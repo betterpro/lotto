@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 import httpx
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application
 
@@ -3817,7 +3818,20 @@ class _SPAStaticFiles(StaticFiles):
     """
 
     async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            response = None
+        # SPA fallback: client-side routes like /profile have no file on disk.
+        # Serve index.html for any not-found path that isn't an asset request
+        # (i.e. has no file extension), so a hard refresh / direct link works.
+        if response is None or response.status_code == 404:
+            if "." not in path.rsplit("/", 1)[-1]:
+                response = await super().get_response("index.html", scope)
+            elif response is None:
+                raise StarletteHTTPException(status_code=404)
         media = response.headers.get("content-type", "")
         if path in (".", "") or path.endswith(".html") or media.startswith("text/html"):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
