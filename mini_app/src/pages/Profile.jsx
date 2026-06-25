@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
+import { isTelegram } from '../routes.js'
 import { useToast } from '../components/Toast.jsx'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
@@ -448,6 +449,18 @@ export default function Profile({ user, onUserUpdate }) {
               onClick={save}>
               {saved ? '✓ Saved!' : busy ? 'Saving…' : 'Save preferences'}
             </button>
+
+            {/* ── Log out (web only) ── */}
+            {!isTelegram() && (
+              <button className="btn btn-ghost btn-block"
+                style={{ marginTop: 12, color: 'var(--danger)' }}
+                onClick={async () => {
+                  try { await api.auth.logout() } catch { /* clear locally anyway */ }
+                  window.location.href = '/login'
+                }}>
+                Log out
+              </button>
+            )}
           </>
         )}
       </div>
