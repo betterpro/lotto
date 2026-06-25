@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { authFetch } from '../api.js'
+import { api, authFetch } from '../api.js'
 
 async function downloadAgreementPdf(kind, roundId) {
   const path = kind === 'master'

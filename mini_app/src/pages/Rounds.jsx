@@ -1,44 +1,51 @@
 import { useState, useEffect } from 'react'
-import { api, authFetch } from '../api.js'
+import { api } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
 import { jackpotDisplay } from '../lottery.js'
 
-function TicketPhotoModal({ roundId, onClose }) {
-  const [src, setSrc] = useState(null)
-  const [err, setErr] = useState(false)
-
-  useEffect(() => {
-    authFetch(`/api/round/${roundId}/ticket-image`)
-      .then(r => {
-      if (!r.ok) throw new Error()
-      return r.blob()
-    }).then(blob => setSrc(URL.createObjectURL(blob)))
-      .catch(() => setErr(true))
-    return () => src && URL.revokeObjectURL(src)
-  }, [roundId])
+function TicketPhotoModal({ round, onClose }) {
+  // Render the stored ticket image(s) directly. round_tickets[].image are public
+  // Supabase URLs (or data URIs) that an <img> can show without auth/CORS — unlike
+  // fetching the auth-protected endpoint, which fails on a cross-origin redirect.
+  const imgs = (round.round_tickets || []).map(t => t?.image).filter(Boolean)
+  const sources = imgs.length
+    ? imgs
+    : [`${import.meta.env.VITE_API_BASE ?? ''}/api/round/${round.id}/ticket-image`]
+  const [failed, setFailed] = useState({})
+  const allFailed = sources.every((_, i) => failed[i])
 
   return (
     <div className="sheet-overlay" onClick={onClose}
       style={{ alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div onClick={e => e.stopPropagation()}
-        style={{ width: '100%', maxWidth: 420, borderRadius: 16, overflow: 'hidden', background: 'var(--surface)' }}>
-        <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>Ticket · Round #{roundId}</span>
+        style={{ width: '100%', maxWidth: 420, maxHeight: '90vh', overflowY: 'auto',
+          borderRadius: 16, background: 'var(--surface)' }}>
+        <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>
+            Ticket{sources.length > 1 ? 's' : ''} · Round #{round.id}
+          </span>
           <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
             width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 14 }}>✕</button>
         </div>
-        {err ? (
+        {allFailed ? (
           <div style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--tx-2)', fontSize: 13 }}>
             Image not available
           </div>
-        ) : !src ? (
-          <div style={{ padding: '40px 16px', display: 'flex', justifyContent: 'center' }}>
-            <div className="spinner" />
-          </div>
         ) : (
-          <img src={src} alt="Lotto ticket" style={{ width: '100%', display: 'block' }} />
+          <div className="col" style={{ gap: 8, padding: '0 12px 12px' }}>
+            {sources.map((src, i) => (
+              failed[i] ? null : (
+                <a key={i} href={src} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+                  <img src={src} alt={`Ticket ${i + 1}`} loading="lazy"
+                    onError={() => setFailed(f => ({ ...f, [i]: true }))}
+                    style={{ width: '100%', display: 'block', borderRadius: 10 }} />
+                </a>
+              )
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -182,7 +189,7 @@ function RoundCard({ round }) {
         </>
       )}
 
-      {showPhoto && <TicketPhotoModal roundId={round.id} onClose={() => setShowPhoto(false)} />}
+      {showPhoto && <TicketPhotoModal round={round} onClose={() => setShowPhoto(false)} />}
     </div>
   )
 }
