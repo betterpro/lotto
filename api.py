@@ -904,26 +904,18 @@ async def _auth(request: Request):
 
 
 async def _auth_with_query_token(request: Request):
-    """Like _auth, but also accepts a signed session token in the ?t= query
-    param. Needed for file downloads opened in an external browser (e.g. from
-    Telegram's webview), which carries neither the initData header nor the
-    session cookie."""
-    has_normal = (
-        request.headers.get("x-init-data")
-        or request.headers.get("X-Init-Data")
-        or request.cookies.get(SESSION_COOKIE)
-    )
-    if not has_normal:
-        token = request.query_params.get("t")
-        if token:
-            uid = verify_session_token(token)
-            if uid is not None:
-                db = await get_db()
-                user = await _get_user_by_id(db, uid)
-                if user:
-                    return user, db
-                await db.close()
-            raise HTTPException(401, "Download link expired — reopen the agreement")
+    """Like _auth, but a signed session token in the ?t= query param takes
+    precedence. Needed for file downloads opened in an external browser (e.g.
+    from Telegram's webview), and so a stale cookie in the browser the link is
+    opened in doesn't override the identity the link was minted for."""
+    token = request.query_params.get("t")
+    if token:
+        uid = verify_session_token(token)
+        if uid is not None:
+            db = await get_db()
+            user = await _get_user_by_id(db, uid)
+            return user, db
+        # invalid/expired token — fall back to normal cookie/header auth
     return await _auth(request)
 
 
@@ -1618,9 +1610,7 @@ async def api_agreement_master_download(request: Request):
 async def api_agreement_round(request: Request, round_id: int):
     user, db = await _auth(request)
     await _auto_close_round_if_due(db, round_id)
-    cur = await db.execute(
-        "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
-    )
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
     round_ = await cur.fetchone()
     if not round_:
         await db.close()
@@ -1664,9 +1654,9 @@ async def api_agreement_round(request: Request, round_id: int):
 async def api_agreement_round_download(request: Request, round_id: int):
     user, db = await _auth_with_query_token(request)
     await _auto_close_round_if_due(db, round_id)
-    cur = await db.execute(
-        "SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, user.get("group_id"))
-    )
+    # Look up by id and authorize via participation below — not by the user's
+    # active group_id (a participant may belong to several groups).
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
     round_ = await cur.fetchone()
     if not round_:
         await db.close()
