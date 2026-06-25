@@ -1,10 +1,32 @@
 import { useState, useEffect } from 'react'
 import { api, authFetch } from '../api.js'
+import { isTelegram } from '../routes.js'
 
 async function downloadAgreementPdf(kind, roundId) {
   const path = kind === 'master'
     ? '/api/agreement/master/download'
     : `/api/agreement/round/${roundId}/download`
+  const name = kind === 'master'
+    ? 'lotto-chee-group-prize-agreement.pdf'
+    : `lotto-chee-round-${roundId}-agreement.pdf`
+
+  // On web, the session is a same-origin cookie — let the browser hit the
+  // endpoint directly so it downloads natively (works on mobile + desktop).
+  if (!isTelegram()) {
+    const base = import.meta.env.VITE_API_BASE ?? ''
+    const a = document.createElement('a')
+    a.href = base + path
+    a.download = name
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    return
+  }
+
+  // Telegram webview: auth is the initData header, so fetch the bytes and
+  // trigger a download from a blob URL (append to DOM, revoke later — revoking
+  // immediately cancels the download).
   const res = await authFetch(path)
   if (!res.ok) {
     const text = await res.text()
@@ -13,15 +35,15 @@ async function downloadAgreementPdf(kind, roundId) {
     throw new Error(msg)
   }
   const blob = await res.blob()
-  const name = kind === 'master'
-    ? 'lotto-chee-group-prize-agreement.pdf'
-    : `lotto-chee-round-${roundId}-agreement.pdf`
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = name
+  a.rel = 'noopener'
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
 export function AgreementSheet({ kind, roundId, title, onClose }) {
