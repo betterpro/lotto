@@ -12,6 +12,7 @@ import PlatformAdmin from './pages/PlatformAdmin.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 import NeedsInvite from './pages/NeedsInvite.jsx'
 import Login from './pages/Login.jsx'
+import Landing from './pages/Landing.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
 import {
   INVITE_SLUG_KEY,
@@ -145,7 +146,10 @@ export default function App() {
       if (location.pathname === '/login') {
         return <Login onLogin={loadUser} />
       }
-      return <Navigate to="/login" replace />
+      // Invite recipients go straight to sign-in so they can join the group;
+      // everyone else lands on the marketing page first.
+      if (inviteSlug) return <Navigate to="/login" replace />
+      return <Landing />
     }
     return (
       <div className="center-screen">
