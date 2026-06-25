@@ -76,6 +76,8 @@ STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 
 SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")

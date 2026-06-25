@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 
@@ -11,6 +12,42 @@ import config
 SESSION_COOKIE = "lottoo_session"
 SESSION_MAX_AGE = 30 * 86400  # 30 days
 LOGIN_MAX_AGE = 86400  # Telegram Login Widget auth_date window
+
+# Web (non-Telegram) accounts get synthetic negative ids so they can never
+# collide with real Telegram user ids, which are always positive. The id is
+# allocated from the `web_user_id_seq` Postgres sequence (see database.py).
+PASSWORD_ITERATIONS = 200_000
+
+
+def hash_password(password: str) -> str:
+    """Return a self-describing pbkdf2_sha256 hash: algo$iters$salt$hash."""
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_ITERATIONS)
+    return "$".join([
+        "pbkdf2_sha256",
+        str(PASSWORD_ITERATIONS),
+        salt.hex(),
+        dk.hex(),
+    ])
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored:
+        return False
+    try:
+        algo, iters_s, salt_hex, hash_hex = stored.split("$")
+    except (ValueError, AttributeError):
+        return False
+    if algo != "pbkdf2_sha256":
+        return False
+    try:
+        iters = int(iters_s)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(hash_hex)
+    except ValueError:
+        return False
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iters)
+    return hmac.compare_digest(dk, expected)
 
 
 def _signing_key() -> bytes:

@@ -77,12 +77,22 @@ from group_context import (
 )
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
-from database import ensure_schema, get_db
+from database import (
+    create_web_user,
+    ensure_schema,
+    get_db,
+    get_user,
+    get_user_by_auth_email,
+    get_user_by_google_sub,
+    merge_users,
+)
 from web_auth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE,
     create_session_token,
+    hash_password,
     validate_telegram_login,
+    verify_password,
     verify_session_token,
 )
 
@@ -1052,7 +1062,64 @@ def _session_cookie(token: str) -> str:
 
 @app.get("/api/auth/config")
 async def api_auth_config():
-    return {"bot_username": _bot_username}
+    return {
+        "bot_username": _bot_username,
+        "google_client_id": config.GOOGLE_CLIENT_ID or None,
+    }
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD_LEN = 8
+
+
+def _session_response(uid: int, **extra) -> Response:
+    token = create_session_token(uid)
+    return Response(
+        content=json.dumps({"ok": True, "telegram_id": uid, **extra}),
+        media_type="application/json",
+        headers={"Set-Cookie": _session_cookie(token)},
+    )
+
+
+def _current_session_uid(request: Request) -> int | None:
+    """Resolve the caller's existing session id (may be a negative web id)."""
+    cookie = request.cookies.get(SESSION_COOKIE)
+    return verify_session_token(cookie) if cookie else None
+
+
+async def _verify_google_id_token(token: str) -> dict | None:
+    """Validate a Google Identity Services ID token; return its claims or None.
+
+    Google's tokeninfo endpoint verifies the signature and expiry for us; we
+    still check the audience and issuer ourselves.
+    """
+    if not config.GOOGLE_CLIENT_ID or not token:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo", params={"id_token": token}
+            )
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    data = r.json()
+    if data.get("aud") != config.GOOGLE_CLIENT_ID:
+        return None
+    if data.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
+        return None
+    if str(data.get("email_verified")).lower() != "true":
+        return None
+    sub = data.get("sub")
+    if not sub:
+        return None
+    return {
+        "sub": sub,
+        "email": (data.get("email") or "").strip(),
+        "name": (data.get("name") or "").strip(),
+        "picture": data.get("picture"),
+    }
 
 
 @app.post("/api/auth/telegram")
@@ -1061,17 +1128,114 @@ async def api_auth_telegram(request: Request):
     tg = validate_telegram_login(body)
     if tg is None:
         raise HTTPException(401, "Invalid Telegram login")
+    prior_uid = _current_session_uid(request)
     db = await get_db()
     try:
         user = await _sync_user_from_tg(db, tg)
+        # Account linking: if the caller was signed in as a web-only account
+        # (synthetic negative id), merge that account into this Telegram one.
+        if prior_uid is not None and prior_uid < 0 and prior_uid != user["telegram_id"]:
+            web = await get_user(db, prior_uid)
+            if web:
+                await _carry_over_credentials(db, web, user["telegram_id"])
+                await merge_users(db, prior_uid, user["telegram_id"])
+                user = await get_user(db, user["telegram_id"])
     finally:
         await db.close()
-    token = create_session_token(user["telegram_id"])
-    return Response(
-        content=json.dumps({"ok": True, "telegram_id": user["telegram_id"]}),
-        media_type="application/json",
-        headers={"Set-Cookie": _session_cookie(token)},
-    )
+    return _session_response(user["telegram_id"])
+
+
+async def _carry_over_credentials(db, web: dict, into_id: int) -> None:
+    """Preserve a merged web account's email/OAuth logins on the surviving user."""
+    target = await get_user(db, into_id)
+    sets, params = [], []
+    for col in ("auth_email", "password_hash", "google_sub", "apple_sub"):
+        if web.get(col) and not (target and target.get(col)):
+            sets.append(f"{col} = ?")
+            params.append(web[col])
+    if not sets:
+        return
+    params.append(into_id)
+    await db.execute(f"UPDATE users SET {', '.join(sets)} WHERE telegram_id = ?", tuple(params))
+    await db.commit()
+
+
+@app.post("/api/auth/signup")
+async def api_auth_signup(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    name = (body.get("name") or "").strip()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address")
+    if len(password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    db = await get_db()
+    try:
+        if await get_user_by_auth_email(db, email):
+            raise HTTPException(409, "An account with this email already exists")
+        full_name = name or email.split("@")[0]
+        user = await create_web_user(
+            db, full_name, auth_email=email,
+            password_hash=hash_password(password), auth_provider="email",
+        )
+        invite_slug = (body.get("invite_slug") or "").strip().lower()
+        if invite_slug:
+            await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
+    finally:
+        await db.close()
+    return _session_response(user["telegram_id"])
+
+
+@app.post("/api/auth/login")
+async def api_auth_login(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    db = await get_db()
+    try:
+        user = await get_user_by_auth_email(db, email)
+        if not user or not verify_password(password, user.get("password_hash")):
+            raise HTTPException(401, "Incorrect email or password")
+    finally:
+        await db.close()
+    return _session_response(user["telegram_id"])
+
+
+@app.post("/api/auth/google")
+async def api_auth_google(request: Request):
+    body = await request.json()
+    claims = await _verify_google_id_token(body.get("id_token") or body.get("credential") or "")
+    if claims is None:
+        raise HTTPException(401, "Invalid Google sign-in")
+    prior_uid = _current_session_uid(request)
+    db = await get_db()
+    try:
+        user = await get_user_by_google_sub(db, claims["sub"])
+        if user is None and claims["email"]:
+            # Link Google to an existing email/password account with the same email.
+            existing = await get_user_by_auth_email(db, claims["email"])
+            if existing:
+                await db.execute(
+                    "UPDATE users SET google_sub=?, photo_url=COALESCE(photo_url, ?) "
+                    "WHERE telegram_id=?",
+                    (claims["sub"], claims.get("picture"), existing["telegram_id"]),
+                )
+                await db.commit()
+                user = await get_user(db, existing["telegram_id"])
+        if user is None:
+            user = await create_web_user(
+                db, claims["name"] or (claims["email"].split("@")[0] if claims["email"] else "Member"),
+                auth_email=claims["email"] or None,
+                google_sub=claims["sub"], auth_provider="google",
+                photo_url=claims.get("picture"),
+            )
+            invite_slug = (body.get("invite_slug") or "").strip().lower()
+            if invite_slug:
+                await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
+    finally:
+        await db.close()
+    return _session_response(user["telegram_id"])
 
 
 @app.post("/api/auth/logout")

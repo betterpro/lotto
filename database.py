@@ -168,6 +168,16 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_round_closed INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_48h_sent INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_24h_sent INTEGER NOT NULL DEFAULT 0",
+    # Web auth: email + password and OAuth (Google now, Apple later). See migrations/011.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_email TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_sub TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth_email ON users (lower(auth_email)) WHERE auth_email IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users (google_sub) WHERE google_sub IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_sub ON users (apple_sub) WHERE apple_sub IS NOT NULL",
+    "CREATE SEQUENCE IF NOT EXISTS web_user_id_seq START 1",
 ]
 
 _schema_ready = False
@@ -201,6 +211,111 @@ async def create_user(db, telegram_id, username, full_name, invited_by=None, is_
            VALUES (?,?,?,?,?,?,?)""",
         (telegram_id, username, full_name, invited_by, is_trustee, group_id, is_platform_admin))
     await db.commit()
+
+
+# ── Web (non-Telegram) accounts ────────────────────────────────────────────────
+
+async def get_user_by_auth_email(db, email):
+    async with db.execute(
+        "SELECT * FROM users WHERE lower(auth_email) = lower(?)", (email,)
+    ) as c:
+        return await c.fetchone()
+
+
+async def get_user_by_google_sub(db, sub):
+    async with db.execute("SELECT * FROM users WHERE google_sub = ?", (sub,)) as c:
+        return await c.fetchone()
+
+
+async def create_web_user(db, full_name, *, auth_email=None, password_hash=None,
+                          google_sub=None, apple_sub=None, auth_provider="email",
+                          photo_url=None, group_id=None):
+    """Create a web-only account with a synthetic negative id and seed its settings.
+
+    Returns the full user row dict.
+    """
+    async with db.execute(
+        """INSERT INTO users
+             (telegram_id, full_name, auth_email, password_hash, google_sub, apple_sub,
+              auth_provider, photo_url, group_id)
+           VALUES (-nextval('web_user_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?)
+           RETURNING telegram_id""",
+        (full_name, auth_email, password_hash, google_sub, apple_sub,
+         auth_provider, photo_url, group_id),
+    ) as c:
+        uid = c.lastrowid
+    await db.execute(
+        "INSERT INTO user_settings (user_id) VALUES (?) ON CONFLICT (user_id) DO NOTHING",
+        (uid,),
+    )
+    await db.commit()
+    return await get_user(db, uid)
+
+
+# Tables whose user-referencing column must follow an account when it is merged
+# into another account. (table, column). user_settings is keyed 1:1 and handled
+# specially; participations has a UNIQUE(round_id, user_id) we must respect.
+_USER_FK_REPOINTS = [
+    ("groups", "trustee_user_id"),
+    ("users", "invited_by"),
+    ("trustee_applications", "applicant_user_id"),
+    ("trustee_applications", "reviewed_by"),
+    ("rounds", "winner_id"),
+    ("transactions", "user_id"),
+    ("deposit_requests", "user_id"),
+    ("stripe_subscriptions", "user_id"),
+]
+
+
+async def merge_users(db, from_id: int, into_id: int) -> None:
+    """Move everything owned by `from_id` onto `into_id`, then delete `from_id`.
+
+    Runs in a single Postgres transaction so a failure leaves no half-merged
+    state (db.commit() is a no-op here; we drive the real transaction directly).
+    `into_id` is the surviving account.
+    """
+    if from_id == into_id:
+        return
+    conn = db._conn
+    async with conn.transaction():
+        # Fold credit balances onto the survivor.
+        await conn.execute(
+            "UPDATE users SET credit = credit + "
+            "(SELECT credit FROM users WHERE telegram_id = $1) WHERE telegram_id = $2",
+            from_id, into_id,
+        )
+        # group_members: keep the survivor's role on overlap, otherwise re-point.
+        await conn.execute(
+            "DELETE FROM group_members gm WHERE gm.user_id = $1 AND EXISTS "
+            "(SELECT 1 FROM group_members o WHERE o.group_id = gm.group_id AND o.user_id = $2)",
+            from_id, into_id,
+        )
+        await conn.execute(
+            "UPDATE group_members SET user_id = $2 WHERE user_id = $1", from_id, into_id,
+        )
+        # participations: UNIQUE(round_id, user_id) — drop the loser's row where
+        # the survivor already participates in that round, otherwise re-point.
+        await conn.execute(
+            "DELETE FROM participations p WHERE p.user_id = $1 AND EXISTS "
+            "(SELECT 1 FROM participations o WHERE o.round_id = p.round_id AND o.user_id = $2)",
+            from_id, into_id,
+        )
+        await conn.execute(
+            "UPDATE participations SET user_id = $2 WHERE user_id = $1", from_id, into_id,
+        )
+        # Simple re-points for the remaining FK columns.
+        for table, col in _USER_FK_REPOINTS:
+            await conn.execute(
+                f"UPDATE {table} SET {col} = $2 WHERE {col} = $1", from_id, into_id,
+            )
+        # Carry over a group assignment / profile fields only if the survivor lacks one.
+        await conn.execute(
+            "UPDATE users SET group_id = COALESCE(group_id, "
+            "(SELECT group_id FROM users WHERE telegram_id = $1)) WHERE telegram_id = $2",
+            from_id, into_id,
+        )
+        await conn.execute("DELETE FROM user_settings WHERE user_id = $1", from_id)
+        await conn.execute("DELETE FROM users WHERE telegram_id = $1", from_id)
 
 
 # ── Groups ────────────────────────────────────────────────────────────────────
