@@ -129,6 +129,7 @@ export const api = {
   agreement: {
     master: () => req('GET', '/api/agreement/master'),
     round:  (roundId) => req('GET', `/api/agreement/round/${roundId}`),
+    downloadToken: () => req('GET', '/api/agreement/download-token'),
   },
   beneficiary: {
     save: (data) => req('POST', '/api/beneficiary', data),

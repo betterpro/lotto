@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-import { api, authFetch } from '../api.js'
-import { isTelegram } from '../routes.js'
+import { api } from '../api.js'
 
 async function downloadAgreementPdf(kind, roundId) {
   const path = kind === 'master'
@@ -10,40 +9,31 @@ async function downloadAgreementPdf(kind, roundId) {
     ? 'lotto-chee-group-prize-agreement.pdf'
     : `lotto-chee-round-${roundId}-agreement.pdf`
 
-  // On web, the session is a same-origin cookie — let the browser hit the
-  // endpoint directly so it downloads natively (works on mobile + desktop).
-  if (!isTelegram()) {
-    const base = import.meta.env.VITE_API_BASE ?? ''
-    const a = document.createElement('a')
-    a.href = base + path
-    a.download = name
-    a.rel = 'noopener'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+  // Build a self-authenticating URL with a one-time token so it works even when
+  // opened in an external browser (Telegram) that has no session cookie.
+  const base = import.meta.env.VITE_API_BASE ?? ''
+  let url = base + path
+  try {
+    const { token } = await api.agreement.downloadToken()
+    if (token) url += `?t=${encodeURIComponent(token)}`
+  } catch { /* fall back to cookie auth on web */ }
+
+  // Inside Telegram, hand the link to the system browser, which can save files
+  // (the in-app webview cannot download).
+  const tg = window.Telegram?.WebApp
+  if (tg?.initData && typeof tg.openLink === 'function') {
+    tg.openLink(url)
     return
   }
 
-  // Telegram webview: auth is the initData header, so fetch the bytes and
-  // trigger a download from a blob URL (append to DOM, revoke later — revoking
-  // immediately cancels the download).
-  const res = await authFetch(path)
-  if (!res.ok) {
-    const text = await res.text()
-    let msg = text
-    try { msg = JSON.parse(text).detail ?? text } catch {}
-    throw new Error(msg)
-  }
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = name
   a.rel = 'noopener'
+  a.target = '_blank'
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 60000)
 }
 
 export function AgreementSheet({ kind, roundId, title, onClose }) {
