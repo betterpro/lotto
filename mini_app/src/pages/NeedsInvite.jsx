@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { LOGO_SRC } from '../brand.js'
+import Logo from '../components/Logo.jsx'
 import { api } from '../api.js'
 
 export default function NeedsInvite({ error, onJoined }) {
@@ -48,7 +48,7 @@ export default function NeedsInvite({ error, onJoined }) {
 
   return (
     <div className="center-screen" style={{ gap: 16 }}>
-      <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 56, objectFit: 'contain' }} />
+      <Logo size={46} wordmark fontSize={30} />
       <h2 style={{ fontSize: 21, fontWeight: 700, margin: 0 }}>
         {tab === 'join' ? 'Join your group' : 'Start your own group'}
       </h2>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { LOGO_SRC } from '../brand.js'
+import Logo from '../components/Logo.jsx'
 import { api } from '../api.js'
 import { INVITE_SLUG_KEY } from '../routes.js'
 
@@ -142,7 +142,7 @@ export default function Login({ onLogin }) {
       padding: 'calc(28px + var(--sat)) calc(24px + var(--sar)) calc(28px + var(--sab)) calc(24px + var(--sal))',
       gap: 20, textAlign: 'center',
     }}>
-      <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 96, height: 106, objectFit: 'contain' }} />
+      <Logo size={60} wordmark ink fontSize={38} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <span style={{ fontSize: 23, fontWeight: 800, color: '#111' }}>
           {mode === 'signup' ? 'Create your account' : 'Welcome back'}

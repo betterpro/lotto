@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { LOGO_SRC } from '../brand.js'
+import Logo from '../components/Logo.jsx'
 
 const STEPS = [
   { n: '1', title: 'Join a group', body: 'Get a join code from a friend who runs a pool, or start your own.' },
@@ -26,7 +26,7 @@ export default function Landing() {
       <div style={{ maxWidth: 440, margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
 
         {/* Hero */}
-        <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 92, height: 102, objectFit: 'contain', marginBottom: 16 }} />
+        <Logo size={68} wordmark ink fontSize={42} style={{ marginBottom: 20 }} />
         <h1 style={{ fontSize: 30, fontWeight: 800, margin: 0, textAlign: 'center', letterSpacing: '-.5px' }}>
           Play together,<br />dream bigger
         </h1>
