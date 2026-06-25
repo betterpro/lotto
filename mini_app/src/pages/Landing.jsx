@@ -293,7 +293,11 @@ export default function Landing() {
               </div>
               <div className="pillar">
                 <div className="pic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 3v18" /><path d="M5 8h9a3 3 0 0 1 0 6H8a3 3 0 0 0 0 6h11" /></svg></div>
-                <div><h3>Splits computed by share</h3><p>Prizes divide by exactly the shares you hold. Every round also has a signed draw agreement you can download as a PDF.</p></div>
+                <div><h3>Splits computed by share</h3><p>Prizes divide by exactly the shares you hold, to the cent — the same formula for the $3 player and the $200 player.</p></div>
+              </div>
+              <div className="pillar">
+                <div className="pic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 3v5h5" /><path d="M7 3h7l5 5v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M9 13h6M9 17h4" /></svg></div>
+                <div><h3>A signed agreement, every round</h3><p>Every round comes with its own draw agreement — your shares, the pool and how the prize splits, in writing. Any participant can download it as a PDF.</p></div>
               </div>
               <div className="pillar">
                 <div className="pic"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg></div>
@@ -342,6 +346,10 @@ export default function Landing() {
               <details className="faq">
                 <summary>How do I know the tickets are real?<span className="faq-plus" /></summary>
                 <div className="ans">Every official BCLC ticket is photographed and attached to the round before the draw, so the numbers are public and locked in advance. You can check them against the published draw yourself.</div>
+              </details>
+              <details className="faq">
+                <summary>Is there an agreement for each round?<span className="faq-plus" /></summary>
+                <div className="ans">Yes. Every round has its own draw agreement that sets out your shares, the pool and exactly how any prize is split. All participants can download it as a PDF from the round at any time.</div>
               </details>
               <details className="faq">
                 <summary>What does a share cost?<span className="faq-plus" /></summary>

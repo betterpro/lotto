@@ -743,8 +743,8 @@
 /* ───────── game logo slots ───────── */
 .lcl .games-logos{ display:flex; flex-wrap:wrap; gap:12px }
 
-.lcl .game-logo{ width:128px; height:50px; border:1px solid var(--line-2); border-radius:10px;
-  background:rgba(255,255,255,.03); }
+.lcl .game-logo{ width:118px; height:50px; border:1px solid var(--line-2); border-radius:10px;
+  background:rgba(255,255,255,.04); object-fit:contain; padding:8px 14px; }
 
 
 /* ───────── groups section ───────── */
