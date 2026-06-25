@@ -1,13 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { LOGO_SRC } from '../brand.js'
 import { api } from '../api.js'
 
 export default function NeedsInvite({ error, onJoined }) {
-  const [tab, setTab] = useState('join') // 'join' | 'create'
+  const [tab, setTab] = useState('join') // 'join' | 'request'
   const [code, setCode] = useState('')
   const [groupName, setGroupName] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [application, setApplication] = useState(null)
+
+  useEffect(() => {
+    api.trustee.application().then(r => setApplication(r.application)).catch(() => {})
+  }, [])
 
   async function joinByCode(e) {
     e.preventDefault()
@@ -23,30 +28,34 @@ export default function NeedsInvite({ error, onJoined }) {
     }
   }
 
-  async function createGroup(e) {
+  async function requestGroup(e) {
     e.preventDefault()
     if (!groupName.trim()) return
     setErr(''); setBusy(true)
     try {
-      await api.groups.create(groupName.trim())
-      onJoined?.()
+      await api.trustee.apply(groupName.trim())
+      const r = await api.trustee.application()
+      setApplication(r.application)
+      setGroupName('')
     } catch (e2) {
-      setErr(e2.message || 'Could not create group')
+      setErr(e2.message || 'Could not submit request')
     } finally {
       setBusy(false)
     }
   }
 
+  const pending = application?.status === 'pending'
+
   return (
     <div className="center-screen" style={{ gap: 16 }}>
       <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 56, objectFit: 'contain' }} />
       <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
-        {tab === 'join' ? 'Join your group' : 'Create your group'}
+        {tab === 'join' ? 'Join your group' : 'Start your own group'}
       </h2>
 
       {/* Tab switch */}
       <div style={{ display: 'flex', gap: 6, background: 'var(--bg-2, #f0f0f3)', padding: 4, borderRadius: 12 }}>
-        {[['join', 'Join with code'], ['create', 'Create a group']].map(([key, label]) => (
+        {[['join', 'Join with code'], ['request', 'Start a group']].map(([key, label]) => (
           <button
             key={key}
             type="button"
@@ -84,12 +93,27 @@ export default function NeedsInvite({ error, onJoined }) {
             {busy ? 'Joining…' : 'Join group'}
           </button>
         </form>
-      ) : (
-        <form onSubmit={createGroup} style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
-            Start your own group and become its trustee — open rounds, approve deposits, and invite
-            friends with a join code.
+      ) : pending ? (
+        <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
+            Your request for <strong>{application.proposed_group_name}</strong> is pending platform approval.
           </p>
+          <p style={{ fontSize: 12, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
+            We’ll set up your group once it’s approved. In the meantime you can join an existing
+            group with a code.
+          </p>
+        </div>
+      ) : (
+        <form onSubmit={requestGroup} style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <p style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
+            Want to run your own pool? Request a group — once a platform admin approves it, you’ll
+            become its trustee with your own join code.
+          </p>
+          {application?.status === 'rejected' && (
+            <span style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.5 }}>
+              Previous request was rejected{application.review_notes ? `: ${application.review_notes}` : '.'}
+            </span>
+          )}
           <input
             type="text" placeholder="Your group name" value={groupName} maxLength={60}
             onChange={e => setGroupName(e.target.value)}
@@ -100,7 +124,7 @@ export default function NeedsInvite({ error, onJoined }) {
           />
           {err && <span style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>{err}</span>}
           <button type="submit" className="btn btn-primary btn-block" disabled={busy || !groupName.trim()}>
-            {busy ? 'Creating…' : 'Create group'}
+            {busy ? 'Submitting…' : 'Request group'}
           </button>
         </form>
       )}
