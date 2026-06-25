@@ -39,7 +39,7 @@ function CheckRow({ checked, onChange, children }) {
 function Field({ label, required, children, flex }) {
   return (
     <div className="col gap-4" style={{ flex: flex ? 1 : 'initial', minWidth: 0, marginBottom: 10 }}>
-      <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.3px', fontWeight: 600 }}>
+      <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.3px', fontWeight: 600 }}>
         {label}{required && <span style={{ color: 'var(--danger)' }}> *</span>}
       </span>
       {children}
@@ -89,7 +89,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
       <div className="ob-top">
         <div className="row gap-10" style={{ alignItems: 'center' }}>
           <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
-          <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 3</span>
+          <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 3</span>
         </div>
         <div className="ob-steps">
           <span className={'dot' + (step >= 1 ? ' on' : '')} />
@@ -113,11 +113,11 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
             </div>
             <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
               <TelegramAvatar user={preview?.trustee || {}} size={64} />
-              <span style={{ fontSize: 18, fontWeight: 800 }}>{trusteeName}</span>
-              <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Group trustee · {groupName}</span>
+              <span style={{ fontSize: 19, fontWeight: 800 }}>{trusteeName}</span>
+              <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Group trustee · {groupName}</span>
             </div>
             {confirmError && (
-              <p style={{ color: 'var(--danger)', fontSize: 13, textAlign: 'center' }}>{confirmError}</p>
+              <p style={{ color: 'var(--danger)', fontSize: 14, textAlign: 'center' }}>{confirmError}</p>
             )}
           </div>
           <div className="ob-foot">
@@ -199,7 +199,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
             </Section>
 
             <Section title="Declaration & age">
-              <p className="ob-p" style={{ fontSize: 12 }}>
+              <p className="ob-p" style={{ fontSize: 13 }}>
                 BCLC requires every beneficiary to be at least 19 and to declare any
                 relationship to a lottery retailer or BCLC employee.
               </p>
@@ -260,14 +260,14 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
 
             <Section title="Ticket information">
               <div className="ob-readout">
-                <div><span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Ticket name</span>
-                  <span className="mono" style={{ fontSize: 12 }}>Lotto Max</span></div>
-                <div><span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Draw date(s)</span>
-                  <span className="mono" style={{ fontSize: 12 }}>Each draw round you join</span></div>
-                <div><span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Ticket control number</span>
-                  <span className="mono" style={{ fontSize: 12 }}>Auto-assigned per round</span></div>
+                <div><span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Ticket name</span>
+                  <span className="mono" style={{ fontSize: 13 }}>Lotto Max</span></div>
+                <div><span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Draw date(s)</span>
+                  <span className="mono" style={{ fontSize: 13 }}>Each draw round you join</span></div>
+                <div><span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Ticket control number</span>
+                  <span className="mono" style={{ fontSize: 13 }}>Auto-assigned per round</span></div>
               </div>
-              <p className="ob-p" style={{ fontSize: 12 }}>
+              <p className="ob-p" style={{ fontSize: 13 }}>
                 <strong>{trusteeName}</strong> is your <strong>Group Trustee</strong> — they hold each
                 pooled ticket on behalf of all beneficiaries who joined that round.
               </p>
@@ -334,7 +334,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
                 and process lottery prizes (including verifying prize claims and fraud investigations); if you
                 are a winner, publication of details for game integrity purposes; and to comply with applicable laws.
               </p>
-              <p className="ob-p" style={{ fontSize: 12, color: 'var(--tx-3)' }}>
+              <p className="ob-p" style={{ fontSize: 13, color: 'var(--tx-3)' }}>
                 Questions? Contact BCLC Customer Support at 74 West Seymour Street, Kamloops, BC V2C 1E2 · 1-866-815-0222 · bclc.com.
               </p>
             </Section>
@@ -346,7 +346,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
                     <span className="ob-eyebrow">Beneficiary signature</span>
                     <div className="ob-sig-box">
                       <span className="mono" style={{ color: 'var(--tg)' }}>{info.fullName || '—'}</span>
-                      <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>
+                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>
                         Digitally signed{isTelegram() ? ' via Telegram' : ''} · {new Date().toLocaleDateString('en-CA')}
                       </span>
                     </div>

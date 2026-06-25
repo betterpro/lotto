@@ -26,14 +26,14 @@ function TicketPhotoModal({ round, onClose }) {
           borderRadius: 16, background: 'var(--surface)' }}>
         <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between',
           alignItems: 'center', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
-          <span style={{ fontWeight: 700, fontSize: 15 }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>
             Ticket{sources.length > 1 ? 's' : ''} · Round #{round.group_seq ?? round.id}
           </span>
           <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
-            width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 14 }}>✕</button>
+            width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 15 }}>✕</button>
         </div>
         {allFailed ? (
-          <div style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--tx-2)', fontSize: 13 }}>
+          <div style={{ padding: '40px 16px', textAlign: 'center', color: 'var(--tx-2)', fontSize: 14 }}>
             Image not available
           </div>
         ) : (
@@ -112,8 +112,8 @@ function RoundCard({ round }) {
               : <TicketIcon width={20} height={20} />}
           </div>
           <div className="col gap-4">
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{round.group_seq ?? round.id}</span>
-            <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+            <span style={{ fontSize: 16, fontWeight: 600 }}>Round #{round.group_seq ?? round.id}</span>
+            <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
               {fmtDate(round.draw_date)} · {jackpotDisplay(round.jackpot, { suffix: ' jackpot' })}
             </span>
           </div>
@@ -126,16 +126,16 @@ function RoundCard({ round }) {
       <div className="row between">
         <div className="row gap-12">
           <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR STAKE</span>
-            <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+            <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR STAKE</span>
+            <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
               {round.my_stake
                 ? `${fmtDollarInt(round.my_stake)} / ${fmtDollarInt(round.pool)}`
                 : '—'}
             </span>
           </div>
           <div className="col gap-4">
-            <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>
-            <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+            <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>
+            <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
               {round.my_shares != null
                 ? `${round.my_shares}/${playerCount(round)}`
                 : '—'}
@@ -147,13 +147,13 @@ function RoundCard({ round }) {
           <div className="col" style={{ alignItems: 'flex-end', gap: 2 }}>
             {isWon ? (
               <>
-                <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--money)' }}>
+                <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--money)' }}>
                   +{fmtDollarInt(round.my_prize)}
                 </span>
-                <span style={{ fontSize: 10, color: 'var(--money)' }}>Won</span>
+                <span style={{ fontSize: 12, color: 'var(--money)' }}>Won</span>
               </>
             ) : (
-              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>No prize</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize</span>
             )}
           </div>
         )}
@@ -184,7 +184,7 @@ function RoundCard({ round }) {
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: 0,
               display: 'flex', alignItems: 'center', gap: 6,
-              color: 'var(--tg)', fontSize: 12, fontWeight: 600,
+              color: 'var(--tg)', fontSize: 13, fontWeight: 600,
             }}>
             📎 View ticket photo
           </button>
@@ -238,21 +238,21 @@ export default function Rounds() {
         <div className="card" style={{ background: 'linear-gradient(135deg, #1f2c3a, #1a2531)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
             <div className="col gap-4">
-              <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Played</span>
-              <span className="mono" style={{ fontSize: 20, fontWeight: 700 }}>{myRounds.length}</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>rounds joined</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Played</span>
+              <span className="mono" style={{ fontSize: 21, fontWeight: 700 }}>{myRounds.length}</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>rounds joined</span>
             </div>
             <div className="col gap-4" style={{ borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 }}>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Won</span>
-              <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: 'var(--money)' }}>{fmtCAD(totalWon)}</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>in prizes</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Won</span>
+              <span className="mono" style={{ fontSize: 21, fontWeight: 700, color: 'var(--money)' }}>{fmtCAD(totalWon)}</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>in prizes</span>
             </div>
             <div className="col gap-4" style={{ borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 }}>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Net</span>
-              <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: net >= 0 ? 'var(--money)' : 'var(--danger)' }}>
+              <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>Net</span>
+              <span className="mono" style={{ fontSize: 21, fontWeight: 700, color: net >= 0 ? 'var(--money)' : 'var(--danger)' }}>
                 {net >= 0 ? '+' : ''}{fmtCAD(net)}
               </span>
-              <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{fmtCAD(totalStaked)} staked</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{fmtCAD(totalStaked)} staked</span>
             </div>
           </div>
         </div>

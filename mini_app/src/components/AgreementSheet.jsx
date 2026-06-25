@@ -72,7 +72,7 @@ export function AgreementSheet({ kind, roundId, title, onClose }) {
         </div>
         <div className="body" style={{ paddingBottom: 8 }}>
           {err ? (
-            <p style={{ fontSize: 13, color: 'var(--danger)' }}>{err}</p>
+            <p style={{ fontSize: 14, color: 'var(--danger)' }}>{err}</p>
           ) : !doc ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}>
               <div className="spinner" />
@@ -81,7 +81,7 @@ export function AgreementSheet({ kind, roundId, title, onClose }) {
             <>
               <pre style={{
                 whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                fontSize: 12, lineHeight: 1.55, color: 'var(--tx-2)',
+                fontSize: 13, lineHeight: 1.55, color: 'var(--tx-2)',
                 background: 'var(--bg-3)', borderRadius: 12, padding: 14,
                 maxHeight: '52dvh', overflow: 'auto', margin: 0,
               }}>{doc.body}</pre>
@@ -109,12 +109,12 @@ export function AgreementLink({ kind, roundId, label, disabled, disabledHint }) 
           background: 'none', border: 'none', cursor: disabled ? 'default' : 'pointer',
           padding: 0, display: 'flex', alignItems: 'center', gap: 6,
           color: disabled ? 'var(--tx-3)' : 'var(--tg)',
-          fontSize: 12, fontWeight: 600, opacity: disabled ? 0.65 : 1,
+          fontSize: 13, fontWeight: 600, opacity: disabled ? 0.65 : 1,
         }}>
         📄 {label}
       </button>
       {disabled && disabledHint && (
-        <span style={{ fontSize: 11, color: 'var(--tx-3)', display: 'block', marginTop: 4 }}>
+        <span style={{ fontSize: 12, color: 'var(--tx-3)', display: 'block', marginTop: 4 }}>
           {disabledHint}
         </span>
       )}

@@ -185,21 +185,21 @@ export default function TopUp({ user, onUserUpdate }) {
       <ScreenHead title="E-Transfer Details" onBack={goHome} />
       <div className="screen-body">
         <div style={{ textAlign: 'center', fontSize: 36, marginBottom: 8 }}>🏦</div>
-        <p style={{ textAlign: 'center', fontSize: 13, color: 'var(--tx-2)', marginBottom: 18 }}>
+        <p style={{ textAlign: 'center', fontSize: 14, color: 'var(--tx-2)', marginBottom: 18 }}>
           Send <strong style={{ color: '#fff' }}>${amount.toFixed(2)} CAD</strong> via Interac e-Transfer
         </p>
         <div className="card" style={{ marginBottom: 16 }}>
           <div className="row between" style={{ marginBottom: 4 }}>
-            <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Send to</span>
+            <span style={{ fontSize: 12, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Send to</span>
             <button onClick={() => copy(etxInfo.admin_email, 'Email copied')}
-              style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 12, cursor: 'pointer', fontWeight: 600 }}>
+              style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 13, cursor: 'pointer', fontWeight: 600 }}>
               Copy
             </button>
           </div>
-          <span className="mono" style={{ fontSize: 14, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
+          <span className="mono" style={{ fontSize: 15, wordBreak: 'break-all' }}>{etxInfo.admin_email || '(not configured)'}</span>
         </div>
         <div style={{ background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.25)',
-          borderRadius: 10, padding: '12px 14px', fontSize: 12,
+          borderRadius: 10, padding: '12px 14px', fontSize: 13,
           color: 'var(--money)', lineHeight: 1.6 }}>
           ✓ Your account will be credited automatically once we detect your transfer. Usually within minutes.
         </div>
@@ -224,7 +224,7 @@ export default function TopUp({ user, onUserUpdate }) {
             onError={msg => showToast(msg, 'error')}
           />
         </Elements>
-        <div style={{ marginTop: 10, textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+        <div style={{ marginTop: 10, textAlign: 'center', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
           🔒 Secured by Stripe · ${amount.toFixed(2)} credit
         </div>
       </div>
@@ -244,14 +244,14 @@ export default function TopUp({ user, onUserUpdate }) {
                   flex: 1, padding: '10px 0', borderRadius: 7, border: 0, cursor: 'pointer',
                   background: method === m.id ? 'var(--surface-2)' : 'transparent',
                   color: method === m.id ? '#fff' : 'var(--tx-2)',
-                  fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
+                  fontWeight: 600, fontSize: 14, fontFamily: 'inherit',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                 }}>
-                  <span style={{ fontSize: 16 }}>{m.icon}</span>{m.label}
+                  <span style={{ fontSize: 17 }}>{m.icon}</span>{m.label}
                 </button>
               ))}
             </div>
-            <p style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
+            <p style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
               {method === 'card'
                 ? `Charged $${chargeAmt.toFixed(2)} · instant`
                 : `Min $${etxMin} · 0–24 h approval`}
@@ -266,16 +266,16 @@ export default function TopUp({ user, onUserUpdate }) {
               flex: 1, padding: '9px 0', borderRadius: 7, border: 0, cursor: 'pointer',
               background: tab === k ? 'var(--surface-2)' : 'transparent',
               color: tab === k ? '#fff' : 'var(--tx-2)',
-              fontWeight: 600, fontSize: 13, fontFamily: 'inherit',
+              fontWeight: 600, fontSize: 14, fontFamily: 'inherit',
             }}>{l}</button>
           ))}
         </div>
         )}
 
         {/* Amount presets */}
-        <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Amount</div>
+        <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>Amount</div>
         {presets.length === 0 ? (
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16 }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 16 }}>
             No payment amounts available. Ask your trustee to configure payments.
           </p>
         ) : (
@@ -286,7 +286,7 @@ export default function TopUp({ user, onUserUpdate }) {
                 border: `.5px solid ${!usingCustomAmt && amount === p ? 'var(--tg)' : 'var(--hairline-2)'}`,
                 background: !usingCustomAmt && amount === p ? 'rgba(46,166,255,.14)' : 'var(--bg-3)',
                 color: !usingCustomAmt && amount === p ? 'var(--tg)' : '#fff',
-                fontWeight: 700, fontSize: 15, fontFamily: 'var(--mono)',
+                fontWeight: 700, fontSize: 16, fontFamily: 'var(--mono)',
               }}>${p}</button>
             ))}
           </div>
@@ -294,13 +294,13 @@ export default function TopUp({ user, onUserUpdate }) {
 
         {method === 'etransfer' && (
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
+            <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
               Custom amount
             </div>
             <div style={{ position: 'relative' }}>
               <span className="mono" style={{
                 position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)',
-                color: usingCustomAmt ? 'var(--tg)' : 'var(--tx-2)', fontSize: 15, fontWeight: 700,
+                color: usingCustomAmt ? 'var(--tg)' : 'var(--tx-2)', fontSize: 16, fontWeight: 700,
               }}>$</span>
               <input
                 type="number"
@@ -323,14 +323,14 @@ export default function TopUp({ user, onUserUpdate }) {
         )}
 
         {method === 'etransfer' && etxAmountInvalid && (
-          <p style={{ fontSize: 11, color: 'var(--danger)', marginBottom: 8, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 12, color: 'var(--danger)', marginBottom: 8, lineHeight: 1.5 }}>
             Minimum e-transfer: ${etxMin}
           </p>
         )}
 
         {method === 'etransfer' && !hasSenderEmail && (
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 11, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
+            <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.3px', fontWeight: 600 }}>
               Your e-transfer email
             </div>
             <input
@@ -343,7 +343,7 @@ export default function TopUp({ user, onUserUpdate }) {
               onChange={e => setSenderEmail(e.target.value)}
               style={{ borderColor: senderEmailValid ? 'var(--money)' : undefined }}
             />
-            <p style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 6, lineHeight: 1.5 }}>
+            <p style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 6, lineHeight: 1.5 }}>
               The address you'll send the Interac e-Transfer from — we use it to credit your deposit automatically.
             </p>
           </div>

@@ -144,10 +144,10 @@ export default function Login({ onLogin }) {
     }}>
       <img src={LOGO_SRC} alt="Lotto Chee" style={{ width: 96, height: 106, objectFit: 'contain' }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <span style={{ fontSize: 22, fontWeight: 800, color: '#111' }}>
+        <span style={{ fontSize: 23, fontWeight: 800, color: '#111' }}>
           {mode === 'signup' ? 'Create your account' : 'Welcome back'}
         </span>
-        <span style={{ fontSize: 14, color: '#666', lineHeight: 1.5, maxWidth: 320 }}>
+        <span style={{ fontSize: 15, color: '#666', lineHeight: 1.5, maxWidth: 320 }}>
           Pool tickets with friends and share the winnings.
         </span>
       </div>
@@ -168,8 +168,8 @@ export default function Login({ onLogin }) {
           autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
           onChange={e => setPassword(e.target.value)} style={inputStyle}
         />
-        {error && <span style={{ fontSize: 13, color: 'var(--danger, #d33)' }}>{error}</span>}
-        <button type="submit" className="primary" disabled={busy} style={{ padding: '12px 16px', fontSize: 15, fontWeight: 700, borderRadius: 12 }}>
+        {error && <span style={{ fontSize: 14, color: 'var(--danger, #d33)' }}>{error}</span>}
+        <button type="submit" className="primary" disabled={busy} style={{ padding: '12px 16px', fontSize: 16, fontWeight: 700, borderRadius: 12 }}>
           {busy ? 'Please wait…' : (mode === 'signup' ? 'Sign up' : 'Log in')}
         </button>
       </form>
@@ -177,12 +177,12 @@ export default function Login({ onLogin }) {
       <button
         type="button"
         onClick={() => { setError(''); setMode(mode === 'signup' ? 'login' : 'signup') }}
-        style={{ background: 'none', border: 'none', color: '#0a84ff', fontSize: 14, cursor: 'pointer' }}
+        style={{ background: 'none', border: 'none', color: '#0a84ff', fontSize: 15, cursor: 'pointer' }}
       >
         {mode === 'signup' ? 'Already have an account? Log in' : "New here? Create an account"}
       </button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', maxWidth: 320, color: '#bbb', fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', maxWidth: 320, color: '#bbb', fontSize: 13 }}>
         <div style={{ flex: 1, height: 1, background: '#eee' }} /> or <div style={{ flex: 1, height: 1, background: '#eee' }} />
       </div>
 
@@ -191,16 +191,16 @@ export default function Login({ onLogin }) {
 
       <a
         href={`https://t.me/${tgBot}?startapp=open`}
-        style={{ fontSize: 13, color: '#888', textDecoration: 'none' }}
+        style={{ fontSize: 14, color: '#888', textDecoration: 'none' }}
       >
         Or open in Telegram →
       </a>
-      <span style={{ fontSize: 12, color: '#bbb' }}>lottochee.com · with love and hope</span>
+      <span style={{ fontSize: 13, color: '#bbb' }}>lottochee.com · with love and hope</span>
     </div>
   )
 }
 
 const inputStyle = {
-  padding: '12px 14px', fontSize: 15, borderRadius: 12, border: '1px solid #ddd',
+  padding: '12px 14px', fontSize: 16, borderRadius: 12, border: '1px solid #ddd',
   outline: 'none', width: '100%', boxSizing: 'border-box', background: '#fafafa',
 }

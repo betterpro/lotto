@@ -34,8 +34,8 @@ function RoundDetail({ round, onClose }) {
         <div className="body">
           <div className="row between" style={{ marginBottom: 16 }}>
             <div className="col gap-4">
-              <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pool</span>
-              <span className="mono" style={{ fontSize: 24, fontWeight: 700, color: 'var(--gold)' }}>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pool</span>
+              <span className="mono" style={{ fontSize: 25, fontWeight: 700, color: 'var(--gold)' }}>
                 {fmtCAD(round.pool)}
               </span>
             </div>
@@ -45,8 +45,8 @@ function RoundDetail({ round, onClose }) {
           {ds === 'WON' && round.winner_name && (
             <div className="card" style={{ marginBottom: 12, textAlign: 'center', borderColor: 'rgba(245,199,59,.3)' }}>
               <div style={{ fontSize: 32, marginBottom: 6 }}>🏆</div>
-              <div style={{ fontWeight: 700, fontSize: 18 }}>{round.winner_name}</div>
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginTop: 4 }}>Winner · took the pool</div>
+              <div style={{ fontWeight: 700, fontSize: 19 }}>{round.winner_name}</div>
+              <div style={{ fontSize: 13, color: 'var(--tx-2)', marginTop: 4 }}>Winner · took the pool</div>
             </div>
           )}
 
@@ -73,8 +73,8 @@ function RoundDetail({ round, onClose }) {
                             ds === 'WON' ? '#ffe566' : 'var(--tx-3)'] : null,
                 ].filter(Boolean).map(([k, v, c]) => (
                   <div key={k} className="sum-row">
-                    <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
-                    <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: c || '#fff' }}>{v}</span>
+                    <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>{k}</span>
+                    <span className="mono" style={{ fontSize: 15, fontWeight: 600, color: c || '#fff' }}>{v}</span>
                   </div>
                 ))}
               </div>
@@ -90,7 +90,7 @@ function RoundDetail({ round, onClose }) {
               <>
                 <div className="label" style={{ marginTop: 12 }}>Lottery ticket</div>
                 <div className="card" style={{ marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 10, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 10, lineHeight: 1.5 }}>
                     Photo of the official ticket{imgs.length > 1 ? 's' : ''} bought for this round —
                     tap to view full size.
                   </div>
@@ -113,12 +113,12 @@ function RoundDetail({ round, onClose }) {
               <div key={p.user_id} style={{ marginBottom: 12 }}>
                 <div className="row between">
                   <span style={{ fontWeight: 500 }}>{p.won ? '🏆 ' : ''}{p.full_name}</span>
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>{p.pct}%</span>
+                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{p.pct}%</span>
                 </div>
                 <div className="bar" style={{ marginTop: 4 }}>
                   <span style={{ width: `${p.pct}%` }} />
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 2 }}>{fmtCAD(p.amount)}</div>
+                <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 2 }}>{fmtCAD(p.amount)}</div>
               </div>
             ))}
           </div>
@@ -169,9 +169,9 @@ export default function Round() {
                myShares > 0 ? `${myShares} share${myShares !== 1 ? 's' : ''}` : 'not joined'],
             ].map(([k, v, sub], i) => (
               <div key={k} className="col gap-4" style={i ? { borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 } : {}}>
-                <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>{k}</span>
-                <span className="mono" style={{ fontSize: 18, fontWeight: 700, color: i === 2 && my_stake ? 'var(--money)' : undefined }}>{v}</span>
-                <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{sub}</span>
+                <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.4px', textTransform: 'uppercase' }}>{k}</span>
+                <span className="mono" style={{ fontSize: 19, fontWeight: 700, color: i === 2 && my_stake ? 'var(--money)' : undefined }}>{v}</span>
+                <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{sub}</span>
               </div>
             ))}
           </div>
@@ -192,8 +192,8 @@ export default function Round() {
                 {isWon ? <TrophyIcon width={20} height={20} /> : <TicketIcon width={20} height={20} />}
               </div>
               <div className="col">
-                <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{group_seq ?? id}</span>
-                <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                <span style={{ fontSize: 16, fontWeight: 600 }}>Round #{group_seq ?? id}</span>
+                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
                   {draw_date ? drawLabel(draw_date) + ' · ' : ''}{fmtCAD(pool)} pool
                 </span>
               </div>
@@ -207,23 +207,23 @@ export default function Round() {
             <div className="row gap-12">
               {my_stake != null && (
                 <div className="col">
-                  <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>STAKE</span>
-                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{fmtCAD(my_stake)}</span>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>STAKE</span>
+                  <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>{fmtCAD(my_stake)}</span>
                 </div>
               )}
               {my_pct != null && (
                 <div className="col">
-                  <span style={{ fontSize: 11, color: 'var(--tx-3)', letterSpacing: '.3px' }}>CHANCE</span>
-                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{my_pct}%</span>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>CHANCE</span>
+                  <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>{my_pct}%</span>
                 </div>
               )}
             </div>
             {isDone
               ? isWon
-                ? <span style={{ fontSize: 14, fontWeight: 700, color: '#ffe566' }}>🏆 Won</span>
+                ? <span style={{ fontSize: 15, fontWeight: 700, color: '#ffe566' }}>🏆 Won</span>
                 : winner_name
-                  ? <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Won by {winner_name}</span>
-                  : <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Drawn</span>
+                  ? <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>Won by {winner_name}</span>
+                  : <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>Drawn</span>
               : isLive && !my_stake
                 ? <span className="chip chip-tg">JOIN ›</span>
                 : null
@@ -231,7 +231,7 @@ export default function Round() {
           </div>
         </div>
 
-        <p style={{ fontSize: 12, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
+        <p style={{ fontSize: 13, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
           Tap the round card for full details
         </p>
       </div>

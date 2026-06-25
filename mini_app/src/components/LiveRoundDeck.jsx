@@ -81,7 +81,7 @@ export default function LiveRoundDeck({ rounds, index, onIndexChange, renderCard
             }} />
         ))}
       </div>
-      <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--tx-3)', marginTop: 6 }}>
+      <div style={{ textAlign: 'center', fontSize: 12, color: 'var(--tx-3)', marginTop: 6 }}>
         Swipe for more · {index + 1} of {rounds.length}
       </div>
     </div>

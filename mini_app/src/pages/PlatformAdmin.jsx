@@ -14,7 +14,7 @@ function StatusChip({ status }) {
   const active = status === 'active'
   return (
     <span className={'chip' + (active ? '' : '')} style={{
-      fontSize: 10,
+      fontSize: 12,
       background: active ? 'rgba(46,166,255,.15)' : 'rgba(255,80,80,.12)',
       color: active ? 'var(--tg)' : 'var(--danger)',
     }}>
@@ -97,7 +97,7 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
       ) : (
         <div className="col gap-12" style={{ paddingBottom: 24 }}>
           <div className="card" style={{ padding: 14 }}>
-            <div style={{ fontSize: 11, color: 'var(--tx-3)', marginBottom: 8 }}>TRUSTEE</div>
+            <div style={{ fontSize: 12, color: 'var(--tx-3)', marginBottom: 8 }}>TRUSTEE</div>
             <div className="row gap-12" style={{ alignItems: 'center' }}>
               <TelegramAvatar user={{
                 full_name: detail.group.trustee_name,
@@ -106,35 +106,35 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
               }} size={48} />
               <div className="col gap-2 grow">
                 <span style={{ fontWeight: 700 }}>{detail.group.trustee_name || detail.group.trustee_username}</span>
-                <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>ID {detail.group.trustee_user_id}</span>
+                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>ID {detail.group.trustee_user_id}</span>
               </div>
             </div>
           </div>
 
           <div className="card col gap-10" style={{ padding: 14 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--tx-3)', textTransform: 'uppercase' }}>Edit group</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tx-3)', textTransform: 'uppercase' }}>Edit group</div>
             <label className="col gap-4">
-              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Group name</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Group name</span>
               <input className="input" value={name} onChange={e => setName(e.target.value)} />
             </label>
             <label className="col gap-4">
-              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Status</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Status</span>
               <select className="input" value={status} onChange={e => setStatus(e.target.value)}>
                 <option value="active">Active</option>
                 <option value="suspended">Suspended (inactive)</option>
               </select>
             </label>
             <label className="col gap-4">
-              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>E-transfer email (optional)</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>E-transfer email (optional)</span>
               <input className="input mono" type="email" value={etransferEmail}
                 onChange={e => setEtransferEmail(e.target.value)}
                 placeholder="trustee@example.com" />
             </label>
-            <label className="row gap-8" style={{ alignItems: 'center', fontSize: 12 }}>
+            <label className="row gap-8" style={{ alignItems: 'center', fontSize: 13 }}>
               <input type="checkbox" checked={regenSlug} onChange={e => setRegenSlug(e.target.checked)} />
               Regenerate invite slug from new name
             </label>
-            <div style={{ fontSize: 11, color: 'var(--tx-3)' }}>
+            <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
               Slug: <span className="mono">{slug}</span>
               {inviteUrl && (
                 <div style={{ marginTop: 6, wordBreak: 'break-all' }}>{inviteUrl}</div>
@@ -147,10 +147,10 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
 
           <div>
             <div className="row between" style={{ marginBottom: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>
                 Members ({detail.members?.length ?? 0})
               </span>
-              <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{detail.rounds_count} rounds</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{detail.rounds_count} rounds</span>
             </div>
             <div className="col gap-6">
               {(detail.members || []).map(m => (
@@ -158,12 +158,12 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
                   <TelegramAvatar user={m} size={36} />
                   <div className="col grow gap-2" style={{ minWidth: 0 }}>
                     <div className="row gap-6" style={{ alignItems: 'center' }}>
-                      <span style={{ fontWeight: 600, fontSize: 14 }}>{m.full_name || m.username}</span>
+                      <span style={{ fontWeight: 600, fontSize: 15 }}>{m.full_name || m.username}</span>
                       {m.is_trustee && (
-                        <span className="chip chip-gold" style={{ fontSize: 9, padding: '2px 6px' }}>TRUSTEE</span>
+                        <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 6px' }}>TRUSTEE</span>
                       )}
                     </div>
-                    <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>
                       {m.email || 'no email'} · {fmtCAD(m.credit)}
                     </span>
                   </div>
@@ -219,9 +219,9 @@ function UserEditSheet({ user, groups, onClose, onUpdated }) {
   return (
     <Sheet open onClose={onClose} title={user.full_name || user.username || 'User'}>
       <div className="col gap-12" style={{ paddingBottom: 20 }}>
-        <div style={{ fontSize: 12, color: 'var(--tx-2)' }}>Telegram ID: {user.telegram_id}</div>
+        <div style={{ fontSize: 13, color: 'var(--tx-2)' }}>Telegram ID: {user.telegram_id}</div>
         <label className="col gap-4">
-          <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Group</span>
+          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Group</span>
           <select className="input" value={groupId} onChange={e => setGroupId(e.target.value)}>
             <option value="">No group</option>
             {groups.map(g => (
@@ -230,10 +230,10 @@ function UserEditSheet({ user, groups, onClose, onUpdated }) {
           </select>
         </label>
         <label className="col gap-4">
-          <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Wallet balance (CAD)</span>
+          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Wallet balance (CAD)</span>
           <input className="input mono" type="number" step="0.01" value={credit} onChange={e => setCredit(e.target.value)} />
         </label>
-        <label className="row gap-8" style={{ alignItems: 'center', fontSize: 13 }}>
+        <label className="row gap-8" style={{ alignItems: 'center', fontSize: 14 }}>
           <input type="checkbox" checked={isAdmin} onChange={e => setIsAdmin(e.target.checked)} />
           Platform administrator
         </label>
@@ -317,8 +317,8 @@ export default function PlatformAdmin() {
   return (
     <div className="tab-content">
       <div style={{ padding: '12px 16px 8px' }}>
-        <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 4px' }}>Platform admin</h2>
-        <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: 0 }}>Manage groups, members, and users</p>
+        <h2 style={{ fontSize: 19, fontWeight: 700, margin: '0 0 4px' }}>Platform admin</h2>
+        <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>Manage groups, members, and users</p>
       </div>
 
       <div style={{ padding: '0 16px 12px', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -349,11 +349,11 @@ export default function PlatformAdmin() {
       ) : tab === 'applications' ? (
         <div className="stack">
           {applications.length === 0 ? (
-            <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 13 }}>No pending applications.</p>
+            <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 14 }}>No pending applications.</p>
           ) : applications.map(a => (
             <div key={a.id} className="card" style={{ padding: 14 }}>
               <div style={{ fontWeight: 600 }}>{a.proposed_group_name}</div>
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginTop: 4 }}>
+              <div style={{ fontSize: 13, color: 'var(--tx-2)', marginTop: 4 }}>
                 {a.full_name || a.username} · #{a.applicant_user_id}
               </div>
               <div className="row gap-8" style={{ marginTop: 12 }}>
@@ -366,7 +366,7 @@ export default function PlatformAdmin() {
       ) : tab === 'groups' ? (
         <div className="stack">
           {groups.length === 0 ? (
-            <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 13 }}>No groups yet.</p>
+            <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 14 }}>No groups yet.</p>
           ) : groups.map(g => (
             <button
               key={g.id}
@@ -379,10 +379,10 @@ export default function PlatformAdmin() {
                 <span style={{ fontWeight: 600, color: 'var(--tx-1)' }}>{g.name}</span>
                 <StatusChip status={g.status} />
               </div>
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', marginTop: 4 }}>
+              <div style={{ fontSize: 13, color: 'var(--tx-2)', marginTop: 4 }}>
                 Trustee: {g.trustee_name || g.trustee_username} · {g.member_count} members
               </div>
-              <div style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 2 }} className="mono">{g.slug}</div>
+              <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 2 }} className="mono">{g.slug}</div>
             </button>
           ))}
         </div>
@@ -409,7 +409,7 @@ export default function PlatformAdmin() {
                   <TelegramAvatar user={u} size={36} />
                   <div className="col grow gap-2">
                     <span style={{ fontWeight: 500, color: 'var(--tx-1)' }}>{u.full_name || u.username}</span>
-                    <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>
                       {u.group_name || 'No group'} · {fmtCAD(u.credit)}
                       {u.is_platform_admin ? ' · ADMIN' : ''}
                     </span>
@@ -424,7 +424,7 @@ export default function PlatformAdmin() {
           {rounds.map(r => (
             <div key={r.id} className="card" style={{ padding: 12 }}>
               <div className="font-weight-600" style={{ fontWeight: 600 }}>Round #{r.id} · {r.group_name}</div>
-              <div style={{ fontSize: 11, color: 'var(--tx-3)' }}>
+              <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
                 {r.status} · pool {fmtCAD(r.pool)} · {r.participants_count} players
               </div>
             </div>

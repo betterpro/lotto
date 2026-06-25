@@ -42,17 +42,17 @@ function Stepper({ value, onChange, min = 1, max = 20 }) {
       <button onClick={() => onChange(Math.max(min, value - 1))}
         style={{
           width: 36, height: 36, borderRadius: 10, border: 'none',
-          background: 'var(--bg-3)', color: 'var(--tx-1)', fontSize: 20,
+          background: 'var(--bg-3)', color: 'var(--tx-1)', fontSize: 21,
           fontWeight: 700, cursor: 'pointer', display: 'flex',
           alignItems: 'center', justifyContent: 'center',
         }}>−</button>
-      <span className="mono" style={{ fontSize: 18, fontWeight: 700, minWidth: 28, textAlign: 'center' }}>
+      <span className="mono" style={{ fontSize: 19, fontWeight: 700, minWidth: 28, textAlign: 'center' }}>
         {value}
       </span>
       <button onClick={() => onChange(Math.min(max, value + 1))}
         style={{
           width: 36, height: 36, borderRadius: 10, border: 'none',
-          background: 'var(--bg-3)', color: 'var(--tx-1)', fontSize: 20,
+          background: 'var(--bg-3)', color: 'var(--tx-1)', fontSize: 21,
           fontWeight: 700, cursor: 'pointer', display: 'flex',
           alignItems: 'center', justifyContent: 'center',
         }}>+</button>
@@ -71,7 +71,7 @@ function SectionHead({ icon: Icon, label }) {
       }}>
         <Icon width={15} height={15} />
       </div>
-      <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.5px',
+      <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '.5px',
                      textTransform: 'uppercase', color: 'var(--tx-2)' }}>
         {label}
       </span>
@@ -87,8 +87,8 @@ function PrefRow({ label, sub, right }) {
       padding: '11px 14px', borderBottom: '.5px solid var(--hairline)',
     }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 14, fontWeight: 500 }}>{label}</span>
-        {sub && <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{sub}</span>}
+        <span style={{ fontSize: 15, fontWeight: 500 }}>{label}</span>
+        {sub && <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>{sub}</span>}
       </div>
       {right}
     </div>
@@ -166,12 +166,12 @@ export default function Profile({ user, onUserUpdate }) {
       <div style={{ padding: '20px 16px 4px', display: 'flex', alignItems: 'center', gap: 16 }}>
         <TelegramAvatar user={user} size={72} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontSize: 20, fontWeight: 700 }}>{name}</span>
+          <span style={{ fontSize: 21, fontWeight: 700 }}>{name}</span>
           {username && (
-            <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>@{username}</span>
+            <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>@{username}</span>
           )}
           <span className="mono" style={{
-            marginTop: 4, fontSize: 18, fontWeight: 700, color: 'var(--money)',
+            marginTop: 4, fontSize: 19, fontWeight: 700, color: 'var(--money)',
           }}>
             {fmtCAD(balance)}
           </span>
@@ -189,8 +189,8 @@ export default function Profile({ user, onUserUpdate }) {
             {/* ── Contact ── */}
             <SectionHead icon={PersonIcon} label="Contact" />
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>E-transfer email</div>
-              <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>E-transfer email</div>
+              <p style={{ fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
                 Use the same email address that appears as the sender on your Interac e-Transfer.
               </p>
               <input className="input mono" type="email" value={email}
@@ -207,7 +207,7 @@ export default function Profile({ user, onUserUpdate }) {
               borderRadius: 14, overflow: 'hidden', marginBottom: 0,
             }}>
               <div style={{ padding: '10px 14px 6px' }}>
-                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
+                <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.4px',
                                textTransform: 'uppercase', color: 'var(--tx-3)' }}>
                   Participation mode
                 </span>
@@ -228,12 +228,12 @@ export default function Profile({ user, onUserUpdate }) {
                         ? `1.5px solid ${opt.v ? 'rgba(46,166,255,.5)' : 'rgba(78,208,122,.4)'}`
                         : '1.5px solid transparent',
                     }}>
-                    <div style={{ fontSize: 13, fontWeight: 700,
+                    <div style={{ fontSize: 14, fontWeight: 700,
                                   color: settings.auto_participate === opt.v
                                     ? (opt.v ? 'var(--tg)' : 'var(--money)') : 'var(--tx-1)' }}>
                       {opt.label}
                     </div>
-                    <div style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 2 }}>{opt.sub}</div>
+                    <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 2 }}>{opt.sub}</div>
                   </button>
                 ))}
               </div>
@@ -244,7 +244,7 @@ export default function Profile({ user, onUserUpdate }) {
 
                   {/* Lottery type preference */}
                   <div style={{ padding: '11px 14px 14px' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.4px',
                                   textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: 8 }}>
                       Lottery type
                     </div>
@@ -259,11 +259,11 @@ export default function Profile({ user, onUserUpdate }) {
                             outline: settings.lottery_preference === lp.v
                               ? '1.5px solid rgba(46,166,255,.5)' : '1.5px solid transparent',
                           }}>
-                          <div style={{ fontSize: 13, fontWeight: 700,
+                          <div style={{ fontSize: 14, fontWeight: 700,
                             color: settings.lottery_preference === lp.v ? 'var(--tg)' : 'var(--tx-1)' }}>
                             {lp.label}
                           </div>
-                          <div style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: 2 }}>{lp.tag}</div>
+                          <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 2 }}>{lp.tag}</div>
                         </button>
                       ))}
                     </div>
@@ -287,7 +287,7 @@ export default function Profile({ user, onUserUpdate }) {
                     }
                   />
                   <div style={{ padding: '11px 14px 14px', borderTop: '.5px solid var(--hairline)' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
+                    <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.4px',
                                   textTransform: 'uppercase', color: 'var(--tx-3)', marginBottom: 8 }}>
                       Preferred draw day
                     </div>
@@ -296,7 +296,7 @@ export default function Profile({ user, onUserUpdate }) {
                         <button key={String(d.v)} onClick={() => set('preferred_day', d.v)}
                           style={{
                             padding: '7px 16px', borderRadius: 20, border: 'none', cursor: 'pointer',
-                            fontSize: 13, fontWeight: 600,
+                            fontSize: 14, fontWeight: 600,
                             background: settings.preferred_day === d.v ? 'var(--tg)' : 'var(--bg-3)',
                             color: settings.preferred_day === d.v ? '#fff' : 'var(--tx-2)',
                           }}>
@@ -314,7 +314,7 @@ export default function Profile({ user, onUserUpdate }) {
               <div style={{
                 marginTop: 8, padding: '10px 14px', borderRadius: 10,
                 background: 'rgba(46,166,255,.07)', border: '.5px solid rgba(46,166,255,.2)',
-                fontSize: 12, color: 'var(--tx-2)', lineHeight: 1.6,
+                fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6,
               }}>
                 Max auto-spend:{' '}
                 <span className="mono" style={{ color: 'var(--tg)', fontWeight: 700 }}>
@@ -332,16 +332,16 @@ export default function Profile({ user, onUserUpdate }) {
                 <SectionHead icon={PersonIcon} label="Become a trustee" />
                 <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
                   {trusteeApp?.status === 'pending' ? (
-                    <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>
+                    <p style={{ fontSize: 14, color: 'var(--tx-2)', margin: 0 }}>
                       Application pending for <strong>{trusteeApp.proposed_group_name}</strong>.
                     </p>
                   ) : trusteeApp?.status === 'rejected' ? (
-                    <p style={{ fontSize: 13, color: 'var(--danger)', margin: '0 0 10px' }}>
+                    <p style={{ fontSize: 14, color: 'var(--danger)', margin: '0 0 10px' }}>
                       Application rejected{trusteeApp.review_notes ? `: ${trusteeApp.review_notes}` : '.'}
                     </p>
                   ) : (
                     <>
-                      <p style={{ fontSize: 12, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                      <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
                         Request your own group to manage rounds and invite friends.
                       </p>
                       <input
@@ -379,8 +379,8 @@ export default function Profile({ user, onUserUpdate }) {
             {/* ── Legal ── */}
             <SectionHead icon={TicketIcon} label="Agreements" />
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Group Prize Agreement</div>
-              <p style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Group Prize Agreement</div>
+              <p style={{ fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
                 BCLC Group Prize Agreement with your beneficiary details and trustee{' '}
                 <strong>{user.trustee?.full_name || user.trustee?.username || 'your group trustee'}</strong>.
                 Each round has a separate amendment with your share and draw info.
@@ -432,10 +432,10 @@ export default function Profile({ user, onUserUpdate }) {
                   padding: '12px 14px',
                   borderBottom: i < arr.length - 1 ? '.5px solid var(--hairline)' : 'none',
                 }}>
-                  <span style={{ fontSize: 22, flexShrink: 0 }}>{icon}</span>
+                  <span style={{ fontSize: 23, flexShrink: 0 }}>{icon}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{label}</div>
-                    <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 1 }}>{sub}</div>
+                    <div style={{ fontSize: 15, fontWeight: 500 }}>{label}</div>
+                    <div style={{ fontSize: 13, color: 'var(--tx-3)', marginTop: 1 }}>{sub}</div>
                   </div>
                   <Toggle on={settings[key]} onChange={v => set(key, v)} />
                 </div>

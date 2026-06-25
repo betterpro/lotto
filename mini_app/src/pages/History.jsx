@@ -104,8 +104,8 @@ export default function History() {
             ['Won',    fmtCAD(totalWon), 'var(--gold)'],
           ].map(([k, v, c], i) => (
             <div key={k} className="col gap-4" style={i ? { borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 } : {}}>
-              <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{k}</span>
-              <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: c }}>{v}</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{k}</span>
+              <span className="mono" style={{ fontSize: 17, fontWeight: 700, color: c }}>{v}</span>
             </div>
           ))}
         </div>
@@ -118,7 +118,7 @@ export default function History() {
             onClick={() => setFilter(f.id)}
             style={{
               flexShrink: 0, padding: '5px 14px', borderRadius: 20,
-              fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer',
+              fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
               background: filter === f.id ? 'var(--tg)' : 'var(--surface-2)',
               color: filter === f.id ? '#fff' : 'var(--tx-2)',
             }}>
@@ -136,7 +136,7 @@ export default function History() {
           </div>
         ) : grouped.map(([day, items]) => (
           <div key={day}>
-            <div style={{ fontSize: 11, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.5px',
+            <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.5px',
                           textTransform: 'uppercase', marginBottom: 8, marginTop: 12 }}>
               {fmtDay(items[0].created_at)}
             </div>
@@ -151,10 +151,10 @@ export default function History() {
                       <IconComp width={16} height={16} />
                     </div>
                     <div className="col grow" style={{ minWidth: 0 }}>
-                      <span style={{ fontSize: 14, fontWeight: 500 }}>{tx.note || meta.label}</span>
-                      <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>{fmtTime(tx.created_at)}</span>
+                      <span style={{ fontSize: 15, fontWeight: 500 }}>{tx.note || meta.label}</span>
+                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{fmtTime(tx.created_at)}</span>
                     </div>
-                    <span className="mono" style={{ fontSize: 14, fontWeight: 700, color: pos ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
+                    <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: pos ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
                       {meta.sign}{fmtCAD(tx.amount)}
                     </span>
                   </div>
@@ -178,7 +178,7 @@ export default function History() {
                   </div>
                   <div className="col">
                     <span style={{fontWeight:600}}>${sub.amount}/month plan</span>
-                    <span style={{fontSize:12,color:'var(--tx-2)'}}>
+                    <span style={{fontSize: 13,color:'var(--tx-2)'}}>
                       {sub.next_billing ? `Renews ${sub.next_billing}` : 'Active subscription'}
                     </span>
                   </div>

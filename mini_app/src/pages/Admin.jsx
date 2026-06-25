@@ -71,7 +71,7 @@ function TicketNumbersView({ ticketNumbers, lotteryType, selectable, selectedMai
         return (
           <div key={`${spec.label}-${i}`}>
             {multi && (
-              <div style={{ fontSize: 10, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
+              <div style={{ fontSize: 12, color: 'var(--tx-3)', marginBottom: 6, fontWeight: 600,
                 textTransform: 'uppercase', letterSpacing: '.3px' }}>
                 {spec.label}
               </div>
@@ -103,7 +103,7 @@ function TicketNumbersView({ ticketNumbers, lotteryType, selectable, selectedMai
 function FieldLabel({ label, children, flex }) {
   return (
     <div className="col gap-4" style={{ flex: flex ? 1 : 'initial', minWidth: 0 }}>
-      <span style={{ fontSize: 11, color: 'var(--tx-2)', letterSpacing: '.3px', textTransform: 'uppercase', fontWeight: 600 }}>
+      <span style={{ fontSize: 12, color: 'var(--tx-2)', letterSpacing: '.3px', textTransform: 'uppercase', fontWeight: 600 }}>
         {label}
       </span>
       {children}
@@ -114,8 +114,8 @@ function FieldLabel({ label, children, flex }) {
 function SummaryRow({ k, v, mono }) {
   return (
     <div className="row between" style={{ padding: '9px 0', borderBottom: '.5px solid var(--hairline)' }}>
-      <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
-      <span className={mono ? 'mono' : ''} style={{ fontSize: 14, fontWeight: 600 }}>{v}</span>
+      <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>{k}</span>
+      <span className={mono ? 'mono' : ''} style={{ fontSize: 15, fontWeight: 600 }}>{v}</span>
     </div>
   )
 }
@@ -213,9 +213,9 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                       alignItems: 'center', gap: 8,
                     }}>
                       <LotteryLogo type={lt.id} height={40} style={{ width: '100%' }} />
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{lt.name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{lt.name}</div>
                       <div style={{
-                        fontSize: 10, fontWeight: 500,
+                        fontSize: 12, fontWeight: 500,
                         color: selected ? 'var(--tg)' : 'var(--tx-3)',
                       }}>
                         ${lt.price}/share
@@ -245,14 +245,14 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                       }}>
                         {i === 0 && (
                           <span style={{
-                            fontSize: 9, fontWeight: 700, letterSpacing: '.4px',
+                            fontSize: 11, fontWeight: 700, letterSpacing: '.4px',
                             textTransform: 'uppercase', color: sel ? 'var(--tg)' : 'var(--money)',
                           }}>
                             Next
                           </span>
                         )}
                         <span style={{
-                          fontSize: 13, fontWeight: 600,
+                          fontSize: 14, fontWeight: 600,
                           color: sel ? 'var(--tg)' : 'var(--tx-1)',
                         }}>
                           {fmtDate(d)}
@@ -277,7 +277,7 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
                 {jackpotText}
               </div>
               {!suggesting && !jackpotAvailable && (
-                <span style={{ fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.45 }}>
+                <span style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.45 }}>
                   {isFutureDraw
                     ? 'Not published for this draw yet. You can open the round now and set the jackpot later.'
                     : 'Not published yet. Open the round and set it later, or it will fill in automatically when lotto.ca publishes it.'}
@@ -311,7 +311,7 @@ function RoundJackpotEditor({ round, onUpdated, showToast }) {
 
   if (!round?.jackpot_pending) {
     return (
-      <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+      <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
         ${fmtJackpotCompact(round.jackpot)}
       </span>
     )
@@ -345,7 +345,7 @@ function RoundJackpotEditor({ round, onUpdated, showToast }) {
 
   return (
     <div className="col gap-8">
-      <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic' }}>
+      <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic' }}>
         {JACKPOT_PENDING_LABEL}
       </span>
       <input
@@ -356,7 +356,7 @@ function RoundJackpotEditor({ round, onUpdated, showToast }) {
         placeholder="15000000"
         disabled={busy}
       />
-      <span style={{ fontSize: 10, color: 'var(--tx-3)', marginTop: -4 }}>
+      <span style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: -4 }}>
         Full amount in CAD · e.g. 15000000 for $15M
       </span>
       <div className="row gap-8">
@@ -370,7 +370,7 @@ function RoundJackpotEditor({ round, onUpdated, showToast }) {
         )}
       </div>
       {!round.jackpot_fetchable && (
-        <span style={{ fontSize: 10, color: 'var(--tx-3)', lineHeight: 1.4 }}>
+        <span style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.4 }}>
           Auto-fetch becomes available when this draw is the next one on lotto.ca.
         </span>
       )}
@@ -539,7 +539,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
         <div className="body">
 
           <div style={{
-            fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+            fontSize: 13, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
             background: totalAfterSave >= required ? 'rgba(78,208,122,.1)' : 'rgba(46,166,255,.1)',
             color: totalAfterSave >= required ? 'var(--money)' : 'var(--tg)',
             border: `.5px solid ${totalAfterSave >= required ? 'rgba(78,208,122,.3)' : 'rgba(46,166,255,.25)'}`,
@@ -570,7 +570,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
           {tickets.length === 0 ? (
             <>
               <div style={{
-                fontSize: 12, color: 'var(--tx-2)', lineHeight: 1.6, marginBottom: 14,
+                fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6, marginBottom: 14,
                 background: 'var(--bg-3)', borderRadius: 12, padding: 12,
               }}>
                 <div style={{ fontWeight: 700, color: 'var(--tx-1)', marginBottom: 6 }}>
@@ -598,7 +598,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
             <>
               {(dupCount > 0 || mismatchDates.length > 0) && (
                 <div style={{
-                  fontSize: 12, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
+                  fontSize: 13, borderRadius: 8, padding: '8px 12px', marginBottom: 12,
                   background: 'rgba(242,163,59,.1)', color: 'var(--warn)',
                   border: '.5px solid rgba(242,163,59,.3)', lineHeight: 1.5,
                 }}>
@@ -622,8 +622,8 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                         <div className="row gap-10" style={{ alignItems: 'center' }}>
                           <img src={t.image} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover' }} />
                           <div className="col">
-                            <span style={{ fontSize: 13, fontWeight: 700 }}>Ticket {i + 1}</span>
-                            <span style={{ fontSize: 11,
+                            <span style={{ fontSize: 14, fontWeight: 700 }}>Ticket {i + 1}</span>
+                            <span style={{ fontSize: 12,
                               color: dup ? 'var(--warn)' : t.scanning ? 'var(--tx-3)' : valid ? 'var(--money)' : 'var(--danger)' }}>
                               {t.scanning ? 'Reading…' : dup ? (dup === 'saved' ? 'Already saved' : 'Duplicate') : valid ? 'Ready' : 'Check numbers'}
                             </span>
@@ -631,13 +631,13 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                         </div>
                         <button type="button" onClick={() => removeTicket(t.id)}
                           style={{ background: 'none', border: 'none', color: 'var(--danger)',
-                            fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 4 }}>
+                            fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: 4 }}>
                           Remove
                         </button>
                       </div>
 
                       {t.scanning ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', color: 'var(--tx-2)', fontSize: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', color: 'var(--tx-2)', fontSize: 13 }}>
                           <div className="spinner" style={{ width: 16, height: 16 }} /> Reading numbers…
                         </div>
                       ) : (
@@ -647,7 +647,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                             return (
                               <div key={rowIdx}>
                                 <div className="row between" style={{ marginBottom: 4 }}>
-                                  <span style={{ fontSize: 10, color: 'var(--tx-3)', fontWeight: 600,
+                                  <span style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600,
                                     textTransform: 'uppercase', letterSpacing: '.3px' }}>
                                     {spec.label} ({spec.min}–{spec.max})
                                   </span>
@@ -655,7 +655,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                                     <button type="button"
                                       onClick={() => updateTicketRows(t.id, rows => removeTicketRow(layout, rows, rowIdx))}
                                       style={{ background: 'none', border: 'none', color: 'var(--danger)',
-                                        fontSize: 10, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                                        fontSize: 12, fontWeight: 600, cursor: 'pointer', padding: 0 }}>
                                       Remove line
                                     </button>
                                   )}
@@ -666,7 +666,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                                       value={v} maxLength={spec.max >= 10 ? 2 : 1} inputMode="numeric"
                                       onChange={e => setTicketNum(t.id, rowIdx, colIdx, e.target.value, spec)}
                                       className="input num-input"
-                                      style={{ padding: 0, textAlign: 'center', fontSize: 15, fontWeight: 700, height: 40 }} />
+                                      style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 40 }} />
                                   ))}
                                 </div>
                               </div>
@@ -674,7 +674,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                           })}
                           {variableRows && t.rows.length < (layout.maxRows ?? 10) && (
                             <button type="button" className="btn btn-block"
-                              style={{ background: 'var(--surface-2)', fontSize: 12, padding: '6px' }}
+                              style={{ background: 'var(--surface-2)', fontSize: 13, padding: '6px' }}
                               onClick={() => updateTicketRows(t.id, rows => addTicketRow(layout, rows))}>
                               <PlusIcon width={13} height={13} /> Add line
                             </button>
@@ -704,7 +704,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                     : `Save ${readyTickets.length} ticket${readyTickets.length === 1 ? '' : 's'}`}
               </button>
               {invalidCount > 0 && (
-                <p style={{ fontSize: 11, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
+                <p style={{ fontSize: 12, color: 'var(--tx-3)', textAlign: 'center', marginTop: 8 }}>
                   {invalidCount} ticket{invalidCount === 1 ? '' : 's'} need fixing before they can be saved.
                 </p>
               )}
@@ -799,13 +799,13 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
             {hasTickets
               ? 'Tap numbers from the ticket to set the 7 winning numbers and bonus. Prize allocation is computed automatically.'
               : 'Enter the 7 winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.'}
           </p>
 
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+          <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
             Winning numbers
           </div>
@@ -824,7 +824,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                     <span key={i} className="ball md def" style={{ opacity: 0.35 }}>—</span>
                   )
                 })}
-                <span style={{ color: 'var(--tx-3)', fontSize: 18, fontWeight: 700 }}>+</span>
+                <span style={{ color: 'var(--tx-3)', fontSize: 19, fontWeight: 700 }}>+</span>
                 <button type="button" onClick={() => (bonus ? clearBonus() : setPickBonus(true))}
                   style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
                   <span className={`ball md ${bonus ? 'bonus' : 'def'}`}
@@ -834,12 +834,12 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                 </button>
               </div>
               {pickBonus && (
-                <p style={{ fontSize: 12, color: 'var(--gold)', marginBottom: 10 }}>
+                <p style={{ fontSize: 13, color: 'var(--gold)', marginBottom: 10 }}>
                   Tap a ticket number for the bonus
                 </p>
               )}
 
-              <div style={{ fontSize: 11, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.3px',
+              <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.3px',
                             textTransform: 'uppercase', marginBottom: 8 }}>
                 Ticket numbers
               </div>
@@ -861,25 +861,25 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                     inputMode="numeric"
                     onChange={e => setNum(i, e.target.value)}
                     className="input num-input"
-                    style={{ padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700, height: 44 }}
+                    style={{ padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700, height: 44 }}
                   />
                 ))}
               </div>
 
-              <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+              <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                             textTransform: 'uppercase', marginBottom: 8 }}>
                 Bonus number
               </div>
               <input value={bonus} onChange={e => setBonus(e.target.value.replace(/\D/g, '').slice(0, 2))}
                 placeholder="—" maxLength={2} inputMode="numeric"
                 className="input num-input"
-                style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 16, fontWeight: 700,
+                style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700,
                          height: 44, marginBottom: 16 }}
               />
             </>
           )}
 
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+          <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8, marginTop: hasTickets ? 16 : 0 }}>
             Cash prize (CAD)
           </div>
@@ -888,7 +888,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
             className="input mono" style={{ marginBottom: 16 }}
           />
 
-          <div style={{ fontSize: 11, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
+          <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
             Free tickets won
           </div>
@@ -896,7 +896,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
             placeholder="0" type="number" inputMode="numeric" min="0"
             className="input mono" style={{ marginBottom: 8 }}
           />
-          <p style={{ margin: '0 0 16px', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5 }}>
             Enter cash and/or free tickets. Free-ticket handling follows your group setting
             (next-round auto-enroll or cash credit from your balance).
           </p>
@@ -1012,7 +1012,7 @@ function PaymentsTab({ showToast }) {
                 border: `.5px solid ${pm === o.v ? 'var(--tg)' : 'var(--hairline-2)'}`,
                 background: pm === o.v ? 'rgba(46,166,255,.1)' : 'var(--bg-3)',
                 color: pm === o.v ? 'var(--tg)' : '#fff',
-                fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+                fontFamily: 'inherit', fontSize: 15, fontWeight: 600,
               }}>
                 {o.label}
               </button>
@@ -1031,14 +1031,14 @@ function PaymentsTab({ showToast }) {
               <input className="input mono" type="number" min="1" step="1"
                 value={minAmt} onChange={e => setMinAmt(e.target.value)} />
             </FieldLabel>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5 }}>
               Members pick $25, $50, $100, or $250 for card. E-transfer options are the same amounts at or above your minimum.
             </p>
           </>
         )}
 
         {(pm === 'card' || pm === 'both') && !group.stripe_configured && (
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--warn)' }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--warn)' }}>
             Stripe is not configured on the server — card payments will not work until it is.
           </p>
         )}
@@ -1046,7 +1046,7 @@ function PaymentsTab({ showToast }) {
 
       <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
         <FieldLabel label="Free ticket prizes">
-          <p style={{ margin: '0 0 4px', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 4px', fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5 }}>
             Applies to every round in this group when you enter free tickets as a prize.
           </p>
           <div className="col" style={{ gap: 8 }}>
@@ -1057,10 +1057,10 @@ function PaymentsTab({ showToast }) {
                 border: `.5px solid ${freeTicketMode === o.v ? 'var(--gold)' : 'var(--hairline-2)'}`,
                 background: freeTicketMode === o.v ? 'rgba(255,193,7,.1)' : 'var(--bg-3)',
                 color: freeTicketMode === o.v ? 'var(--gold)' : '#fff',
-                fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+                fontFamily: 'inherit', fontSize: 15, fontWeight: 600,
               }}>
                 <div>{o.label}</div>
-                <div style={{ fontSize: 12, fontWeight: 400, color: 'var(--tx-3)', marginTop: 4, lineHeight: 1.45 }}>
+                <div style={{ fontSize: 13, fontWeight: 400, color: 'var(--tx-3)', marginTop: 4, lineHeight: 1.45 }}>
                   {o.hint}
                 </div>
               </button>
@@ -1165,8 +1165,8 @@ export default function Admin({ user }) {
               <ShieldIcon width={20} height={20} />
             </div>
             <div className="col gap-4">
-              <span style={{ fontSize: 15, fontWeight: 600 }}>Your group dashboard</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>
+              <span style={{ fontSize: 16, fontWeight: 600 }}>Your group dashboard</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
                 {user?.group?.name || 'Trustee access'}
                 {user?.group?.status === 'suspended' ? ' · suspended' : ''}
               </span>
@@ -1185,8 +1185,8 @@ export default function Admin({ user }) {
         ].map(({ Icon, label, value, color }) => (
           <div key={label} className="card col gap-4" style={{ padding: '10px 12px' }}>
             <Icon width={14} height={14} style={{ color }} />
-            <span className="mono" style={{ fontSize: 16, fontWeight: 700, color }}>{value}</span>
-            <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</span>
+            <span className="mono" style={{ fontSize: 17, fontWeight: 700, color }}>{value}</span>
+            <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</span>
           </div>
         ))}
       </div>
@@ -1202,7 +1202,7 @@ export default function Admin({ user }) {
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{
               flex: 1, padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
-              fontSize: 12, fontWeight: 600,
+              fontSize: 13, fontWeight: 600,
               background: tab === t.id ? 'var(--tg)' : 'var(--surface-2)',
               color: tab === t.id ? '#fff' : 'var(--tx-2)',
             }}>
@@ -1222,13 +1222,13 @@ export default function Admin({ user }) {
             <>
           {loadError && (
             <div className="card" style={{ padding: 12, marginBottom: 12, borderColor: 'var(--danger)' }}>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--danger)' }}>{loadError}</p>
+              <p style={{ margin: 0, fontSize: 14, color: 'var(--danger)' }}>{loadError}</p>
             </div>
           )}
           {rounds.length === 0 && !loadError && (
             <div className="card" style={{ padding: 16, marginBottom: 12, textAlign: 'center' }}>
               <p style={{ margin: '0 0 8px', fontWeight: 600 }}>No rounds yet</p>
-              <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)' }}>
+              <p style={{ margin: 0, fontSize: 14, color: 'var(--tx-2)' }}>
                 Open your first round for this group below.
               </p>
             </div>
@@ -1244,7 +1244,7 @@ export default function Admin({ user }) {
                     padding: '8px 12px', borderRadius: 10, cursor: 'pointer', border: 'none',
                     background: sel ? 'rgba(46,166,255,.16)' : 'var(--surface-2)',
                     outline: sel ? '1.5px solid var(--tg)' : '1.5px solid transparent',
-                    fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+                    fontFamily: 'inherit', fontSize: 13, fontWeight: 600,
                     color: sel ? 'var(--tg)' : 'var(--tx-1)',
                   }}>
                     <LotteryLogo type={r.lottery_type} height={18} style={{ width: 28 }} />
@@ -1260,7 +1260,7 @@ export default function Admin({ user }) {
               <div className="row between" style={{ marginBottom: 12 }}>
                 <div className="row gap-8" style={{ alignItems: 'center' }}>
                   <LotteryLogo type={round.lottery_type} height={28} style={{ width: 36 }} />
-                  <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.group_seq ?? round.id}</span>
+                  <span style={{ fontSize: 16, fontWeight: 700 }}>Round #{round.group_seq ?? round.id}</span>
                 </div>
                 <StatusPill status={ds} />
               </div>
@@ -1272,8 +1272,8 @@ export default function Admin({ user }) {
                   ['Draw date',    round.draw_date ? fmtDate(round.draw_date) : '—'],
                 ].map(([k, v]) => (
                   <div key={k} className="col gap-4">
-                    <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{k}</span>
-                    <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>{v}</span>
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>{k}</span>
+                    <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>{v}</span>
                   </div>
                 ))}
               </div>
@@ -1281,7 +1281,7 @@ export default function Admin({ user }) {
               {(round.jackpot_pending && (st === 'open' || st === 'closed')) ? (
                 <div style={{ marginBottom: 12 }}>
                   <span style={{
-                    display: 'block', fontSize: 10, color: 'var(--tx-3)',
+                    display: 'block', fontSize: 12, color: 'var(--tx-3)',
                     textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8,
                   }}>
                     Jackpot
@@ -1290,8 +1290,8 @@ export default function Admin({ user }) {
                 </div>
               ) : (
                 <div className="col gap-4" style={{ marginBottom: 12 }}>
-                  <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Jackpot</span>
-                  <span className="mono" style={{ fontSize: 13, fontWeight: 600 }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Jackpot</span>
+                  <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
                     {round.jackpot ? `$${fmtJackpotCompact(round.jackpot)}` : JACKPOT_PENDING_LABEL}
                   </span>
                 </div>
@@ -1303,10 +1303,10 @@ export default function Admin({ user }) {
                   {round.participants.map(p => (
                     <div key={p.user_id} style={{ marginBottom: 10 }}>
                       <div className="row between">
-                        <span style={{ fontSize: 13, fontWeight: 500 }}>
+                        <span style={{ fontSize: 14, fontWeight: 500 }}>
                           {p.won ? '🏆 ' : ''}{p.full_name}
                         </span>
-                        <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                        <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
                           {p.pct}% · {fmtCAD(p.amount)}
                         </span>
                       </div>
@@ -1321,7 +1321,7 @@ export default function Admin({ user }) {
               {round.ticket_numbers && (
                 <>
                   <div style={{ height: '.5px', background: 'var(--hairline)', margin: '8px 0 12px' }} />
-                  <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
                     Ticket numbers
                   </div>
                   <TicketNumbersView
@@ -1334,7 +1334,7 @@ export default function Admin({ user }) {
               {(round.tickets_required > 1 || round.tickets_uploaded > 0) && (
                 <>
                   <div style={{ height: '.5px', background: 'var(--hairline)', margin: '8px 0 12px' }} />
-                  <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
                     Tickets · {round.tickets_uploaded ?? 0} / {round.tickets_required ?? 1} uploaded
                   </div>
                 </>
@@ -1350,7 +1350,7 @@ export default function Admin({ user }) {
               {round.winning_numbers && (
                 <>
                   <div style={{ height: '.5px', background: 'var(--hairline)', margin: '8px 0 12px' }} />
-                  <div style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 8 }}>
                     Winning numbers
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1359,7 +1359,7 @@ export default function Admin({ user }) {
                     ))}
                     {round.bonus_number && (
                       <>
-                        <span style={{ color: 'var(--tx-3)', fontSize: 18, fontWeight: 700 }}>+</span>
+                        <span style={{ color: 'var(--tx-3)', fontSize: 19, fontWeight: 700 }}>+</span>
                         <span className="ball md bonus">{round.bonus_number}</span>
                       </>
                     )}
@@ -1407,7 +1407,7 @@ export default function Admin({ user }) {
                   <CameraIcon width={16} height={16} />
                   Scan tickets
                   {round.tickets_required > 1 && (
-                    <span style={{ fontSize: 11, opacity: 0.85 }}>
+                    <span style={{ fontSize: 12, opacity: 0.85 }}>
                       {' '}({round.tickets_uploaded ?? 0}/{round.tickets_required})
                     </span>
                   )}
@@ -1466,25 +1466,25 @@ export default function Admin({ user }) {
                     width: 36, height: 36, borderRadius: 50,
                     background: 'var(--surface-2)', display: 'flex',
                     alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, fontWeight: 700, color: 'var(--tg)', flexShrink: 0,
+                    fontSize: 15, fontWeight: 700, color: 'var(--tg)', flexShrink: 0,
                   }}>
                     {(d.full_name || '?')[0].toUpperCase()}
                   </div>
                   <div className="col gap-4">
-                    <span style={{ fontWeight: 600, fontSize: 14 }}>{d.full_name}</span>
-                    {d.username && <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>@{d.username}</span>}
+                    <span style={{ fontWeight: 600, fontSize: 15 }}>{d.full_name}</span>
+                    {d.username && <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>@{d.username}</span>}
                     {d.ref_code && (
-                      <span style={{ fontSize: 11, color: 'var(--tg)', fontFamily: 'var(--mono)', fontWeight: 600 }}>
+                      <span style={{ fontSize: 12, color: 'var(--tg)', fontFamily: 'var(--mono)', fontWeight: 600 }}>
                         {d.ref_code}
                       </span>
                     )}
                   </div>
                 </div>
                 <div className="col" style={{ textAlign: 'right', gap: 2 }}>
-                  <span className="mono" style={{ fontSize: 18, fontWeight: 700, color: 'var(--money)' }}>
+                  <span className="mono" style={{ fontSize: 19, fontWeight: 700, color: 'var(--money)' }}>
                     {fmtCAD(d.amount)}
                   </span>
-                  <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>
                     {d.payment_method === 'etransfer' ? '🏦 e-Transfer' : '💳 card'} · {d.created_at?.slice(0, 10)}
                   </span>
                 </div>
@@ -1533,17 +1533,17 @@ export default function Admin({ user }) {
                     style={m.is_group_trustee ? { boxShadow: '0 0 0 2px var(--gold)' } : undefined}
                   />
                   <div className="col grow gap-4" style={{ minWidth: 0 }}>
-                    <span style={{ fontWeight: 500, fontSize: 14 }}>
+                    <span style={{ fontWeight: 500, fontSize: 15 }}>
                       {m.full_name}
                       {m.is_group_trustee && (
-                        <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--gold)', fontWeight: 700 }}>TRUSTEE</span>
+                        <span style={{ marginLeft: 6, fontSize: 12, color: 'var(--gold)', fontWeight: 700 }}>TRUSTEE</span>
                       )}
                     </span>
-                    {m.username && <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>@{m.username}</span>}
+                    {m.username && <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>@{m.username}</span>}
                   </div>
                   <div className="col" style={{ textAlign: 'right', gap: 2, flexShrink: 0 }}>
-                    <span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{fmtCAD(m.credit)}</span>
-                    <span style={{ fontSize: 10, color: 'var(--tx-3)' }}>balance</span>
+                    <span className="mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCAD(m.credit)}</span>
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>balance</span>
                   </div>
                 </div>
               ))}

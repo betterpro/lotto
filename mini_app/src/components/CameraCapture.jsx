@@ -164,10 +164,10 @@ export default function CameraCapture({
       }}>
         <button type="button" onClick={onClose}
           style={{ background: 'rgba(0,0,0,.4)', border: 'none', color: '#fff',
-            borderRadius: 20, padding: '8px 14px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+            borderRadius: 20, padding: '8px 14px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>
           Close
         </button>
-        <span style={{ color: '#fff', fontSize: 14, fontWeight: 700, textShadow: '0 1px 3px rgba(0,0,0,.6)' }}>
+        <span style={{ color: '#fff', fontSize: 15, fontWeight: 700, textShadow: '0 1px 3px rgba(0,0,0,.6)' }}>
           {series && target
             ? `Ticket ${Math.min(captured + 1, target)} of ${target}`
             : 'Take ticket photo'}
@@ -182,13 +182,13 @@ export default function CameraCapture({
           maxWidth: 360, background: 'rgba(0,0,0,.55)', borderRadius: 14, padding: '12px 14px',
           backdropFilter: 'blur(2px)',
         }}>
-          <div style={{ color: '#fff', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+          <div style={{ color: '#fff', fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
             How to get a clean scan
           </div>
           {TIPS.map(t => (
             <div key={t} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 4 }}>
-              <span style={{ color: 'var(--money, #4ed07a)', fontSize: 13, lineHeight: '18px' }}>✓</span>
-              <span style={{ color: 'rgba(255,255,255,.9)', fontSize: 12, lineHeight: '18px' }}>{t}</span>
+              <span style={{ color: 'var(--money, #4ed07a)', fontSize: 14, lineHeight: '18px' }}>✓</span>
+              <span style={{ color: 'rgba(255,255,255,.9)', fontSize: 13, lineHeight: '18px' }}>{t}</span>
             </div>
           ))}
         </div>
@@ -215,7 +215,7 @@ export default function CameraCapture({
                   }} />
                 ))}
               </div>
-              <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>{captured}</span>
+              <span style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>{captured}</span>
             </>
           ) : null}
         </div>
@@ -238,7 +238,7 @@ export default function CameraCapture({
               style={{
                 background: captured > 0 ? 'var(--tg, #2ea6ff)' : 'rgba(255,255,255,.18)',
                 color: '#fff', border: 'none', borderRadius: 20, padding: '10px 16px',
-                fontSize: 14, fontWeight: 700, cursor: captured > 0 ? 'pointer' : 'default',
+                fontSize: 15, fontWeight: 700, cursor: captured > 0 ? 'pointer' : 'default',
               }}>
               Done{captured > 0 ? ` (${captured})` : ''}
             </button>

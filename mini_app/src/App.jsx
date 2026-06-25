@@ -29,8 +29,8 @@ function TGHeader({ page }) {
     <header className="tg-header">
       <img src={logoSrc} alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
       <div className="col" style={{ marginLeft: 10, gap: 1 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
-        <span style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
+        <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
+        <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
       </div>
     </header>
   )
@@ -150,7 +150,7 @@ export default function App() {
     return (
       <div className="center-screen">
         <span style={{ fontSize: 48 }}>⚠️</span>
-        <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
+        <span style={{ fontSize: 19, fontWeight: 700, color: 'var(--danger)' }}>{error}</span>
         <button className="primary" onClick={loadUser} style={{ marginTop: 12 }}>
           Try again
         </button>
@@ -161,7 +161,7 @@ export default function App() {
   if (!user) return (
     <div className="center-screen">
       <div className="spinner" />
-      <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Loading…</span>
+      <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Loading…</span>
     </div>
   )
 
@@ -170,7 +170,7 @@ export default function App() {
       return (
         <div className="center-screen">
           <div className="spinner" />
-          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Joining your group…</span>
+          <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Joining your group…</span>
         </div>
       )
     }

@@ -49,7 +49,7 @@ export default function NeedsInvite({ error, onJoined }) {
   return (
     <div className="center-screen" style={{ gap: 16 }}>
       <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 56, objectFit: 'contain' }} />
-      <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
+      <h2 style={{ fontSize: 21, fontWeight: 700, margin: 0 }}>
         {tab === 'join' ? 'Join your group' : 'Start your own group'}
       </h2>
 
@@ -62,7 +62,7 @@ export default function NeedsInvite({ error, onJoined }) {
             onClick={() => { setErr(''); setTab(key) }}
             style={{
               padding: '8px 14px', borderRadius: 9, border: 'none', cursor: 'pointer',
-              fontSize: 13, fontWeight: 600,
+              fontSize: 14, fontWeight: 600,
               background: tab === key ? 'var(--surface, #fff)' : 'transparent',
               color: tab === key ? 'var(--tx-1, #111)' : 'var(--tx-3, #888)',
               boxShadow: tab === key ? '0 1px 3px rgba(0,0,0,.12)' : 'none',
@@ -75,7 +75,7 @@ export default function NeedsInvite({ error, onJoined }) {
 
       {tab === 'join' ? (
         <form onSubmit={joinByCode} style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
             Ask your trustee for the group join code, then enter it below.
           </p>
           <input
@@ -83,34 +83,34 @@ export default function NeedsInvite({ error, onJoined }) {
             placeholder="ENTER CODE" value={code} maxLength={12}
             onChange={e => setCode(e.target.value.toUpperCase())}
             style={{
-              padding: '14px 16px', fontSize: 22, fontWeight: 700, letterSpacing: 6,
+              padding: '14px 16px', fontSize: 23, fontWeight: 700, letterSpacing: 6,
               textAlign: 'center', borderRadius: 14, border: '1px solid var(--bd, #ddd)',
               outline: 'none', width: '100%', boxSizing: 'border-box', textTransform: 'uppercase',
             }}
           />
-          {(err || error) && <span style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>{err || error}</span>}
+          {(err || error) && <span style={{ fontSize: 14, color: 'var(--danger)', lineHeight: 1.5 }}>{err || error}</span>}
           <button type="submit" className="btn btn-primary btn-block" disabled={busy || !code.trim()}>
             {busy ? 'Joining…' : 'Join group'}
           </button>
         </form>
       ) : pending ? (
         <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
-          <p style={{ fontSize: 14, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
+          <p style={{ fontSize: 15, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
             Your request for <strong>{application.proposed_group_name}</strong> is pending platform approval.
           </p>
-          <p style={{ fontSize: 12, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
             We’ll set up your group once it’s approved. In the meantime you can join an existing
             group with a code.
           </p>
         </div>
       ) : (
         <form onSubmit={requestGroup} style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
             Want to run your own pool? Request a group — once a platform admin approves it, you’ll
             become its trustee with your own join code.
           </p>
           {application?.status === 'rejected' && (
-            <span style={{ fontSize: 12, color: 'var(--danger)', lineHeight: 1.5 }}>
+            <span style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>
               Previous request was rejected{application.review_notes ? `: ${application.review_notes}` : '.'}
             </span>
           )}
@@ -118,11 +118,11 @@ export default function NeedsInvite({ error, onJoined }) {
             type="text" placeholder="Your group name" value={groupName} maxLength={60}
             onChange={e => setGroupName(e.target.value)}
             style={{
-              padding: '14px 16px', fontSize: 16, borderRadius: 14, border: '1px solid var(--bd, #ddd)',
+              padding: '14px 16px', fontSize: 17, borderRadius: 14, border: '1px solid var(--bd, #ddd)',
               outline: 'none', width: '100%', boxSizing: 'border-box', textAlign: 'center',
             }}
           />
-          {err && <span style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>{err}</span>}
+          {err && <span style={{ fontSize: 14, color: 'var(--danger)', lineHeight: 1.5 }}>{err}</span>}
           <button type="submit" className="btn btn-primary btn-block" disabled={busy || !groupName.trim()}>
             {busy ? 'Submitting…' : 'Request group'}
           </button>

@@ -72,14 +72,14 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          <p style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 12 }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 12 }}>
             Each share = {fmtCAD(PRICE, 0)} in the pool
           </p>
           <div className="stepper" style={{ marginBottom: 12 }}>
             <button className="stepper-btn" onClick={() => setShares(Math.max(1, shares - 1))}>−</button>
             <div className="col" style={{ alignItems: 'center' }}>
               <span className="mono" style={{ fontSize: 40, fontWeight: 700 }}>{shares}</span>
-              <span style={{ fontSize: 11, color: 'var(--tx-2)' }}>shares</span>
+              <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>shares</span>
             </div>
             <button className="stepper-btn" onClick={() => setShares(shares + 1)}>+</button>
           </div>
@@ -100,8 +100,8 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
               ['Your pool share',`${sharePct}%`,               null],
             ].map(([k,v,c]) => (
               <div key={k} className="sum-row">
-                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>{k}</span>
-                <span className="mono" style={{ fontSize: 14, fontWeight: 600, color: c || '#fff' }}>{v}</span>
+                <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>{k}</span>
+                <span className="mono" style={{ fontSize: 15, fontWeight: 600, color: c || '#fff' }}>{v}</span>
               </div>
             ))}
           </div>
@@ -112,10 +112,10 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
                 borderColor: 'rgba(255,80,80,.35)',
                 background: 'rgba(255,80,80,.08)',
               }}>
-                <p style={{ margin: '0 0 6px', fontWeight: 700, fontSize: 14, color: 'var(--danger)' }}>
+                <p style={{ margin: '0 0 6px', fontWeight: 700, fontSize: 15, color: 'var(--danger)' }}>
                   Not enough credit
                 </p>
-                <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+                <p style={{ margin: 0, fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.5 }}>
                   You need at least {fmtCAD(cost)} for {shares} share{shares !== 1 ? 's' : ''} ({fmtCAD(shortfall)} short).
                   Close this screen, tap your balance on Home to top up, then come back and join again.
                   Paying does not join you until you confirm here.
@@ -215,19 +215,19 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
       <div className="section"><div className="label">Invite friends to your group</div></div>
       <div className="stack">
         <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
-          <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
             Trustees and members can invite new players to a group. You can belong to several groups;
             choose which one is active for rounds and deposits.
           </p>
           {groups.length === 0 ? (
-            <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0 }}>
+            <p style={{ fontSize: 14, color: 'var(--tx-3)', margin: 0 }}>
               Open a group invite link from your trustee to join first.
             </p>
           ) : (
             <>
               {groups.length > 1 && (
                 <label className="col gap-4" style={{ marginBottom: 10, display: 'flex' }}>
-                  <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
                     Active group (rounds &amp; wallet context)
                   </span>
                   <select
@@ -245,7 +245,7 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
               )}
               {groups.length > 1 && (
                 <label className="col gap-4" style={{ marginBottom: 10, display: 'flex' }}>
-                  <span style={{ fontSize: 11, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase' }}>
                     Invite link for
                   </span>
                   <select
@@ -268,10 +268,10 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
                   }}
                 >
                   <div className="col" style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                    <span style={{ fontSize: 10, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: 1 }}>
                       Join code
                     </span>
-                    <span style={{ fontSize: 22, fontWeight: 800, letterSpacing: 4, fontFamily: 'monospace' }}>
+                    <span style={{ fontSize: 23, fontWeight: 800, letterSpacing: 4, fontFamily: 'monospace' }}>
                       {joinCode}
                     </span>
                   </div>
@@ -280,7 +280,7 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
                   </button>
                 </div>
               )}
-              <p style={{ fontSize: 11, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
+              <p style={{ fontSize: 12, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.5 }}>
                 Share this code with friends — they enter it on the “Join your group” screen to join.
               </p>
               <button className="btn btn-ghost btn-block btn-sm" type="button" onClick={shareInvite}>
@@ -300,16 +300,16 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
           <div className="stack">
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
               {trusteeApp?.status === 'pending' ? (
-                <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: 0 }}>
+                <p style={{ fontSize: 14, color: 'var(--tx-2)', margin: 0 }}>
                   Your request for <strong>{trusteeApp.proposed_group_name}</strong> is pending platform approval.
                 </p>
               ) : trusteeApp?.status === 'rejected' ? (
-                <p style={{ fontSize: 13, color: 'var(--danger)', margin: '0 0 10px' }}>
+                <p style={{ fontSize: 14, color: 'var(--danger)', margin: '0 0 10px' }}>
                   Request rejected{trusteeApp.review_notes ? `: ${trusteeApp.review_notes}` : '.'}
                 </p>
               ) : (
                 <>
-                  <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                  <p style={{ fontSize: 13, color: 'var(--tx-2)', margin: '0 0 10px', lineHeight: 1.5 }}>
                     Apply to run your own group: open rounds, approve deposits, and invite members.
                     You can still stay in other groups as a player.
                   </p>
@@ -370,17 +370,17 @@ function LiveRoundCard({ round, onJoin, peek }) {
       <div className="row between" style={{ marginBottom: 14 }}>
         <div className="row gap-8">
           <span className="status-dot live" />
-          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '.8px', color: 'var(--money)' }}>
             {isLocked ? 'WAITING FOR DRAW' : isDrawn ? 'DRAWN' : isRally ? 'OPEN' : 'LIVE ROUND'}
           </span>
         </div>
-        <span className="mono dim" style={{ fontSize: 12 }}>#{round.group_seq ?? round.id}</span>
+        <span className="mono dim" style={{ fontSize: 13 }}>#{round.group_seq ?? round.id}</span>
       </div>
 
       <div className="row gap-10" style={{ alignItems: 'center' }}>
         <LotteryLogo type={round.lottery_type} height={44} style={{ width: 56, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
+          <div style={{ fontSize: 13, color: 'var(--tx-2)', marginBottom: 2, letterSpacing: '.3px' }}>
             Estimated jackpot
           </div>
           {jackpot > 0 ? (
@@ -391,7 +391,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
             </div>
           ) : (
             <div style={{
-              fontSize: 15, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic',
+              fontSize: 16, fontWeight: 500, color: 'var(--tx-3)', fontStyle: 'italic',
               lineHeight: 1.35, paddingTop: 2,
             }}>
               {JACKPOT_PENDING_LABEL}
@@ -403,7 +403,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
       {round.draw_date && (
         <div style={{ margin: '18px 0 14px' }}>
           <Countdown to={round.draw_date + (round.draw_date.includes('T') ? '' : 'T22:30:00')} />
-          <div className="row between" style={{ marginTop: 6, fontSize: 11, color: 'var(--tx-3)', whiteSpace: 'nowrap' }}>
+          <div className="row between" style={{ marginTop: 6, fontSize: 12, color: 'var(--tx-3)', whiteSpace: 'nowrap' }}>
             <span>Draw date</span>
             <span>{round.draw_date}</span>
           </div>
@@ -411,10 +411,10 @@ function LiveRoundCard({ round, onJoin, peek }) {
       )}
 
       <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
-        <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+        <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
           {hasTarget ? `Pool · ${round.tickets_target} tickets target` : 'Pool raised'}
         </span>
-        <span className="mono" style={{ fontSize: 12 }}>
+        <span className="mono" style={{ fontSize: 13 }}>
           <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
           {hasTarget && <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>}
         </span>
@@ -422,7 +422,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
       {hasTarget && <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>}
 
       <div className="row between" style={{ marginTop: 14 }}>
-        <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+        <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
           {playerCount(round)} player{playerCount(round) !== 1 ? 's' : ''} in pool
         </span>
         {round.my_pct != null && (
@@ -439,7 +439,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
             {round.my_stake ? `Add more shares · $${round.price_per_share || 5} each` : `Join · $${round.price_per_share || 5} per share`}
           </button>
         ) : (
-          <p style={{ marginTop: 14, fontSize: 12, color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.5 }}>
+          <p style={{ marginTop: 14, fontSize: 13, color: 'var(--tx-3)', textAlign: 'center', lineHeight: 1.5 }}>
             Entries closed — trustee is buying tickets. Your draw agreement is in Rounds.
           </p>
         )
@@ -504,12 +504,12 @@ export default function Home({ user, onUserUpdate }) {
         }}>
           <TelegramAvatar user={user.trustee} size={44} />
           <div className="col gap-2 grow" style={{ minWidth: 0 }}>
-            <span style={{ fontSize: 11, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+            <span style={{ fontSize: 12, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
               Your trustee
             </span>
-            <span style={{ fontSize: 17, fontWeight: 800, lineHeight: 1.2 }}>{trusteeName}</span>
+            <span style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.2 }}>{trusteeName}</span>
             {groupName && (
-              <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{groupName}</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>{groupName}</span>
             )}
           </div>
         </div>
@@ -519,8 +519,8 @@ export default function Home({ user, onUserUpdate }) {
       <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
         <TelegramAvatar user={user} size={40} />
         <div className="col grow gap-4">
-          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Welcome back</span>
-          <span style={{ fontSize: 15, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>
+          <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Welcome back</span>
+          <span style={{ fontSize: 16, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>
         </div>
         <div className="chip chip-money" onClick={() => navigate('/topup')} style={{ cursor: 'pointer', gap: 6 }}>
           <WalletIcon width={13} height={13} />
@@ -536,7 +536,7 @@ export default function Home({ user, onUserUpdate }) {
           <div className="jackpot" style={{ textAlign: 'center', padding: '40px 18px' }}>
             <div style={{ fontSize: 40, marginBottom: 10 }}>🎰</div>
             <p style={{ fontWeight: 600, marginBottom: 4 }}>No active round</p>
-            <p style={{ fontSize: 13, color: 'var(--tx-2)' }}>The trustee will open one soon!</p>
+            <p style={{ fontSize: 14, color: 'var(--tx-2)' }}>The trustee will open one soon!</p>
           </div>
         </div>
       ) : (
@@ -558,30 +558,30 @@ export default function Home({ user, onUserUpdate }) {
             <div className="card">
               <div className="row between">
                 <div className="col gap-4">
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Shares owned</span>
+                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Shares owned</span>
                   <div className="row gap-8" style={{ alignItems: 'baseline' }}>
-                    <span className="mono" style={{ fontSize: 26, fontWeight: 700 }}>{myShares}</span>
-                    <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>
+                    <span className="mono" style={{ fontSize: 27, fontWeight: 700 }}>{myShares}</span>
+                    <span style={{ fontSize: 14, color: 'var(--tx-3)' }}>
                       share{myShares !== 1 ? 's' : ''} · {playerCount(round)} players
                     </span>
                   </div>
-                  <span style={{ fontSize: 11, color: 'var(--money)' }}>
+                  <span style={{ fontSize: 12, color: 'var(--money)' }}>
                     = {fmtCAD(round.my_stake)} invested
                   </span>
                 </div>
                 <div className="col gap-4" style={{ alignItems: 'flex-end' }}>
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
                     {winPot ? 'Win potential' : 'Win chance'}
                   </span>
                   {winPot ? (
                     <>
-                      <span className="mono" style={{ fontSize: 26, fontWeight: 700, color: 'var(--gold)' }}>
+                      <span className="mono" style={{ fontSize: 27, fontWeight: 700, color: 'var(--gold)' }}>
                         ${fmtBig(winPot)}
                       </span>
-                      <span style={{ fontSize: 11, color: 'var(--tx-3)' }}>if 1 ticket wins jackpot</span>
+                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>if 1 ticket wins jackpot</span>
                     </>
                   ) : (
-                    <span className="mono" style={{ fontSize: 26, fontWeight: 700, color: 'var(--gold)' }}>
+                    <span className="mono" style={{ fontSize: 27, fontWeight: 700, color: 'var(--gold)' }}>
                       {round.my_pct}%
                     </span>
                   )}
@@ -603,13 +603,13 @@ export default function Home({ user, onUserUpdate }) {
         </div>
         <div className="stat">
           <span className="k">Status</span>
-          <span className="v" style={{ fontSize: 16 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
+          <span className="v" style={{ fontSize: 17 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
           <span className="delta">{activeGroupName}</span>
         </div>
         {sub && (
           <div className="stat" style={{ gridColumn: 'span 2' }}>
             <span className="k">Monthly plan</span>
-            <span className="v" style={{ color: 'var(--money)', fontSize: 18 }}>${sub.amount}/mo</span>
+            <span className="v" style={{ color: 'var(--money)', fontSize: 19 }}>${sub.amount}/mo</span>
             {sub.next_billing && <span className="delta">Next charge: {sub.next_billing}</span>}
           </div>
         )}
@@ -633,7 +633,7 @@ export default function Home({ user, onUserUpdate }) {
           <div className="stack" style={{ marginBottom: 12 }}>
             <div className="card">
               <div className="row between" style={{ marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
+                <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>
                   Round #{lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
                 </span>
                 <span className={`status-pill ${lastDrawn.display_status === 'WON' ? 'won' : 'revealed'}`}>
@@ -644,12 +644,12 @@ export default function Home({ user, onUserUpdate }) {
                 {lastDrawn.my_prize > 0 ? (
                   <span className="chip chip-money">Won {fmtCAD(lastDrawn.my_prize)}</span>
                 ) : lastDrawn.my_stake ? (
-                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>No prize this round</span>
+                  <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize this round</span>
                 ) : (
-                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Did not join</span>
+                  <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>Did not join</span>
                 )}
                 {lastDrawn.jackpot > 0 && (
-                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
                     ${fmtBig(lastDrawn.jackpot)} jackpot
                   </span>
                 )}
