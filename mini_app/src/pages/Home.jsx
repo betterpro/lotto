@@ -459,6 +459,11 @@ export default function Home({ user, onUserUpdate }) {
 
   const round = liveRounds?.[roundIndex] ?? null
 
+  // Active group name for the Status tile (mirrors GroupsSections' derivation).
+  const _groups = user.groups?.length ? user.groups : (user.group ? [user.group] : [])
+  const _activeId = user.active_group_id ?? user.group?.id ?? _groups[0]?.id
+  const activeGroupName = (_groups.find(g => g.id === _activeId) || _groups[0])?.name || 'No group yet'
+
   function reloadLive() {
     return api.rounds.open().then(d => {
       const list = d.rounds || []
@@ -598,7 +603,7 @@ export default function Home({ user, onUserUpdate }) {
         <div className="stat">
           <span className="k">Status</span>
           <span className="v" style={{ fontSize: 16 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
-          <span className="delta">{(groups.find(g => g.id === activeId) || groups[0])?.name || 'No group yet'}</span>
+          <span className="delta">{activeGroupName}</span>
         </div>
         {sub && (
           <div className="stat" style={{ gridColumn: 'span 2' }}>

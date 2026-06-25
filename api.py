@@ -3827,8 +3827,13 @@ class _SPAStaticFiles(StaticFiles):
         # SPA fallback: client-side routes like /profile have no file on disk.
         # Serve index.html for any not-found path that isn't an asset request
         # (i.e. has no file extension), so a hard refresh / direct link works.
+        # Never fall back for backend paths — an unmatched /api/* must stay a
+        # real 404 (JSON), otherwise the frontend would try to JSON.parse HTML.
+        _backend = ("api/", "telegram-webhook", "payment-success", "payment-cancel")
         if response is None or response.status_code == 404:
-            if "." not in path.rsplit("/", 1)[-1]:
+            is_asset = "." in path.rsplit("/", 1)[-1]
+            is_backend = path.startswith(_backend)
+            if not is_asset and not is_backend:
                 response = await super().get_response("index.html", scope)
             elif response is None:
                 raise StarletteHTTPException(status_code=404)
