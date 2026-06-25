@@ -359,7 +359,8 @@ function LiveRoundCard({ round, onJoin, peek }) {
   const isDrawn   = ds === 'REVEALED'
   const isLive    = isRally || isLocked || isDrawn
   const jackpot   = round.jackpot || 0
-  const poolTarget  = (round.tickets_target || 25) * (round.price_per_share || 5)
+  const hasTarget   = (round.tickets_target || 0) > 0
+  const poolTarget  = hasTarget ? round.tickets_target * (round.price_per_share || 5) : 0
   const poolRaised  = round.pool || 0
   const poolPct     = poolTarget > 0 ? Math.min(1, poolRaised / poolTarget) : 0
   const lotto       = lotteryMeta(round.lottery_type)
@@ -373,7 +374,7 @@ function LiveRoundCard({ round, onJoin, peek }) {
             {isLocked ? 'WAITING FOR DRAW' : isDrawn ? 'DRAWN' : isRally ? 'OPEN' : 'LIVE ROUND'}
           </span>
         </div>
-        <span className="mono dim" style={{ fontSize: 12 }}>#{round.id}</span>
+        <span className="mono dim" style={{ fontSize: 12 }}>#{round.group_seq ?? round.id}</span>
       </div>
 
       <div className="row gap-10" style={{ alignItems: 'center' }}>
@@ -411,14 +412,14 @@ function LiveRoundCard({ round, onJoin, peek }) {
 
       <div className="row between" style={{ marginBottom: 6, marginTop: 14 }}>
         <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
-          Pool · {round.tickets_target || 25} tickets target
+          {hasTarget ? `Pool · ${round.tickets_target} tickets target` : 'Pool raised'}
         </span>
         <span className="mono" style={{ fontSize: 12 }}>
           <span style={{ color: 'var(--money)' }}>{fmtCAD(poolRaised, 0)}</span>
-          <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>
+          {hasTarget && <span style={{ color: 'var(--tx-3)' }}> / {fmtCAD(poolTarget, 0)}</span>}
         </span>
       </div>
-      <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>
+      {hasTarget && <div className="bar"><span style={{ width: (poolPct * 100) + '%' }} /></div>}
 
       <div className="row between" style={{ marginTop: 14 }}>
         <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>

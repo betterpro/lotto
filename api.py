@@ -1790,7 +1790,7 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["my_free_tickets"] = (my.get("free_tickets_awarded") or 0) if my else None
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
-    rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+    rd["pool_target"] = ((rd.get("tickets_target") or 0) * (rd.get("price_per_share") or 5)) or None
     rd["tickets_required"] = await _round_tickets_required(db, rd)
     saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
     rd["tickets_uploaded"] = len(saved)
@@ -1933,7 +1933,7 @@ async def api_rounds(request: Request):
         rd["results_finalized"] = results_finalized(
             rd["status"], rd.get("winning_numbers"), rd.get("drawn_at")
         )
-        rd["pool_target"] = (rd.get("tickets_target") or 25) * (rd.get("price_per_share") or 5)
+        rd["pool_target"] = ((rd.get("tickets_target") or 0) * (rd.get("price_per_share") or 5)) or None
         rd["participants_count"] = int(rd.get("participants_count") or 0)
         rd["participants"] = rd["participants_count"]
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
@@ -2433,7 +2433,13 @@ async def admin_new_round(request: Request):
     user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
-    tickets_target = body.get("tickets_target") or 25
+    # tickets_target 0 (or blank) means "no limit" — store 0.
+    try:
+        tickets_target = int(body.get("tickets_target") or 0)
+    except (TypeError, ValueError):
+        tickets_target = 0
+    if tickets_target < 0:
+        tickets_target = 0
     price_per_share = body.get("price_per_share") or 5.0
     draw_date = body.get("draw_date") or None
     lottery_type = body.get("lottery_type") or "lotto_max"
@@ -2448,11 +2454,15 @@ async def admin_new_round(request: Request):
         await db.close()
         raise HTTPException(400, "Invalid draw date for this lottery")
     jackpot = suggestion.get("jackpot") or 0
+    seq_cur = await db.execute(
+        "SELECT COALESCE(MAX(group_seq), 0) + 1 AS seq FROM rounds WHERE group_id=?", (gid,)
+    )
+    group_seq = (await seq_cur.fetchone())["seq"]
     cur = await db.execute(
         """INSERT INTO rounds
-           (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type, group_id)
-           VALUES ('open', ?, ?, ?, ?, ?, ?) RETURNING id""",
-        (draw_date, jackpot, tickets_target, price_per_share, lottery_type, gid),
+           (status, draw_date, jackpot, tickets_target, price_per_share, lottery_type, group_id, group_seq)
+           VALUES ('open', ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+        (draw_date, jackpot, tickets_target, price_per_share, lottery_type, gid, group_seq),
     )
     round_id = cur.lastrowid
     await db.commit()
@@ -2477,7 +2487,7 @@ async def admin_new_round(request: Request):
             shares = row["free_ticket_shares"]
             await _notify(
                 row["user_id"],
-                f"🎟 <b>Free tickets applied — Round #{round_id}</b>\n"
+                f"🎟 <b>Free tickets applied — Round #{group_seq}</b>\n"
                 f"You were auto-enrolled with <b>{shares}</b> free share(s) from the previous "
                 f"{lottery_label(lottery_type)} win. No credit was charged.",
             )
@@ -2488,13 +2498,42 @@ async def admin_new_round(request: Request):
         if jackpot
         else " · jackpot announced closer to draw"
     )
+    target_str = f"target {tickets_target} tickets" if tickets_target else "no ticket limit"
     await _notify_all(db,
-        f"🎟 <b>New round opened — #{round_id}</b>{draw_str}{jackpot_str}\n"
-        f"${price_per_share:.0f}/share · target {tickets_target} tickets",
+        f"🎟 <b>New round opened — #{group_seq}</b>{draw_str}{jackpot_str}\n"
+        f"${price_per_share:.0f}/share · {target_str}",
         setting_col="notif_new_round",
         group_id=gid,
     )
 
+    await db.close()
+    return {"ok": True, "round_id": round_id, "round_no": group_seq}
+
+
+@app.post("/api/admin/round/delete")
+async def admin_delete_round(request: Request):
+    """Delete a round that nobody has joined yet (no participations)."""
+    user, db, group = await _require_group_trustee(request)
+    gid = group["id"]
+    body = await request.json()
+    round_id = body.get("round_id")
+    cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    if round_["status"] not in ("open", "closed"):
+        await db.close()
+        raise HTTPException(400, "Only an open round can be deleted")
+    cnt = await db.execute(
+        "SELECT COUNT(*) AS n FROM participations WHERE round_id=?", (round_id,)
+    )
+    n = int((await cnt.fetchone())["n"] or 0)
+    if n > 0:
+        await db.close()
+        raise HTTPException(400, "Cannot delete — this round already has participants")
+    await db.execute("DELETE FROM rounds WHERE id=?", (round_id,))
+    await db.commit()
     await db.close()
     return {"ok": True, "round_id": round_id}
 

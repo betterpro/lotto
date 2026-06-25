@@ -168,6 +168,12 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS notif_round_closed INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_48h_sent INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS reminder_24h_sent INTEGER NOT NULL DEFAULT 0",
+    # Per-group round numbering (display "#1, #2, …" within each group)
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS group_seq INTEGER",
+    """UPDATE rounds r SET group_seq = n.rn
+         FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY id) AS rn
+               FROM rounds) n
+        WHERE r.id = n.id AND r.group_seq IS NULL""",
     # Web auth: email + password and OAuth (Google now, Apple later). See migrations/011.
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_email TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",

@@ -28,7 +28,7 @@ function RoundDetail({ round, onClose }) {
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">Round #{round.id}</span>
+          <span className="sheet-title">Round #{round.group_seq ?? round.id}</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
@@ -150,7 +150,7 @@ export default function Round() {
     </div>
   )
 
-  const { id, display_status: ds, pool, draw_date, participants, my_stake, my_pct, my_won, winner_name } = data
+  const { id, group_seq, display_status: ds, pool, draw_date, participants, my_stake, my_pct, my_won, winner_name } = data
   const isDone   = ['REVEALED', 'WON', 'LOST'].includes(ds)
   const isLive   = ['RALLY', 'OPEN'].includes(ds)
   const isWon    = ds === 'WON'
@@ -192,7 +192,7 @@ export default function Round() {
                 {isWon ? <TrophyIcon width={20} height={20} /> : <TicketIcon width={20} height={20} />}
               </div>
               <div className="col">
-                <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{id}</span>
+                <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{group_seq ?? id}</span>
                 <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
                   {draw_date ? drawLabel(draw_date) + ' · ' : ''}{fmtCAD(pool)} pool
                 </span>

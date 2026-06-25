@@ -27,7 +27,7 @@ function TicketPhotoModal({ round, onClose }) {
         <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between',
           alignItems: 'center', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1 }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>
-            Ticket{sources.length > 1 ? 's' : ''} · Round #{round.id}
+            Ticket{sources.length > 1 ? 's' : ''} · Round #{round.group_seq ?? round.id}
           </span>
           <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
             width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 14 }}>✕</button>
@@ -112,7 +112,7 @@ function RoundCard({ round }) {
               : <TicketIcon width={20} height={20} />}
           </div>
           <div className="col gap-4">
-            <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{round.id}</span>
+            <span style={{ fontSize: 15, fontWeight: 600 }}>Round #{round.group_seq ?? round.id}</span>
             <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
               {fmtDate(round.draw_date)} · {jackpotDisplay(round.jackpot, { suffix: ' jackpot' })}
             </span>

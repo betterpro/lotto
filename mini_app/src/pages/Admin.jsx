@@ -172,10 +172,10 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
       const res = await api.admin.newRound({
         lottery_type:    lotteryType,
         draw_date:       date,
-        tickets_target:  Number(target)  || 25,
+        tickets_target:  target === '' ? 0 : (Number(target) || 0),
         price_per_share: Number(price)   || 6,
       })
-      showToast(`Round #${res.round_id} opened!`, 'success')
+      showToast(`Round #${res.round_no ?? res.round_id} opened!`, 'success')
       onCreated(res.round_id)
       onClose()
     } catch (err) { showToast(err.message, 'error') }
@@ -285,9 +285,9 @@ function NewRoundSheet({ onClose, onCreated, showToast }) {
               )}
             </FieldLabel>
             <div className="row gap-8">
-              <FieldLabel label="Pool target (tickets)" flex>
+              <FieldLabel label="Pool target (blank = no limit)" flex>
                 <input className="input mono" type="number" value={target}
-                  onChange={e => setTarget(e.target.value)} placeholder="25" />
+                  onChange={e => setTarget(e.target.value)} placeholder="No limit" />
               </FieldLabel>
               <FieldLabel label="Price / share ($)" flex>
                 <input className="input mono" type="number" value={price}
@@ -533,7 +533,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">Scan tickets · Round #{round?.id}</span>
+          <span className="sheet-title">Scan tickets · Round #{round?.group_seq ?? round?.id}</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
@@ -795,7 +795,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">Enter results · Round #{round?.id}</span>
+          <span className="sheet-title">Enter results · Round #{round?.group_seq ?? round?.id}</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
@@ -1248,7 +1248,7 @@ export default function Admin({ user }) {
                     color: sel ? 'var(--tg)' : 'var(--tx-1)',
                   }}>
                     <LotteryLogo type={r.lottery_type} height={18} style={{ width: 28 }} />
-                    #{r.id}
+                    #{r.group_seq ?? r.id}
                     {r.draw_date && <span style={{ color: 'var(--tx-3)', fontWeight: 500 }}>{r.draw_date.slice(5)}</span>}
                   </button>
                 )
@@ -1260,7 +1260,7 @@ export default function Admin({ user }) {
               <div className="row between" style={{ marginBottom: 12 }}>
                 <div className="row gap-8" style={{ alignItems: 'center' }}>
                   <LotteryLogo type={round.lottery_type} height={28} style={{ width: 36 }} />
-                  <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.id}</span>
+                  <span style={{ fontSize: 15, fontWeight: 700 }}>Round #{round.group_seq ?? round.id}</span>
                 </div>
                 <StatusPill status={ds} />
               </div>
@@ -1382,9 +1382,23 @@ export default function Admin({ user }) {
                 <button className="btn btn-block"
                   style={{ background: 'var(--surface-2)', opacity: canClose ? 1 : .4 }}
                   disabled={!canClose || busy.close}
-                  onClick={() => roundAction('close', () => api.admin.closeRound(round.id), r => `Round #${r.round_id} closed.`)}>
-                  {busy.close ? 'Closing…' : `Close round #${round.id}`}
+                  onClick={() => roundAction('close', () => api.admin.closeRound(round.id), () => `Round #${round.group_seq ?? round.id} closed.`)}>
+                  {busy.close ? 'Closing…' : `Close round #${round.group_seq ?? round.id}`}
                 </button>
+                {st === 'open' && (round.participants?.length ?? 0) === 0 && (
+                  <button className="btn btn-block"
+                    style={{ background: 'rgba(242,107,107,.12)', color: 'var(--danger)' }}
+                    disabled={busy.delete}
+                    onClick={() => {
+                      if (!window.confirm(`Delete round #${round.group_seq ?? round.id}? This can't be undone.`)) return
+                      roundAction('delete',
+                        () => api.admin.deleteRound(round.id),
+                        () => `Round #${round.group_seq ?? round.id} deleted.`)
+                        .then(() => setSelectedId(null))
+                    }}>
+                    {busy.delete ? 'Deleting…' : `Delete round #${round.group_seq ?? round.id}`}
+                  </button>
+                )}
                 <button className="btn btn-block"
                   style={{ background: canUpload ? 'rgba(46,166,255,.12)' : 'var(--surface-2)',
                            color: canUpload ? 'var(--tg)' : undefined, opacity: canUpload ? 1 : .4 }}
