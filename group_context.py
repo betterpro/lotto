@@ -112,6 +112,8 @@ def group_public(group_row) -> dict | None:
         "pricing_plan": group_row.get("pricing_plan") or "subscription",
         "stripe_connected": bool(group_row.get("stripe_account_id")),
         "stripe_charges_enabled": bool(group_row.get("stripe_charges_enabled")),
+        "locked": group_row.get("status") == "locked",
+        "platform_sub_status": group_row.get("platform_sub_status") or "none",
     }
 
 

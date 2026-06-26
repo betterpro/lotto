@@ -199,6 +199,9 @@ export const api = {
       patch: (body) => req('PATCH', '/api/admin/group', body),
       stripeStatus:  () => req('GET',  '/api/admin/group/stripe/status'),
       stripeConnect: () => req('POST', '/api/admin/group/stripe/connect'),
+      subscription:       () => req('GET',  '/api/admin/group/subscription'),
+      subscriptionCreate: () => req('POST', '/api/admin/group/subscription/create'),
+      subscriptionCancel: () => req('POST', '/api/admin/group/subscription/cancel'),
     },
   },
 }

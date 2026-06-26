@@ -198,6 +198,11 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_account_id TEXT",
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_charges_enabled INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS group_id BIGINT",
+    # Platform-billed group subscription ($6.99/mo, collected on the platform's
+    # own Stripe account). When the trustee cancels, the group status becomes
+    # 'locked'. status='locked' is a system lock (distinct from admin 'suspended').
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_id TEXT",
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_status TEXT NOT NULL DEFAULT 'none'",
 ]
 
 _schema_ready = False

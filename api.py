@@ -919,7 +919,7 @@ async def _auth_with_query_token(request: Request):
     return await _auth(request)
 
 
-async def _require_group_trustee(request: Request):
+async def _require_group_trustee(request: Request, allow_locked: bool = False):
     user, db = await _auth(request)
     gid = await trustee_group_id(db, user)
     if not gid and user.get("group_id"):
@@ -933,6 +933,9 @@ async def _require_group_trustee(request: Request):
     if not group or group["trustee_user_id"] != user["telegram_id"]:
         await db.close()
         raise HTTPException(403, "Group trustee only")
+    if not allow_locked and group["status"] == "locked":
+        await db.close()
+        raise HTTPException(403, "GROUP_LOCKED: subscription cancelled — reactivate to unlock the group")
     return user, db, group
 
 
@@ -2294,7 +2297,7 @@ async def api_trustee_apply(request: Request):
 
 @app.get("/api/admin/group")
 async def admin_get_group(request: Request):
-    user, db, group = await _require_group_trustee(request)
+    user, db, group = await _require_group_trustee(request, allow_locked=True)
     await db.close()
     return {
         "group": {
@@ -3683,6 +3686,111 @@ async def admin_group_stripe_status(request: Request):
                 "account_id": acct_id, "error": str(e)}
 
 
+GROUP_SUB_PRICE = 6.99
+
+
+@app.get("/api/admin/group/subscription")
+async def admin_group_subscription(request: Request):
+    """Group's platform subscription status ($6.99/mo, billed on the platform)."""
+    user, db, group = await _require_group_trustee(request, allow_locked=True)
+    plan = group.get("pricing_plan") or "subscription"
+    out = {
+        "plan": plan,
+        "required": plan == "subscription",
+        "price": GROUP_SUB_PRICE,
+        "status": group.get("platform_sub_status") or "none",
+        "locked": group["status"] == "locked",
+        "next_billing": None,
+        "cancel_at_period_end": False,
+    }
+    sub_id = group.get("platform_sub_id")
+    if sub_id and config.STRIPE_SECRET_KEY and out["status"] == "active":
+        try:
+            s = stripe.Subscription.retrieve(sub_id)
+            out["next_billing"] = datetime.fromtimestamp(s["current_period_end"]).date().isoformat()
+            out["cancel_at_period_end"] = bool(s.get("cancel_at_period_end"))
+        except Exception:
+            pass
+    await db.close()
+    return out
+
+
+@app.post("/api/admin/group/subscription/create")
+async def admin_group_subscription_create(request: Request):
+    """Start the group's $6.99/mo platform subscription (collected on the platform
+    Stripe account). Returns a client_secret to confirm the first payment."""
+    user, db, group = await _require_group_trustee(request, allow_locked=True)
+    if not config.STRIPE_SECRET_KEY:
+        await db.close()
+        raise HTTPException(400, "Stripe not configured")
+    if (group.get("pricing_plan") or "subscription") != "subscription":
+        await db.close()
+        raise HTTPException(400, "This group is not on the subscription plan")
+    if group.get("platform_sub_status") == "active":
+        await db.close()
+        raise HTTPException(400, "Subscription already active")
+    try:
+        customer_id = await _get_or_create_customer(user, db)
+        price = stripe.Price.create(
+            unit_amount=int(round(GROUP_SUB_PRICE * 100)),
+            currency=config.CURRENCY.lower(),
+            recurring={"interval": "month"},
+            product_data={"name": f"Lotto Chee group plan — {group['name']}"},
+        )
+        sub = stripe.Subscription.create(
+            customer=customer_id,
+            items=[{"price": price.id}],
+            payment_behavior="default_incomplete",
+            payment_settings={"save_default_payment_method": "on_subscription"},
+            expand=["latest_invoice.payment_intent"],
+            metadata={
+                "kind": "group_plan",
+                "group_id": str(group["id"]),
+                "trustee_id": str(user["telegram_id"]),
+            },
+        )
+        await db.execute(
+            "UPDATE groups SET platform_sub_id=?, platform_sub_status='pending' WHERE id=?",
+            (sub.id, group["id"]),
+        )
+        await db.commit()
+        cs = sub.latest_invoice.payment_intent.client_secret
+        await db.close()
+        return {"client_secret": cs, "subscription_id": sub.id, "price": GROUP_SUB_PRICE}
+    except Exception as e:
+        await db.close()
+        log.exception("group subscription create error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Subscription error: {msg}")
+
+
+@app.post("/api/admin/group/subscription/cancel")
+async def admin_group_subscription_cancel(request: Request):
+    """Trustee cancels the group subscription. The group is locked immediately —
+    its data becomes inaccessible until the subscription is reactivated."""
+    user, db, group = await _require_group_trustee(request, allow_locked=True)
+    sub_id = group.get("platform_sub_id")
+    if config.STRIPE_SECRET_KEY and sub_id:
+        try:
+            stripe.Subscription.cancel(sub_id)
+        except Exception as e:
+            msg = str(e)
+            # Already gone at Stripe → fine to proceed and lock. Any other error
+            # means it may still be billing, so don't lock — let them retry.
+            if "resource_missing" not in msg and "No such subscription" not in msg:
+                await db.close()
+                log.warning("group subscription cancel error: %s", e)
+                raise HTTPException(400, f"Could not cancel subscription: {getattr(e, 'user_message', None) or msg}")
+    await db.execute(
+        "UPDATE groups SET platform_sub_status='canceled', platform_sub_id=NULL, status='locked' "
+        "WHERE id=?",
+        (group["id"],),
+    )
+    await db.commit()
+    await db.close()
+    return {"ok": True, "locked": True}
+
+
 @app.post("/api/stripe/payment-intent")
 async def stripe_payment_intent(
     request: Request
@@ -3931,6 +4039,18 @@ async def stripe_webhook(request: Request):
         if not sub_id:
             await db.close()
             return {"ok": True}
+        # Group platform plan ($6.99/mo): activate and unlock the group.
+        gcur = await db.execute("SELECT id FROM groups WHERE platform_sub_id=?", (sub_id,))
+        grow = await gcur.fetchone()
+        if grow:
+            await db.execute(
+                "UPDATE groups SET platform_sub_status='active', "
+                "status=CASE WHEN status='locked' THEN 'active' ELSE status END WHERE id=?",
+                (grow["id"],),
+            )
+            await db.commit()
+            await db.close()
+            return {"ok": True}
         cur = await db.execute(
             "SELECT * FROM stripe_subscriptions WHERE stripe_sub_id=? AND status='active'",
             (sub_id,),
@@ -3975,6 +4095,12 @@ async def stripe_webhook(request: Request):
         await db.execute(
             "UPDATE stripe_subscriptions SET status='canceled', updated_at=datetime('now') "
             "WHERE stripe_sub_id=?",
+            (sub_id,),
+        )
+        # Group platform plan ended (cancel or unpaid) — lock the group.
+        await db.execute(
+            "UPDATE groups SET platform_sub_status='canceled', platform_sub_id=NULL, status='locked' "
+            "WHERE platform_sub_id=?",
             (sub_id,),
         )
         await db.commit()

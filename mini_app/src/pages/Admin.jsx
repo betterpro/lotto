@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { loadStripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
@@ -917,8 +919,128 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   )
 }
 
+// ── Group platform subscription ($6.99/mo, billed by the platform) ──────────
+function SubPayForm({ onSuccess, onError }) {
+  const stripe = useStripe(), elements = useElements()
+  const [busy, setBusy] = useState(false)
+  async function submit(e) {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setBusy(true)
+    const { error } = await stripe.confirmPayment({
+      elements, confirmParams: { return_url: window.location.origin }, redirect: 'if_required',
+    })
+    setBusy(false)
+    if (error) onError(error.message); else onSuccess()
+  }
+  return (
+    <form onSubmit={submit}>
+      <PaymentElement options={{ layout: 'tabs' }} />
+      <button type="submit" className="btn btn-primary btn-block" style={{ marginTop: 12 }} disabled={busy || !stripe}>
+        {busy ? 'Processing…' : 'Start subscription · $6.99/mo'}
+      </button>
+    </form>
+  )
+}
+
+function GroupSubscriptionCard({ showToast, onChange }) {
+  const [sub, setSub] = useState(null)
+  const [pk, setPk] = useState(null)
+  const [cs, setCs] = useState(null)
+  const [sp, setSp] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(() => api.admin.group.subscription().then(setSub).catch(() => {}), [])
+  useEffect(() => {
+    load()
+    api.stripe.config().then(c => setPk(c.publishable_key)).catch(() => {})
+  }, [load])
+
+  if (!sub || !sub.required) return null
+  const active = sub.status === 'active'
+
+  async function subscribe() {
+    setBusy(true)
+    try {
+      const r = await api.admin.group.subscriptionCreate()
+      if (!pk) { showToast('Card payment is unavailable right now', 'error'); return }
+      setSp(loadStripe(pk)); setCs(r.client_secret)
+    } catch (e) { showToast(e.message, 'error') } finally { setBusy(false) }
+  }
+  async function cancel() {
+    if (!window.confirm('Cancel the group subscription? Your group will be locked immediately and you won’t be able to access it until you reactivate.')) return
+    setBusy(true)
+    try {
+      await api.admin.group.subscriptionCancel()
+      showToast('Subscription cancelled — group locked', 'info')
+      onChange?.()
+    } catch (e) { showToast(e.message, 'error') } finally { setBusy(false) }
+  }
+
+  if (cs && sp) return (
+    <div className="card col" style={{ gap: 12, marginBottom: 12 }}>
+      <span style={{ fontSize: 15, fontWeight: 700 }}>Group subscription · $6.99/mo</span>
+      <Elements stripe={sp} options={{ clientSecret: cs, appearance: { theme: 'night' } }}>
+        <SubPayForm
+          onSuccess={() => { setCs(null); showToast('Subscription started', 'success'); setTimeout(() => { load(); onChange?.() }, 3000) }}
+          onError={m => showToast(m, 'error')}
+        />
+      </Elements>
+    </div>
+  )
+
+  return (
+    <div className="card col" style={{ gap: 10, marginBottom: 12 }}>
+      <div className="row between" style={{ alignItems: 'center' }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>Group subscription</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: active ? 'var(--money)' : 'var(--warn)' }}>
+          {active ? 'Active' : 'Inactive'}
+        </span>
+      </div>
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.55 }}>
+        Your group runs on the <strong>$6.99/month</strong> plan, billed to your card by Lotto Chee.
+        {active && sub.next_billing ? ` Next charge ${sub.next_billing}.` : ''}
+      </p>
+      {active ? (
+        <button type="button" className="btn btn-block" style={{ background: 'var(--surface-2)', color: 'var(--danger)' }}
+          disabled={busy} onClick={cancel}>
+          {busy ? 'Working…' : 'Cancel subscription'}
+        </button>
+      ) : (
+        <button type="button" className="btn btn-primary btn-block" disabled={busy} onClick={subscribe}>
+          {busy ? 'Working…' : 'Subscribe · $6.99/mo'}
+        </button>
+      )}
+      {active && (
+        <p style={{ margin: 0, fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+          Cancelling locks the group immediately — you won’t be able to access it until you reactivate.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Locked-group screen (subscription cancelled) ────────────────────────────
+function LockedAdmin({ showToast, onReactivated }) {
+  return (
+    <div className="tab-content">
+      <div style={{ padding: '40px 20px', maxWidth: 460, margin: '0 auto', textAlign: 'center' }}>
+        <div style={{ fontSize: 44, marginBottom: 8 }}>🔒</div>
+        <h2 style={{ fontSize: 19, fontWeight: 800, margin: '0 0 8px' }}>Group locked</h2>
+        <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.6, margin: '0 0 20px' }}>
+          The group subscription was cancelled, so this group and its data are locked.
+          Reactivate the $6.99/month subscription to unlock it for you and your members.
+        </p>
+        <div style={{ textAlign: 'left' }}>
+          <GroupSubscriptionCard showToast={showToast} onChange={onReactivated} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Payment settings (trustee) ─────────────────────────────────────────────
-function PaymentsTab({ showToast }) {
+function PaymentsTab({ showToast, onGroupChange }) {
   const [group, setGroup] = useState(null)
   const [pm, setPm] = useState('both')
   const [minAmt, setMinAmt] = useState('25')
@@ -1043,6 +1165,9 @@ function PaymentsTab({ showToast }) {
           {' '}This plan was chosen when the group was created and can’t be changed.
         </p>
       </div>
+
+      <GroupSubscriptionCard showToast={showToast} onChange={onGroupChange} />
+
       <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
         <FieldLabel label="Accepted payment methods">
           <div className="col" style={{ gap: 8 }}>
@@ -1168,6 +1293,14 @@ export default function Admin({ user }) {
   const round = rounds?.find(r => r.id === selectedId) ?? rounds?.[0] ?? null
 
   const [loadError, setLoadError] = useState(null)
+  const [groupLocked, setGroupLocked] = useState(false)
+
+  const refreshGroupLock = useCallback(
+    () => api.admin.group.get()
+      .then(d => setGroupLocked(!!d.group?.locked))
+      .catch(e => { if (String(e.message || '').includes('GROUP_LOCKED')) setGroupLocked(true) }),
+    [],
+  )
 
   const loadRounds = useCallback(() => api.admin.rounds().then(d => {
     const list = d.rounds || []
@@ -1179,6 +1312,7 @@ export default function Admin({ user }) {
     })
   }).catch(err => {
     setRounds([])
+    if (String(err.message || '').includes('GROUP_LOCKED')) { setGroupLocked(true); return }
     setLoadError(err.message || 'Could not load rounds')
     showToast(err.message || 'Could not load rounds', 'error')
   }), [showToast])
@@ -1187,14 +1321,17 @@ export default function Admin({ user }) {
     setImapOk(!!d.imap_configured)
   }).catch(err => {
     setDeposits([])
+    if (String(err.message || '').includes('GROUP_LOCKED')) { setGroupLocked(true); return }
     showToast(err.message || 'Could not load deposits', 'error')
   }), [showToast])
   const loadMembers  = useCallback(() => api.admin.members().then(d => setMembers(d.members)).catch(err => {
     setMembers([])
+    if (String(err.message || '').includes('GROUP_LOCKED')) { setGroupLocked(true); return }
     showToast(err.message || 'Could not load members', 'error')
   }), [showToast])
 
-  useEffect(() => { loadRounds(); loadDeposits(); loadMembers() }, [loadRounds, loadDeposits, loadMembers])
+  useEffect(() => { refreshGroupLock(); loadRounds(); loadDeposits(); loadMembers() },
+    [refreshGroupLock, loadRounds, loadDeposits, loadMembers])
 
   function setB(k, v) { setBusy(p => ({ ...p, [k]: v })) }
 
@@ -1225,6 +1362,15 @@ export default function Admin({ user }) {
   const canResults = canUpload || st === 'uploaded'
 
   const pendingCount = deposits ? deposits.filter(d => d.status === 'pending').length : 0
+
+  if (groupLocked) {
+    return (
+      <LockedAdmin
+        showToast={showToast}
+        onReactivated={() => { refreshGroupLock(); loadRounds(); loadDeposits(); loadMembers() }}
+      />
+    )
+  }
 
   return (
     <div className="tab-content">
@@ -1584,7 +1730,7 @@ export default function Admin({ user }) {
       )}
 
       {tab === 'payments' && (
-        <PaymentsTab showToast={showToast} />
+        <PaymentsTab showToast={showToast} onGroupChange={refreshGroupLock} />
       )}
 
       {/* ── Members tab ── */}
