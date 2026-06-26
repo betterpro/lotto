@@ -142,6 +142,7 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
   const activeId = user.active_group_id ?? user.group?.id ?? groups[0]?.id
   const [inviteGroupId, setInviteGroupId] = useState(activeId)
   const [newGroupName, setNewGroupName] = useState('')
+  const [newPlan, setNewPlan] = useState('subscription')
   const [applyBusy, setApplyBusy] = useState(false)
   const [trusteeApp, setTrusteeApp] = useState(null)
   const [joinCode, setJoinCode] = useState(null)
@@ -320,6 +321,26 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
                     onChange={e => setNewGroupName(e.target.value)}
                     style={{ marginBottom: 10 }}
                   />
+                  <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                    {[
+                      { id: 'subscription', t: 'Subscription', s: '$6.99/mo · no prize cut' },
+                      { id: 'prize_share', t: 'Big-prize share', s: 'Free · 5% of wins over $1,000' },
+                    ].map(o => {
+                      const on = newPlan === o.id
+                      return (
+                        <button type="button" key={o.id} onClick={() => setNewPlan(o.id)}
+                          style={{ flex: 1, textAlign: 'left', padding: '9px 11px', borderRadius: 11, cursor: 'pointer',
+                            background: on ? 'rgba(46,166,255,.12)' : 'var(--bg-3)',
+                            border: `1.5px solid ${on ? 'var(--tg)' : 'var(--hairline-2, #34465A)'}` }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: on ? 'var(--tg)' : 'var(--tx-1)' }}>{o.t}</div>
+                          <div style={{ fontSize: 10, color: 'var(--tx-2)', marginTop: 2, lineHeight: 1.3 }}>{o.s}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p style={{ fontSize: 10, color: 'var(--tx-3)', margin: '0 0 10px', lineHeight: 1.4 }}>
+                    Plan is locked into the group agreement and can’t be changed later.
+                  </p>
                   <button
                     className="btn btn-primary btn-sm btn-block"
                     type="button"
@@ -327,7 +348,7 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
                     onClick={async () => {
                       setApplyBusy(true)
                       try {
-                        await api.trustee.apply(newGroupName.trim())
+                        await api.trustee.apply(newGroupName.trim(), newPlan)
                         const r = await api.trustee.application()
                         setTrusteeApp(r.application)
                         setNewGroupName('')

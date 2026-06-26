@@ -187,6 +187,11 @@ _SCHEMA_STATEMENTS = [
     # Group join codes: trustee shares a short code, members type it to join.
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS join_code TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_join_code ON groups (join_code) WHERE join_code IS NOT NULL",
+    # Per-group pricing plan, chosen once at creation and then locked.
+    # 'subscription' = $6.99/mo flat fee, no prize cut. 'prize_share' = no monthly
+    # fee, platform may claim 5% of any prize over $1,000.
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS pricing_plan TEXT NOT NULL DEFAULT 'subscription'",
+    "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS pricing_plan TEXT",
 ]
 
 _schema_ready = False

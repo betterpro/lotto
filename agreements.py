@@ -64,10 +64,28 @@ def build_master_agreement(
     declaration_category: str | None = None,
     accepted_at: str | None = None,
     trustee: dict | None = None,
+    pricing_plan: str | None = None,
     **_kwargs,
 ) -> str:
     """Full Group Prize Agreement (BCLC form content) with group trustee and round addendum notice."""
     t = trustee or DEFAULT_TRUSTEE
+    if (pricing_plan or "subscription") == "prize_share":
+        plan_clause = (
+            "PLATFORM SERVICE PLAN\n"
+            "  This group is on the Big-Prize Share plan, chosen by the Group Trustee when the\n"
+            "  group was created and fixed for the life of the group. No monthly fee applies.\n"
+            "  The Beneficiaries acknowledge and agree that Lotto Chee may claim a service fee\n"
+            "  of five percent (5%) of any single Prize exceeding $1,000.00 CAD, deducted from\n"
+            "  that Prize before the remainder is distributed to the Beneficiaries by share."
+        )
+    else:
+        plan_clause = (
+            "PLATFORM SERVICE PLAN\n"
+            "  This group is on the Monthly Subscription plan, chosen by the Group Trustee when\n"
+            "  the group was created and fixed for the life of the group. The Group Trustee pays\n"
+            "  Lotto Chee a service fee of $6.99 CAD per month. Lotto Chee claims no share of\n"
+            "  any Prize won by the group."
+        )
     ben_address = _format_address(
         beneficiary_street, beneficiary_city, beneficiary_province, beneficiary_postal
     )
@@ -114,6 +132,8 @@ TICKET INFORMATION
 
 The Group Trustee holds each pooled ticket on behalf of all Beneficiaries who joined
 that round.
+
+{plan_clause}
 
 TERMS AND CONDITIONS
 Each of the Beneficiaries, for and in consideration of and to induce the Corporations

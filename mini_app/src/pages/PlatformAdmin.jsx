@@ -356,6 +356,12 @@ export default function PlatformAdmin() {
               <div style={{ fontSize: 13, color: 'var(--tx-2)', marginTop: 4 }}>
                 {a.full_name || a.username} · #{a.applicant_user_id}
               </div>
+              <div style={{ display: 'inline-block', marginTop: 8, fontSize: 12, fontWeight: 600,
+                padding: '3px 9px', borderRadius: 999,
+                background: a.pricing_plan === 'prize_share' ? 'rgba(245,199,59,.14)' : 'rgba(78,208,122,.14)',
+                color: a.pricing_plan === 'prize_share' ? 'var(--gold)' : 'var(--money)' }}>
+                {a.pricing_plan === 'prize_share' ? 'Big-prize share · 5% over $1k' : 'Subscription · $6.99/mo'}
+              </div>
               <div className="row gap-8" style={{ marginTop: 12 }}>
                 <button type="button" className="btn btn-primary btn-sm" onClick={() => approve(a.id)}>Approve</button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => reject(a.id)}>Reject</button>

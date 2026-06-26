@@ -1437,6 +1437,16 @@ async def _trustee_for_user(db, user: dict):
     return await get_trustee_user(db, group["trustee_user_id"])
 
 
+async def _group_pricing_plan(db, group_id) -> str:
+    """The group's locked pricing plan ('subscription' | 'prize_share')."""
+    if not group_id:
+        return "subscription"
+    cur = await db.execute("SELECT pricing_plan FROM groups WHERE id=?", (group_id,))
+    row = await cur.fetchone()
+    plan = row["pricing_plan"] if row else None
+    return plan if plan in ("subscription", "prize_share") else "subscription"
+
+
 async def _trustee_dict_for_user(db, user: dict) -> dict:
     row = await _trustee_for_user(db, user)
     if row:
@@ -1550,7 +1560,8 @@ async def api_agreement_master(request: Request):
     row = await cur.fetchone()
     u = dict(row) if row else dict(user)
     trustee = await _trustee_dict_for_user(db, u)
-    body = build_master_agreement(**_beneficiary_agreement_kwargs(u), trustee=trustee)
+    plan = await _group_pricing_plan(db, u.get("group_id"))
+    body = build_master_agreement(**_beneficiary_agreement_kwargs(u), trustee=trustee, pricing_plan=plan)
     await db.close()
     return {
         "title": "Group Prize Agreement",
@@ -1575,7 +1586,8 @@ async def api_agreement_master_download(request: Request):
     u = dict(row) if row else dict(user)
     kwargs = _beneficiary_agreement_kwargs(u)
     trustee = await _trustee_dict_for_user(db, u)
-    body = build_master_agreement(**kwargs, trustee=trustee)
+    plan = await _group_pricing_plan(db, u.get("group_id"))
+    body = build_master_agreement(**kwargs, trustee=trustee, pricing_plan=plan)
     await db.close()
     ben = kwargs["beneficiary_name"]
     addr = ", ".join(
@@ -2258,9 +2270,12 @@ async def api_trustee_apply(request: Request):
     name = (body.get("proposed_group_name") or body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "Group name required")
+    plan = body.get("pricing_plan") or "subscription"
+    if plan not in ("subscription", "prize_share"):
+        plan = "subscription"
     await db.execute(
-        "INSERT INTO trustee_applications (applicant_user_id, proposed_group_name) VALUES (?,?)",
-        (user["telegram_id"], name),
+        "INSERT INTO trustee_applications (applicant_user_id, proposed_group_name, pricing_plan) VALUES (?,?,?)",
+        (user["telegram_id"], name, plan),
     )
     await db.commit()
     await db.close()
@@ -3379,10 +3394,13 @@ async def platform_approve_application(app_id: int, request: Request):
         if not await cur.fetchone():
             break
         join_code = generate_join_code()
+    plan = app_row["pricing_plan"] if "pricing_plan" in app_row.keys() else None
+    if plan not in ("subscription", "prize_share"):
+        plan = "subscription"
     cur = await db.execute(
-        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code)
-           VALUES (?,?,?, 'active', ?) RETURNING id""",
-        (app_row["proposed_group_name"], slug, applicant_id, join_code),
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan)
+           VALUES (?,?,?, 'active', ?, ?) RETURNING id""",
+        (app_row["proposed_group_name"], slug, applicant_id, join_code, plan),
     )
     group_id = cur.lastrowid
     await db.execute(

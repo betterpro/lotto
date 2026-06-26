@@ -1001,8 +1001,28 @@ function PaymentsTab({ showToast }) {
     },
   ]
 
+  const isPrizeShare = group.pricing_plan === 'prize_share'
+
   return (
     <div style={{ padding: '12px 16px 24px' }}>
+      <div className="card" style={{ marginBottom: 12, padding: 14 }}>
+        <div style={{ fontSize: 11, color: 'var(--tx-3)', fontWeight: 600, textTransform: 'uppercase',
+          letterSpacing: '.4px', marginBottom: 6 }}>Group plan · locked</div>
+        <div className="row between" style={{ alignItems: 'center' }}>
+          <span style={{ fontSize: 15, fontWeight: 700 }}>
+            {isPrizeShare ? 'Big-prize share' : 'Monthly subscription'}
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--money)' }}>
+            {isPrizeShare ? 'No monthly fee' : '$6.99/mo'}
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--tx-2)', margin: '6px 0 0', lineHeight: 1.5 }}>
+          {isPrizeShare
+            ? 'No monthly fee. The platform may claim 5% of any prize over $1,000, as set out in the group agreement.'
+            : 'A $6.99/month flat fee. The platform takes no share of any prize.'}
+          {' '}This plan was chosen when the group was created and can’t be changed.
+        </p>
+      </div>
       <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
         <FieldLabel label="Accepted payment methods">
           <div className="col" style={{ gap: 8 }}>
