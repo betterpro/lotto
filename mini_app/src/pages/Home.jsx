@@ -301,8 +301,14 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
           <div className="stack">
             <div className="card" style={{ padding: '12px 14px', marginBottom: 8 }}>
               {trusteeApp?.status === 'pending' ? (
-                <p style={{ fontSize: 14, color: 'var(--tx-2)', margin: 0 }}>
-                  Your request for <strong>{trusteeApp.proposed_group_name}</strong> is pending platform approval.
+                <p style={{ fontSize: 14, color: 'var(--tx-2)', margin: 0, lineHeight: 1.5 }}>
+                  {trusteeApp.pricing_plan === 'subscription' && trusteeApp.payment_status !== 'paid' ? (
+                    <>Your request for <strong>{trusteeApp.proposed_group_name}</strong> needs the $6.99/mo subscription — open “Start a group” from the invite screen to pay.</>
+                  ) : trusteeApp.pricing_plan === 'subscription' && trusteeApp.payment_status === 'paid' ? (
+                    <>Payment received for <strong>{trusteeApp.proposed_group_name}</strong>. Your group will be activated within 24 hours.</>
+                  ) : (
+                    <>Your request for <strong>{trusteeApp.proposed_group_name}</strong> is pending platform approval.</>
+                  )}
                 </p>
               ) : trusteeApp?.status === 'rejected' ? (
                 <p style={{ fontSize: 14, color: 'var(--danger)', margin: '0 0 10px' }}>

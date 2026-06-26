@@ -16,7 +16,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.parse import parse_qsl
 
@@ -2396,9 +2396,85 @@ async def etransfer_deposit(request: Request):
 # Trustee application
 # ---------------------------------------------------------------------------
 
+TRUSTEE_AUTO_APPROVE_HOURS = 24
+
+
+async def _approve_trustee_application(db, app_row, reviewed_by=None):
+    """Create a group from a pending trustee application."""
+    plan = app_row["pricing_plan"] if "pricing_plan" in app_row.keys() else None
+    if plan not in ("subscription", "prize_share"):
+        plan = "subscription"
+    if plan == "subscription" and (app_row.get("payment_status") or "none") != "paid":
+        raise HTTPException(400, "Subscription payment required before approval")
+
+    applicant_id = app_row["applicant_user_id"]
+    base_slug = slugify(app_row["proposed_group_name"])
+    slug = base_slug
+    n = 0
+    while True:
+        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
+        if not await cur.fetchone():
+            break
+        n += 1
+        slug = f"{base_slug}-{n}"
+    join_code = generate_join_code()
+    while True:
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
+        if not await cur.fetchone():
+            break
+        join_code = generate_join_code()
+
+    platform_sub_id = app_row.get("stripe_sub_id") if plan == "subscription" else None
+    platform_sub_status = (
+        "active"
+        if plan == "subscription" and platform_sub_id and app_row.get("payment_status") == "paid"
+        else "none"
+    )
+    cur = await db.execute(
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan,
+           platform_sub_id, platform_sub_status)
+           VALUES (?,?,?, 'active', ?, ?, ?, ?) RETURNING id""",
+        (
+            app_row["proposed_group_name"],
+            slug,
+            applicant_id,
+            join_code,
+            plan,
+            platform_sub_id,
+            platform_sub_status,
+        ),
+    )
+    group_id = cur.lastrowid
+    await db.execute(
+        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
+    )
+    await add_group_member(db, group_id, applicant_id, "trustee")
+    await db.execute(
+        """UPDATE trustee_applications SET status='approved', reviewed_by=?,
+           reviewed_at=datetime('now') WHERE id=?""",
+        (reviewed_by, app_row["id"]),
+    )
+    return {"group_id": group_id, "slug": slug}
+
+
+async def _maybe_auto_approve_applications(db):
+    cur = await db.execute(
+        """SELECT * FROM trustee_applications
+           WHERE status='pending' AND payment_status='paid'
+             AND auto_approve_at IS NOT NULL AND auto_approve_at <= datetime('now')"""
+    )
+    rows = await cur.fetchall()
+    for app_row in rows:
+        await _approve_trustee_application(db, app_row, reviewed_by=None)
+    if rows:
+        await db.commit()
+
+
 @app.get("/api/trustee/application")
 async def api_trustee_application_status(request: Request):
     user, db = await _auth(request)
+    await ensure_schema()
+    await _maybe_auto_approve_applications(db)
     cur = await db.execute(
         """SELECT * FROM trustee_applications
            WHERE applicant_user_id = ? ORDER BY id DESC LIMIT 1""",
@@ -2412,6 +2488,7 @@ async def api_trustee_application_status(request: Request):
 @app.post("/api/trustee/apply")
 async def api_trustee_apply(request: Request):
     user, db = await _auth(request)
+    await ensure_schema()
     if await trustee_group_id(db, user):
         await db.close()
         raise HTTPException(400, "You already manage a group")
@@ -2430,12 +2507,98 @@ async def api_trustee_apply(request: Request):
     if plan not in ("subscription", "prize_share"):
         plan = "subscription"
     await db.execute(
-        "INSERT INTO trustee_applications (applicant_user_id, proposed_group_name, pricing_plan) VALUES (?,?,?)",
+        """INSERT INTO trustee_applications
+           (applicant_user_id, proposed_group_name, pricing_plan, payment_status)
+           VALUES (?,?,?, 'none')""",
         (user["telegram_id"], name, plan),
     )
     await db.commit()
     await db.close()
     return {"ok": True}
+
+
+@app.post("/api/trustee/application/subscription/create")
+async def api_trustee_application_subscription_create(request: Request):
+    """Start $6.99/mo subscription for a pending subscription-plan application."""
+    user, db = await _auth(request)
+    await ensure_schema()
+    if not config.STRIPE_SECRET_KEY:
+        await db.close()
+        raise HTTPException(400, "Stripe not configured")
+    cur = await db.execute(
+        """SELECT * FROM trustee_applications
+           WHERE applicant_user_id=? AND status='pending' ORDER BY id DESC LIMIT 1""",
+        (user["telegram_id"],),
+    )
+    app_row = await cur.fetchone()
+    if not app_row:
+        await db.close()
+        raise HTTPException(404, "No pending application")
+    plan = app_row.get("pricing_plan") or "subscription"
+    if plan != "subscription":
+        await db.close()
+        raise HTTPException(400, "Subscription payment is not required for this plan")
+    if (app_row.get("payment_status") or "none") == "paid":
+        await db.close()
+        raise HTTPException(400, "Subscription already paid")
+
+    existing_sub_id = app_row.get("stripe_sub_id")
+    if existing_sub_id:
+        try:
+            sub = stripe.Subscription.retrieve(
+                existing_sub_id, expand=["latest_invoice.payment_intent"]
+            )
+            pi = sub.latest_invoice.payment_intent
+            if pi and pi.status in (
+                "requires_payment_method",
+                "requires_confirmation",
+                "requires_action",
+            ):
+                await db.close()
+                return {
+                    "client_secret": pi.client_secret,
+                    "subscription_id": existing_sub_id,
+                    "price": GROUP_SUB_PRICE,
+                }
+        except Exception:
+            pass
+
+    try:
+        customer_id = await _get_or_create_customer(user, db)
+        price = stripe.Price.create(
+            unit_amount=int(round(GROUP_SUB_PRICE * 100)),
+            currency=config.CURRENCY.lower(),
+            recurring={"interval": "month"},
+            product_data={
+                "name": f"Lotto Chee group plan — {app_row['proposed_group_name']}",
+            },
+        )
+        sub = stripe.Subscription.create(
+            customer=customer_id,
+            items=[{"price": price.id}],
+            payment_behavior="default_incomplete",
+            payment_settings={"save_default_payment_method": "on_subscription"},
+            expand=["latest_invoice.payment_intent"],
+            metadata={
+                "kind": "application_sub",
+                "application_id": str(app_row["id"]),
+                "trustee_id": str(user["telegram_id"]),
+            },
+        )
+        await db.execute(
+            """UPDATE trustee_applications SET stripe_sub_id=?, payment_status='pending'
+               WHERE id=?""",
+            (sub.id, app_row["id"]),
+        )
+        await db.commit()
+        cs = sub.latest_invoice.payment_intent.client_secret
+        await db.close()
+        return {"client_secret": cs, "subscription_id": sub.id, "price": GROUP_SUB_PRICE}
+    except Exception as e:
+        await db.close()
+        log.exception("application subscription create error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Subscription error: {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -3514,6 +3677,7 @@ async def platform_rounds(
 @app.get("/api/platform/applications")
 async def platform_applications(request: Request):
     user, db = await _require_platform_admin(request)
+    await _maybe_auto_approve_applications(db)
     cur = await db.execute("""
         SELECT a.*, u.full_name, u.username
         FROM trustee_applications a
@@ -3534,43 +3698,10 @@ async def platform_approve_application(app_id: int, request: Request):
     if not app_row or app_row["status"] != "pending":
         await db.close()
         raise HTTPException(404, "Pending application not found")
-    applicant_id = app_row["applicant_user_id"]
-    base_slug = slugify(app_row["proposed_group_name"])
-    slug = base_slug
-    n = 0
-    while True:
-        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
-        if not await cur.fetchone():
-            break
-        n += 1
-        slug = f"{base_slug}-{n}"
-    join_code = generate_join_code()
-    while True:
-        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
-        if not await cur.fetchone():
-            break
-        join_code = generate_join_code()
-    plan = app_row["pricing_plan"] if "pricing_plan" in app_row.keys() else None
-    if plan not in ("subscription", "prize_share"):
-        plan = "subscription"
-    cur = await db.execute(
-        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan)
-           VALUES (?,?,?, 'active', ?, ?) RETURNING id""",
-        (app_row["proposed_group_name"], slug, applicant_id, join_code, plan),
-    )
-    group_id = cur.lastrowid
-    await db.execute(
-        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
-    )
-    await add_group_member(db, group_id, applicant_id, "trustee")
-    await db.execute(
-        """UPDATE trustee_applications SET status='approved', reviewed_by=?,
-           reviewed_at=datetime('now') WHERE id=?""",
-        (admin["telegram_id"], app_id),
-    )
+    result = await _approve_trustee_application(db, app_row, reviewed_by=admin["telegram_id"])
     await db.commit()
     await db.close()
-    return {"ok": True, "group_id": group_id, "slug": slug}
+    return {"ok": True, **result}
 
 
 @app.post("/api/platform/applications/{app_id}/reject")
@@ -4306,6 +4437,24 @@ async def stripe_webhook(request: Request):
         invoice = event["data"]["object"]
         sub_id = invoice.get("subscription")
         if not sub_id:
+            await db.close()
+            return {"ok": True}
+        # Application subscription ($6.99/mo before group exists): mark paid, auto-approve in 24h.
+        acur = await db.execute(
+            "SELECT * FROM trustee_applications WHERE stripe_sub_id=? AND status='pending'",
+            (sub_id,),
+        )
+        app_row = await acur.fetchone()
+        if app_row:
+            auto_at = (
+                datetime.now(timezone.utc) + timedelta(hours=TRUSTEE_AUTO_APPROVE_HOURS)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            await db.execute(
+                """UPDATE trustee_applications SET payment_status='paid', paid_at=datetime('now'),
+                   auto_approve_at=? WHERE id=?""",
+                (auto_at, app_row["id"]),
+            )
+            await db.commit()
             await db.close()
             return {"ok": True}
         # Group platform plan ($6.99/mo): activate and unlock the group.

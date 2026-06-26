@@ -102,6 +102,7 @@ export const api = {
   trustee: {
     application: () => req('GET', '/api/trustee/application'),
     apply:       (proposed_group_name, pricing_plan) => req('POST', '/api/trustee/apply', { proposed_group_name, pricing_plan }),
+    subscriptionCreate: () => req('POST', '/api/trustee/application/subscription/create'),
   },
   platform: {
     overview:      () => req('GET', '/api/platform/overview'),

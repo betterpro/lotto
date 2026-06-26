@@ -203,6 +203,11 @@ _SCHEMA_STATEMENTS = [
     # 'locked'. status='locked' is a system lock (distinct from admin 'suspended').
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_id TEXT",
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_status TEXT NOT NULL DEFAULT 'none'",
+    # Subscription plan applications: pay before approval; auto-approve after 24h.
+    "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS stripe_sub_id TEXT",
+    "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'none'",
+    "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS paid_at TEXT",
+    "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS auto_approve_at TEXT",
     # Auto-results: timestamp when official winning numbers were fetched & matched
     # (so participants are notified once).
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS results_auto_at TEXT",

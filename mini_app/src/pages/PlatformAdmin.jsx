@@ -464,8 +464,22 @@ export default function PlatformAdmin() {
                 color: a.pricing_plan === 'prize_share' ? 'var(--gold)' : 'var(--money)' }}>
                 {a.pricing_plan === 'prize_share' ? 'Big-prize share · 5% over $1k' : 'Subscription · $6.99/mo'}
               </div>
+              {a.pricing_plan !== 'prize_share' && (
+                <div style={{ fontSize: 12, color: 'var(--tx-3)', marginTop: 6 }}>
+                  {a.payment_status === 'paid'
+                    ? `Paid · auto-approves ${a.auto_approve_at ? `by ${a.auto_approve_at}` : 'in 24h'}`
+                    : 'Awaiting subscription payment'}
+                </div>
+              )}
               <div className="row gap-8" style={{ marginTop: 12 }}>
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => approve(a.id)}>Approve</button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={a.pricing_plan !== 'prize_share' && a.payment_status !== 'paid'}
+                  onClick={() => approve(a.id)}
+                >
+                  Approve
+                </button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => reject(a.id)}>Reject</button>
               </div>
             </div>
