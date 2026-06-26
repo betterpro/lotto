@@ -192,6 +192,12 @@ _SCHEMA_STATEMENTS = [
     # fee, platform may claim 5% of any prize over $1,000.
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS pricing_plan TEXT NOT NULL DEFAULT 'subscription'",
     "ALTER TABLE trustee_applications ADD COLUMN IF NOT EXISTS pricing_plan TEXT",
+    # Stripe Connect: each trustee connects their own Stripe (Express) account.
+    # Member card top-ups are charged directly on it — funds + Stripe fees on the
+    # trustee, platform takes no cut.
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_account_id TEXT",
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_charges_enabled INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS group_id BIGINT",
 ]
 
 _schema_ready = False

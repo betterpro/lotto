@@ -925,6 +925,26 @@ function PaymentsTab({ showToast }) {
   const [email, setEmail] = useState('')
   const [freeTicketMode, setFreeTicketMode] = useState('next_round')
   const [busy, setBusy] = useState(false)
+  const [stripe, setStripe] = useState(null)   // { connected, charges_enabled, ... }
+  const [stripeBusy, setStripeBusy] = useState(false)
+
+  const loadStripeStatus = useCallback(() => {
+    api.admin.group.stripeStatus().then(setStripe).catch(() => {})
+  }, [])
+  useEffect(() => { loadStripeStatus() }, [loadStripeStatus])
+
+  async function connectStripe() {
+    setStripeBusy(true)
+    try {
+      const r = await api.admin.group.stripeConnect()
+      if (r.url) {
+        const tg = window.Telegram?.WebApp
+        if (tg?.openLink) tg.openLink(r.url)
+        else window.location.href = r.url
+      }
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setStripeBusy(false) }
+  }
 
   useEffect(() => {
     api.admin.group.get()
@@ -1063,6 +1083,41 @@ function PaymentsTab({ showToast }) {
           </p>
         )}
       </div>
+
+      {(pm === 'card' || pm === 'both') && group.stripe_configured && (() => {
+        const connected = stripe?.connected
+        const ready = stripe?.charges_enabled
+        const statusLabel = !connected ? 'Not connected'
+          : ready ? 'Connected · ready' : 'Setup incomplete'
+        const statusColor = ready ? 'var(--money)' : connected ? 'var(--warn)' : 'var(--tx-3)'
+        return (
+          <div className="card col" style={{ gap: 12, marginBottom: 12 }}>
+            <div className="row between" style={{ alignItems: 'center' }}>
+              <span style={{ fontSize: 15, fontWeight: 700 }}>Card payments · Stripe</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: statusColor }}>{statusLabel}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.55 }}>
+              Connect your own Stripe account to accept card top-ups. Members’ payments — and the
+              Stripe processing fees — go directly to your Stripe account; the platform takes no cut.
+            </p>
+            <button type="button" className="btn btn-primary btn-block"
+              disabled={stripeBusy} onClick={connectStripe}>
+              {stripeBusy ? 'Opening Stripe…'
+                : !connected ? 'Connect Stripe account'
+                : ready ? 'Manage / update Stripe' : 'Finish Stripe setup'}
+            </button>
+            {connected && !ready && (
+              <button type="button" className="btn btn-block" style={{ background: 'var(--surface-2)' }}
+                onClick={loadStripeStatus}>Refresh status</button>
+            )}
+            {!ready && (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+                Card top-up stays hidden for members until your Stripe account is connected and able to accept charges.
+              </p>
+            )}
+          </div>
+        )
+      })()}
 
       <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
         <FieldLabel label="Free ticket prizes">

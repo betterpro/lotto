@@ -75,6 +75,7 @@ export default function TopUp({ user, onUserUpdate }) {
   const [method, setMethod]     = useState('card')   // 'card' | 'etransfer'
   const [step, setStep]         = useState('select') // 'select' | 'card' | 'sent'
   const [stripePromise, setSP]  = useState(null)
+  const [pk, setPk]             = useState(null)
   const [clientSecret, setCS]   = useState(null)
   const [etxInfo, setEtxInfo]   = useState(null)     // { admin_email, amount }
   const [payOpts, setPayOpts]   = useState(null)
@@ -89,7 +90,7 @@ export default function TopUp({ user, onUserUpdate }) {
       if (opts.card_enabled) setMethod('card')
       else if (opts.etransfer_enabled) setMethod('etransfer')
     }).catch(() => setPayOpts({ card_enabled: true, etransfer_enabled: true, card_amounts: CARD_AMOUNTS, etransfer_amounts: CARD_AMOUNTS }))
-    api.stripe.config().then(cfg => setSP(loadStripe(cfg.publishable_key))).catch(() => {})
+    api.stripe.config().then(cfg => setPk(cfg.publishable_key)).catch(() => {})
   }, [])
 
   function resetMethod() { setCS(null); setStep('select') }
@@ -157,6 +158,10 @@ export default function TopUp({ user, onUserUpdate }) {
         const r = tab === 'once'
           ? await api.stripe.createPaymentIntent(amount)
           : await api.stripe.createSubscription(amount)
+        if (!pk) { showToast('Card payment is unavailable right now', 'error'); return }
+        // Direct charges settle on the group's connected account, so Stripe.js
+        // must be initialised for that account.
+        setSP(loadStripe(pk, r.stripe_account ? { stripeAccount: r.stripe_account } : undefined))
         setCS(r.client_secret)
         setStep('card')
       } catch (e) { showToast(e.message, 'error') }
@@ -259,7 +264,14 @@ export default function TopUp({ user, onUserUpdate }) {
           </>
         )}
 
-        {payOpts?.card_enabled && method === 'card' && (
+        {payOpts?.card_setup_pending && (
+          <p style={{ fontSize: 13, color: 'var(--warn)', marginBottom: 14, lineHeight: 1.5 }}>
+            💳 Card top-up isn’t ready yet — your group’s trustee is still connecting Stripe.
+            {payOpts?.etransfer_enabled ? ' You can use e-Transfer in the meantime.' : ''}
+          </p>
+        )}
+
+        {payOpts?.card_enabled && method === 'card' && !payOpts?.card_connect && (
         <div style={{ display: 'flex', background: 'var(--bg-3)', borderRadius: 10, padding: 4, marginBottom: 16 }}>
           {[['once','One-time'],['monthly','Monthly']].map(([k,l]) => (
             <button key={k} onClick={() => { setTab(k); setCS(null) }} style={{

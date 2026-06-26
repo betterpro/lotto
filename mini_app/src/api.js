@@ -197,6 +197,8 @@ export const api = {
     group: {
       get:   () => req('GET', '/api/admin/group'),
       patch: (body) => req('PATCH', '/api/admin/group', body),
+      stripeStatus:  () => req('GET',  '/api/admin/group/stripe/status'),
+      stripeConnect: () => req('POST', '/api/admin/group/stripe/connect'),
     },
   },
 }

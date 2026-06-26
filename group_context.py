@@ -110,6 +110,8 @@ def group_public(group_row) -> dict | None:
         "free_ticket_mode": normalize_free_ticket_mode(group_row.get("free_ticket_mode")),
         "join_code": group_row.get("join_code"),
         "pricing_plan": group_row.get("pricing_plan") or "subscription",
+        "stripe_connected": bool(group_row.get("stripe_account_id")),
+        "stripe_charges_enabled": bool(group_row.get("stripe_charges_enabled")),
     }
 
 

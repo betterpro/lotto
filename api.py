@@ -1852,7 +1852,11 @@ async def _active_group_row(user: dict, db):
 def _payment_options_payload(group, *, stripe_configured: bool) -> dict:
     admin_email = (group.get("etransfer_email") if group else None) or config.ADMIN_ETRANSFER_EMAIL
     min_amt = float(group.get("etransfer_min_amount") or 25) if group else 25.0
-    card_allowed = bool(group and group_allows_payment(group, "card") and stripe_configured)
+    # Card top-ups route to the trustee's connected Stripe account, so card is
+    # only usable once that account is connected and can accept charges.
+    connect_ready = bool(group and group.get("stripe_account_id") and group.get("stripe_charges_enabled"))
+    card_setting = bool(group and group_allows_payment(group, "card") and stripe_configured)
+    card_allowed = card_setting and connect_ready
     etx_allowed = bool(group and group_allows_payment(group, "etransfer") and admin_email)
     etx_presets = [a for a in CARD_DEPOSIT_AMOUNTS if a >= min_amt]
     return {
@@ -1861,6 +1865,8 @@ def _payment_options_payload(group, *, stripe_configured: bool) -> dict:
         "card_amounts": list(CARD_DEPOSIT_AMOUNTS),
         "etransfer_amounts": etx_presets,
         "card_enabled": card_allowed,
+        "card_connect": connect_ready,
+        "card_setup_pending": card_setting and not connect_ready,
         "etransfer_enabled": etx_allowed,
         "etransfer_email": admin_email if etx_allowed else None,
     }
@@ -3599,6 +3605,84 @@ async def stripe_config():
     return {"publishable_key": config.STRIPE_PUBLISHABLE_KEY}
 
 
+def _app_base_url(request: Request) -> str:
+    host = request.headers.get("host") or "lottochee.com"
+    return f"https://{host}"
+
+
+@app.post("/api/admin/group/stripe/connect")
+async def admin_group_stripe_connect(request: Request):
+    """Create (or resume) the trustee's Stripe Express account and return a
+    hosted onboarding link. Member card top-ups are then charged directly on
+    this account."""
+    user, db, group = await _require_group_trustee(request)
+    if not config.STRIPE_SECRET_KEY:
+        await db.close()
+        raise HTTPException(400, "Stripe not configured")
+    gid = group["id"]
+    acct_id = group.get("stripe_account_id")
+    try:
+        if not acct_id:
+            acct = stripe.Account.create(
+                type="express",
+                country="CA",
+                email=user.get("auth_email") or user.get("email") or None,
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True},
+                },
+                business_type="individual",
+                metadata={"group_id": str(gid), "trustee_id": str(user["telegram_id"])},
+            )
+            acct_id = acct.id
+            await db.execute("UPDATE groups SET stripe_account_id=? WHERE id=?", (acct_id, gid))
+            await db.commit()
+        base = _app_base_url(request)
+        link = stripe.AccountLink.create(
+            account=acct_id,
+            refresh_url=f"{base}/?stripe=refresh",
+            return_url=f"{base}/?stripe=connected",
+            type="account_onboarding",
+        )
+        await db.close()
+        return {"url": link.url, "account_id": acct_id}
+    except Exception as e:
+        await db.close()
+        log.exception("stripe connect error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Stripe Connect error: {msg}")
+
+
+@app.get("/api/admin/group/stripe/status")
+async def admin_group_stripe_status(request: Request):
+    """Live status of the trustee's connected Stripe account."""
+    user, db, group = await _require_group_trustee(request)
+    acct_id = group.get("stripe_account_id")
+    if not acct_id or not config.STRIPE_SECRET_KEY:
+        await db.close()
+        return {"connected": False, "charges_enabled": False, "details_submitted": False, "account_id": None}
+    try:
+        acct = stripe.Account.retrieve(acct_id)
+        ce = bool(acct.get("charges_enabled"))
+        await db.execute(
+            "UPDATE groups SET stripe_charges_enabled=? WHERE id=?", (1 if ce else 0, group["id"])
+        )
+        await db.commit()
+        await db.close()
+        return {
+            "connected": True,
+            "charges_enabled": ce,
+            "payouts_enabled": bool(acct.get("payouts_enabled")),
+            "details_submitted": bool(acct.get("details_submitted")),
+            "account_id": acct_id,
+        }
+    except Exception as e:
+        await db.close()
+        log.warning("stripe status error: %s", e)
+        return {"connected": True, "charges_enabled": False, "details_submitted": False,
+                "account_id": acct_id, "error": str(e)}
+
+
 @app.post("/api/stripe/payment-intent")
 async def stripe_payment_intent(
     request: Request
@@ -3606,11 +3690,17 @@ async def stripe_payment_intent(
     if not config.STRIPE_SECRET_KEY:
         raise HTTPException(400, "Stripe not configured")
     user, db = await _auth(request)
-    _, group = await _active_group_row(user, db)
+    gid, group = await _active_group_row(user, db)
     opts = _payment_options_payload(group, stripe_configured=True)
     if not opts["card_enabled"]:
         await db.close()
+        if opts.get("card_setup_pending"):
+            raise HTTPException(400, "Card top-up isn’t ready yet — your group's trustee is still connecting Stripe")
         raise HTTPException(400, "Card payments are not enabled for this group")
+    acct_id = group.get("stripe_account_id")
+    if not acct_id:
+        await db.close()
+        raise HTTPException(400, "Card top-up isn’t available — the group trustee hasn’t connected Stripe")
     body = await request.json()
     amount = round(float(body.get("amount", 0)), 2)
     if not is_valid_card_deposit_amount(amount):
@@ -3618,20 +3708,27 @@ async def stripe_payment_intent(
         raise HTTPException(400, "Card amount must be one of: $25, $50, $100, $250")
     charge_amount = amount
     try:
-        customer_id = await _get_or_create_customer(user, db)
+        # Direct charge on the trustee's connected account: funds and Stripe fees
+        # settle on the trustee; the platform takes no application fee.
         pi = stripe.PaymentIntent.create(
             amount=int(charge_amount * 100),
             currency=config.CURRENCY.lower(),
-            customer=customer_id,
             automatic_payment_methods={"enabled": True},
             metadata={
                 "user_id": str(user["telegram_id"]),
                 "telegram_id": str(user["telegram_id"]),
+                "group_id": str(gid),
                 "deposit_amount": str(amount),
             },
+            stripe_account=acct_id,
         )
         await db.close()
-        return {"client_secret": pi.client_secret, "charge_amount": charge_amount, "deposit_amount": amount}
+        return {
+            "client_secret": pi.client_secret,
+            "charge_amount": charge_amount,
+            "deposit_amount": amount,
+            "stripe_account": acct_id,
+        }
     except Exception as e:
         await db.close()
         log.exception("payment-intent error: %s", e)
@@ -3657,6 +3754,11 @@ async def stripe_create_subscription(
     if not opts["card_enabled"]:
         await db.close()
         raise HTTPException(400, "Card payments are not enabled for this group")
+    if group and group.get("stripe_account_id"):
+        # Member funds route to the trustee's connected account, which uses
+        # one-time direct charges. Recurring auto top-up isn't offered there.
+        await db.close()
+        raise HTTPException(400, "Monthly auto top-up isn’t available for this group — use a one-time card top-up")
     body = await request.json()
     amount = round(float(body.get("amount", 0)), 2)
     if not is_valid_card_deposit_amount(amount):
@@ -3807,15 +3909,19 @@ async def stripe_webhook(request: Request):
             # Part of a subscription invoice — handled by invoice.payment_succeeded
             await db.close()
             return {"ok": True}
-        user_id = int(pi.get("metadata", {}).get("user_id", 0))
+        meta = pi.get("metadata", {})
+        user_id = int(meta.get("user_id", 0))
         if user_id:
             # Credit deposit_amount (original, pre-fee); fall back to amount_received for legacy PIs
-            deposit_amount = float(pi.get("metadata", {}).get("deposit_amount") or 0)
+            deposit_amount = float(meta.get("deposit_amount") or 0)
             amount = deposit_amount if deposit_amount else pi["amount_received"] / 100
+            group_id = int(meta.get("group_id") or 0) or None
+            # Direct charges on a connected account arrive with event["account"] set.
+            note = "Stripe card top-up (group account)" if event.get("account") else "Stripe one-time payment"
             await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, user_id))
             await db.execute(
-                "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-                (user_id, "deposit", amount, "Stripe one-time payment"),
+                "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+                (user_id, "deposit", amount, note, group_id),
             )
             await db.commit()
 
