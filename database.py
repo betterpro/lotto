@@ -255,6 +255,11 @@ async def get_user_by_google_sub(db, sub):
         return await c.fetchone()
 
 
+async def get_user_by_apple_sub(db, sub):
+    async with db.execute("SELECT * FROM users WHERE apple_sub = ?", (sub,)) as c:
+        return await c.fetchone()
+
+
 async def create_web_user(db, full_name, *, auth_email=None, password_hash=None,
                           google_sub=None, apple_sub=None, auth_provider="email",
                           photo_url=None, group_id=None):

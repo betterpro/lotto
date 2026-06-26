@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Logo from '../components/Logo.jsx'
 import { api } from '../api.js'
 import { INVITE_SLUG_KEY } from '../routes.js'
@@ -7,17 +8,84 @@ function pendingInviteSlug() {
   try { return localStorage.getItem(INVITE_SLUG_KEY) || undefined } catch { return undefined }
 }
 
+function oauthClientIds() {
+  return {
+    google: import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.GOOGLE_CLIENT_ID || '',
+    apple: import.meta.env.VITE_APPLE_CLIENT_ID || import.meta.env.APPLE_CLIENT_ID || '',
+  }
+}
+
+function loadScript(id, src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById(id)
+    if (existing) {
+      if (existing.dataset.loaded === '1') resolve()
+      else existing.addEventListener('load', () => resolve(), { once: true })
+      return
+    }
+    const script = document.createElement('script')
+    script.id = id
+    script.src = src
+    script.async = true
+    script.defer = true
+    script.onload = () => { script.dataset.loaded = '1'; resolve() }
+    script.onerror = reject
+    document.head.appendChild(script)
+  })
+}
+
+function GoogleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+    </svg>
+  )
+}
+
+function AppleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M17.05 20.28c-.98.95-2.05 1.88-3.71 1.88-1.66 0-2.19-.99-4.09-.99-1.9 0-2.49.96-4.08.99-1.58.03-2.78-1.41-3.76-2.36C2.79 17.25 1.14 12.45 3.07 9.3c.96-1.66 2.7-2.71 4.58-2.74 1.8-.03 3.5 1.2 4.09 1.2.59 0 2.4-1.48 4.05-1.26.69.03 2.63.28 3.87 2.1-3.25 1.77-2.73 6.38.52 7.87-.63 1.62-1.45 3.23-2.83 4.81zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
+    </svg>
+  )
+}
+
 export default function Login({ onLogin }) {
   const widgetRef = useRef(null)
   const googleRef = useRef(null)
   const botUsername = import.meta.env.VITE_BOT_USERNAME
 
-  const [mode, setMode] = useState('login') // 'login' | 'signup'
+  const [mode, setMode] = useState('signup') // 'login' | 'signup'
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [showGoogle, setShowGoogle] = useState(!!oauthClientIds().google)
+  const [showApple, setShowApple] = useState(!!oauthClientIds().apple)
+  const [googleReady, setGoogleReady] = useState(false)
+  const [appleReady, setAppleReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadAuthConfig() {
+      let { google: googleId, apple: appleId } = oauthClientIds()
+      try {
+        const cfg = await api.auth.config()
+        if (!googleId) googleId = cfg.google_client_id || ''
+        if (!appleId) appleId = cfg.apple_client_id || ''
+      } catch { /* API may be down; keep env-based ids */ }
+      if (!cancelled) {
+        setShowGoogle(!!googleId)
+        setShowApple(!!appleId)
+      }
+    }
+    loadAuthConfig()
+    return () => { cancelled = true }
+  }, [])
 
   // ── Telegram Login Widget ────────────────────────────────────────────────
   useEffect(() => {
@@ -62,24 +130,29 @@ export default function Login({ onLogin }) {
 
   // ── Google Identity Services button ──────────────────────────────────────
   useEffect(() => {
+    if (!showGoogle) return
     let cancelled = false
 
     async function mountGoogle() {
-      let clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+      let clientId = oauthClientIds().google
       if (!clientId) {
         try {
           const cfg = await api.auth.config()
-          clientId = cfg.google_client_id
+          clientId = cfg.google_client_id || ''
         } catch { /* ignore */ }
       }
       if (cancelled || !clientId || !googleRef.current) return
 
       const handleCredential = async (resp) => {
+        setError('')
+        setBusy(true)
         try {
           await api.auth.google({ id_token: resp.credential, invite_slug: pendingInviteSlug() })
           if (!cancelled) onLogin()
         } catch (e) {
           setError(e.message || 'Google sign-in failed')
+        } finally {
+          if (!cancelled) setBusy(false)
         }
       }
 
@@ -88,30 +161,79 @@ export default function Login({ onLogin }) {
         window.google.accounts.id.initialize({ client_id: clientId, callback: handleCredential })
         googleRef.current.innerHTML = ''
         window.google.accounts.id.renderButton(googleRef.current, {
-          theme: 'outline', size: 'large', shape: 'pill', width: 280, text: 'continue_with',
+          theme: 'outline', size: 'large', shape: 'pill', width: 320, text: 'continue_with',
         })
+        if (!cancelled) setGoogleReady(true)
       }
 
-      if (window.google?.accounts?.id) {
-        render()
-      } else {
-        const existing = document.getElementById('gsi-script')
-        if (existing) {
-          existing.addEventListener('load', render, { once: true })
-        } else {
-          const script = document.createElement('script')
-          script.id = 'gsi-script'
-          script.src = 'https://accounts.google.com/gsi/client'
-          script.async = true
-          script.defer = true
-          script.onload = render
-          document.head.appendChild(script)
-        }
-      }
+      try {
+        await loadScript('gsi-script', 'https://accounts.google.com/gsi/client')
+        if (!cancelled) render()
+      } catch { /* ignore */ }
     }
 
     mountGoogle()
     return () => { cancelled = true }
+  }, [onLogin, showGoogle])
+
+  // ── Sign in with Apple ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!showApple) return
+    let cancelled = false
+
+    async function mountApple() {
+      let clientId = oauthClientIds().apple
+      if (!clientId) {
+        try {
+          const cfg = await api.auth.config()
+          clientId = cfg.apple_client_id || ''
+        } catch { /* ignore */ }
+      }
+      if (cancelled || !clientId || !window.AppleID?.auth) return
+
+      window.AppleID.auth.init({
+        clientId,
+        scope: 'name email',
+        redirectURI: `${window.location.origin}/login`,
+        usePopup: true,
+      })
+      if (!cancelled) setAppleReady(true)
+    }
+
+    loadScript(
+      'appleid-script',
+      'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js',
+    )
+      .then(() => { if (!cancelled) mountApple() })
+      .catch(() => { /* ignore */ })
+
+    return () => { cancelled = true }
+  }, [showApple])
+
+  const signInWithApple = useCallback(async () => {
+    if (!window.AppleID?.auth) return
+    setError('')
+    setBusy(true)
+    try {
+      const data = await window.AppleID.auth.signIn()
+      const u = data.user
+      const fullName = u?.name
+        ? [u.name.firstName, u.name.lastName].filter(Boolean).join(' ')
+        : undefined
+      await api.auth.apple({
+        id_token: data.authorization.id_token,
+        invite_slug: pendingInviteSlug(),
+        name: fullName,
+        email: u?.email,
+      })
+      onLogin()
+    } catch (e) {
+      if (e?.error !== 'popup_closed_by_user') {
+        setError(e.message || 'Apple sign-in failed')
+      }
+    } finally {
+      setBusy(false)
+    }
   }, [onLogin])
 
   async function submitEmail(e) {
@@ -134,73 +256,94 @@ export default function Login({ onLogin }) {
   }
 
   const tgBot = botUsername ?? 'LottoCheeBot'
+  const showOAuth = showGoogle || showApple
 
   return (
-    <div style={{
-      minHeight: 'var(--app-h)', background: '#fff', display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box',
-      padding: 'calc(28px + var(--sat)) calc(24px + var(--sar)) calc(28px + var(--sab)) calc(24px + var(--sal))',
-      gap: 20, textAlign: 'center',
-    }}>
-      <Logo size={60} wordmark ink fontSize={38} />
+    <div className="center-screen" style={{ gap: 20 }}>
+      <Link to="/" style={{ textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
+        <Logo size={60} wordmark fontSize={38} />
+      </Link>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <span style={{ fontSize: 23, fontWeight: 800, color: '#111' }}>
+        <span style={{ fontSize: 23, fontWeight: 800, color: 'var(--tx)' }}>
           {mode === 'signup' ? 'Create your account' : 'Welcome back'}
         </span>
-        <span style={{ fontSize: 15, color: '#666', lineHeight: 1.5, maxWidth: 320 }}>
+        <span style={{ fontSize: 15, color: 'var(--tx-2)', lineHeight: 1.5, maxWidth: 320 }}>
           Pool tickets with friends and share the winnings.
         </span>
       </div>
+
+      {showOAuth && (
+        <div className="oauth-stack">
+          {showGoogle && (
+            <div className={`oauth-btn${googleReady ? '' : ' oauth-btn-pending'}`}>
+              <GoogleIcon />
+              <span>Continue with Google</span>
+              <div ref={googleRef} className="oauth-btn-hit" aria-hidden="true" />
+            </div>
+          )}
+          {showApple && (
+            <button
+              type="button"
+              className="oauth-btn"
+              onClick={signInWithApple}
+              disabled={busy || !appleReady}
+            >
+              <AppleIcon />
+              <span>Continue with Apple</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {showOAuth && (
+        <div className="oauth-divider">
+          <div /> or <div />
+        </div>
+      )}
 
       <form onSubmit={submitEmail} style={{ width: '100%', maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
         {mode === 'signup' && (
           <input
             type="text" placeholder="Name" value={name} autoComplete="name"
-            onChange={e => setName(e.target.value)} style={inputStyle}
+            onChange={e => setName(e.target.value)} className="input"
           />
         )}
         <input
           type="email" placeholder="Email" value={email} autoComplete="email" required
-          onChange={e => setEmail(e.target.value)} style={inputStyle}
+          onChange={e => setEmail(e.target.value)} className="input"
         />
         <input
           type="password" placeholder="Password" value={password} required
           autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-          onChange={e => setPassword(e.target.value)} style={inputStyle}
+          onChange={e => setPassword(e.target.value)} className="input"
         />
-        {error && <span style={{ fontSize: 14, color: 'var(--danger, #d33)' }}>{error}</span>}
-        <button type="submit" className="primary" disabled={busy} style={{ padding: '12px 16px', fontSize: 16, fontWeight: 700, borderRadius: 12 }}>
-          {busy ? 'Please wait…' : (mode === 'signup' ? 'Sign up' : 'Log in')}
+        {error && <span style={{ fontSize: 14, color: 'var(--danger)' }}>{error}</span>}
+        <button type="submit" className="btn btn-primary btn-block" disabled={busy}>
+          {busy ? 'Please wait…' : (mode === 'signup' ? 'Sign up with email' : 'Log in with email')}
         </button>
       </form>
 
       <button
         type="button"
         onClick={() => { setError(''); setMode(mode === 'signup' ? 'login' : 'signup') }}
-        style={{ background: 'none', border: 'none', color: '#0a84ff', fontSize: 15, cursor: 'pointer' }}
+        style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 15, cursor: 'pointer' }}
       >
         {mode === 'signup' ? 'Already have an account? Log in' : "New here? Create an account"}
       </button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', maxWidth: 320, color: '#bbb', fontSize: 13 }}>
-        <div style={{ flex: 1, height: 1, background: '#eee' }} /> or <div style={{ flex: 1, height: 1, background: '#eee' }} />
+      <div className="oauth-divider">
+        <div /> or <div />
       </div>
 
-      <div ref={googleRef} style={{ minHeight: 40, display: 'flex', justifyContent: 'center' }} />
       <div ref={widgetRef} style={{ minHeight: 40 }} />
 
       <a
         href={`https://t.me/${tgBot}?startapp=open`}
-        style={{ fontSize: 14, color: '#888', textDecoration: 'none' }}
+        style={{ fontSize: 14, color: 'var(--tx-2)', textDecoration: 'none', cursor: 'pointer' }}
       >
         Or open in Telegram →
       </a>
-      <span style={{ fontSize: 13, color: '#bbb' }}>lottochee.com · with love and hope</span>
+      <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>lottochee.com · with love and hope</span>
     </div>
   )
-}
-
-const inputStyle = {
-  padding: '12px 14px', fontSize: 16, borderRadius: 12, border: '1px solid #ddd',
-  outline: 'none', width: '100%', boxSizing: 'border-box', background: '#fafafa',
 }

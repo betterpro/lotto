@@ -85,6 +85,7 @@ export const api = {
     signup:        (data) => req('POST', '/api/auth/signup', data),
     login:         (data) => req('POST', '/api/auth/login', data),
     google:        (data) => req('POST', '/api/auth/google', data),
+    apple:         (data) => req('POST', '/api/auth/apple', data),
     logout:        () => req('POST', '/api/auth/logout'),
   },
   me:           ()             => req('GET',  '/api/me'),

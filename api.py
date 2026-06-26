@@ -24,6 +24,8 @@ import stripe
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException, Request
 import httpx
+import jwt
+from jwt import PyJWKClient
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -98,6 +100,7 @@ from database import (
     get_user,
     get_user_by_auth_email,
     get_user_by_google_sub,
+    get_user_by_apple_sub,
     merge_users,
 )
 from web_auth import (
@@ -1169,6 +1172,7 @@ async def api_auth_config():
     return {
         "bot_username": _bot_username,
         "google_client_id": config.GOOGLE_CLIENT_ID or None,
+        "apple_client_id": config.APPLE_CLIENT_ID or None,
     }
 
 
@@ -1224,6 +1228,34 @@ async def _verify_google_id_token(token: str) -> dict | None:
         "name": (data.get("name") or "").strip(),
         "picture": data.get("picture"),
     }
+
+
+_apple_jwk_client: PyJWKClient | None = None
+
+
+def _verify_apple_id_token(token: str) -> dict | None:
+    """Validate a Sign in with Apple ID token; return claims or None."""
+    global _apple_jwk_client
+    if not config.APPLE_CLIENT_ID or not token:
+        return None
+    try:
+        if _apple_jwk_client is None:
+            _apple_jwk_client = PyJWKClient("https://appleid.apple.com/auth/keys")
+        signing_key = _apple_jwk_client.get_signing_key_from_jwt(token)
+        data = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=config.APPLE_CLIENT_ID,
+            issuer="https://appleid.apple.com",
+        )
+    except jwt.PyJWTError:
+        return None
+    sub = data.get("sub")
+    if not sub:
+        return None
+    email = (data.get("email") or "").strip().lower()
+    return {"sub": sub, "email": email}
 
 
 @app.post("/api/auth/telegram")
@@ -1333,6 +1365,41 @@ async def api_auth_google(request: Request):
                 auth_email=claims["email"] or None,
                 google_sub=claims["sub"], auth_provider="google",
                 photo_url=claims.get("picture"),
+            )
+            invite_slug = (body.get("invite_slug") or "").strip().lower()
+            if invite_slug:
+                await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
+    finally:
+        await db.close()
+    return _session_response(user["telegram_id"])
+
+
+@app.post("/api/auth/apple")
+async def api_auth_apple(request: Request):
+    body = await request.json()
+    claims = _verify_apple_id_token(body.get("id_token") or "")
+    if claims is None:
+        raise HTTPException(401, "Invalid Apple sign-in")
+    name = (body.get("name") or "").strip()
+    email = claims["email"] or (body.get("email") or "").strip().lower()
+    db = await get_db()
+    try:
+        user = await get_user_by_apple_sub(db, claims["sub"])
+        if user is None and email:
+            existing = await get_user_by_auth_email(db, email)
+            if existing:
+                await db.execute(
+                    "UPDATE users SET apple_sub=? WHERE telegram_id=?",
+                    (claims["sub"], existing["telegram_id"]),
+                )
+                await db.commit()
+                user = await get_user(db, existing["telegram_id"])
+        if user is None:
+            display = name or (email.split("@")[0] if email else "Member")
+            user = await create_web_user(
+                db, display,
+                auth_email=email or None,
+                apple_sub=claims["sub"], auth_provider="apple",
             )
             invite_slug = (body.get("invite_slug") or "").strip().lower()
             if invite_slug:

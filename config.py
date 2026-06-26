@@ -78,6 +78,8 @@ ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
 GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
 
+APPLE_CLIENT_ID: str = os.getenv("APPLE_CLIENT_ID", "")
+
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 
 SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
