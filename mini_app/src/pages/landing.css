@@ -868,3 +868,25 @@
 
 /* reveal-on-scroll disabled (no JS observer) */
 .lcl .reveal{opacity:1 !important;transform:none !important;transition:none !important}
+
+/* ════════════════════ PLANS ════════════════════ */
+.lcl .plans-grid{ display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:40px }
+.lcl .plan{ position:relative; background:var(--surface); border:1px solid var(--line-2); border-radius:20px; padding:28px 26px }
+.lcl .plan.feature{ border-color:var(--accent-line);
+  background:linear-gradient(180deg, var(--accent-soft), transparent 55%), var(--surface) }
+.lcl .plan-badge{ position:absolute; top:18px; right:18px; font:600 12px/1 var(--ui);
+  color:var(--accent); background:var(--accent-soft); border:1px solid var(--accent-line);
+  padding:6px 11px; border-radius:999px }
+.lcl .plan-name{ font:700 13px/1 var(--ui); letter-spacing:.06em; text-transform:uppercase; color:var(--tx-2) }
+.lcl .plan-price{ display:flex; align-items:baseline; gap:7px; margin:14px 0 4px; font-family:var(--display) }
+.lcl .plan-price .amt{ font-size:46px; font-weight:800; letter-spacing:-.02em; color:var(--tx) }
+.lcl .plan-price .per{ font-size:15px; color:var(--tx-2); font-weight:600 }
+.lcl .plan-sub{ color:var(--tx-2); font-size:15px; line-height:1.5; margin-bottom:20px }
+.lcl .plan-feats{ list-style:none; display:flex; flex-direction:column; gap:12px }
+.lcl .plan-feats li{ display:flex; gap:10px; align-items:flex-start; font-size:15px; color:var(--tx-1); line-height:1.45 }
+.lcl .plan-feats svg{ flex:0 0 auto; margin-top:2px; color:var(--accent) }
+.lcl .plan-lock{ display:flex; gap:13px; align-items:flex-start; margin-top:22px;
+  padding:16px 18px; border-radius:14px; background:var(--surface-2); border:1px solid var(--line-2);
+  color:var(--tx-2); font-size:14px; line-height:1.55 }
+.lcl .plan-lock svg{ flex:0 0 auto; color:var(--gold); margin-top:1px }
+@media (max-width:720px){ .lcl .plans-grid{ grid-template-columns:1fr } }

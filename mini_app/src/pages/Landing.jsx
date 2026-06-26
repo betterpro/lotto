@@ -11,6 +11,9 @@ const TgIcon = () => (
 const WebIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18" /></svg>
 )
+const Check = () => (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><path d="M20 6 9 17l-5-5" /></svg>
+)
 
 export default function Landing() {
   const navigate = useNavigate()
@@ -29,6 +32,7 @@ export default function Landing() {
             <a href="#how">How it works</a>
             <a href="#groups">Groups</a>
             <a href="#odds">The odds</a>
+            <a href="#plans">Plans</a>
             <a href="#trust">Transparency</a>
             <a href="#faq">FAQ</a>
           </div>
@@ -325,6 +329,44 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* ── PLANS ── */}
+      <section className="sec" id="plans">
+        <div className="wrap">
+          <div className="sec-head">
+            <span className="eyebrow">Plans</span>
+            <h2 className="h-sec">Two ways to run a group.</h2>
+            <p className="lede">Every group picks one plan when it's created. Choose the model that fits how you play — it's set out in your group agreement.</p>
+          </div>
+          <div className="plans-grid">
+            <div className="plan">
+              <div className="plan-name">Monthly subscription</div>
+              <div className="plan-price"><span className="amt">$6.99</span><span className="per">/ month</span></div>
+              <div className="plan-sub">A simple flat fee for your group — and the platform takes no cut of any prize.</div>
+              <ul className="plan-feats">
+                <li><Check />Run unlimited rounds across Lotto&nbsp;Max, 6/49 &amp; Daily&nbsp;Grand</li>
+                <li><Check />Keep 100% of every win — no share taken</li>
+                <li><Check />Best for groups that play often</li>
+              </ul>
+            </div>
+            <div className="plan feature">
+              <span className="plan-badge">No monthly fee</span>
+              <div className="plan-name">Big-prize share</div>
+              <div className="plan-price"><span className="amt">5%</span><span className="per">of wins over $1,000</span></div>
+              <div className="plan-sub">Nothing to pay up front — the platform only shares in a big win.</div>
+              <ul className="plan-feats">
+                <li><Check />$0 monthly — pay nothing until the group wins big</li>
+                <li><Check />When a round wins more than $1,000, the platform may claim a 5% share</li>
+                <li><Check />Spelled out in your group's signed agreement</li>
+              </ul>
+            </div>
+          </div>
+          <div className="plan-lock">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="10" width="16" height="11" rx="2.5" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
+            <span>Your group chooses a plan once, when it's created. To keep things fair for every member, the choice is written into your group agreement and can't be changed later.</span>
+          </div>
+        </div>
+      </section>
+
       {/* ── FAQ ── */}
       <section className="sec" id="faq">
         <div className="wrap">
@@ -403,6 +445,7 @@ export default function Landing() {
               <ul>
                 <li><a href="#how">How it works</a></li>
                 <li><a href="#odds">The odds</a></li>
+                <li><a href="#plans">Plans</a></li>
                 <li><a href="#trust">Transparency</a></li>
                 <li><a onClick={go}>Open the app</a></li>
               </ul>
