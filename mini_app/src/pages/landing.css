@@ -224,7 +224,7 @@
 
 .lcl .nav-cta .btn{ white-space:nowrap; padding:12px 18px }
 
-.lcl .nav-login{ font-size:14.5px; color:var(--tx-1); font-weight:500; white-space:nowrap }
+.lcl .nav-login{ font-size:14.5px; color:var(--tx-1); font-weight:500; white-space:nowrap; cursor:pointer }
 
 .lcl .nav-login:hover{ color:#fff }
 
@@ -238,14 +238,19 @@
 }
 
 .lcl .hero h1.display{
-  font-size:clamp(45px,6.4vw,80px);
-  height:140px;
-  line-height:55px;
-  letter-spacing:0;
-  text-align:center;
+  font-size:clamp(34px, calc(1.25rem + 3.5vw), 55px);
+  line-height:1.08;
+  letter-spacing:-.03em;
+  text-align:left;
+  text-wrap:balance;
+  max-width:13.5em;
 }
 
-.lcl .hero .accentword{ color:var(--accent) }
+.lcl .hero .accentword{
+  color:var(--accent);
+  display:block;
+  margin-top:.06em;
+}
 
 .lcl .hero-eyebrow-row{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:24px }
 
@@ -856,6 +861,14 @@
   .lcl{ font-size:16px }
 
   .lcl .nav-links{ display:none }
+
+  .lcl .hero h1.display{
+    font-size:clamp(32px, calc(.85rem + 7.2vw), 44px);
+    line-height:1.12;
+    max-width:none;
+  }
+
+  .lcl .hero-eyebrow-row{ margin-bottom:18px }
 
   .lcl .hero-stats{
     flex-wrap:nowrap;
