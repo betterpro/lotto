@@ -480,17 +480,11 @@ export default function Home({ user, onUserUpdate }) {
   const [liveRounds, setLiveRounds] = useState(undefined)
   const [roundIndex, setRoundIndex] = useState(0)
   const [lastDrawn, setLastDrawn] = useState(null)
-  const [sub, setSub]       = useState(null)
   const [join, setJoin]             = useState(false)
   const showToast = useToast()
   const navigate = useNavigate()
 
   const round = liveRounds?.[roundIndex] ?? null
-
-  // Active group name for the Status tile (mirrors GroupsSections' derivation).
-  const _groups = user.groups?.length ? user.groups : (user.group ? [user.group] : [])
-  const _activeId = user.active_group_id ?? user.group?.id ?? _groups[0]?.id
-  const activeGroupName = (_groups.find(g => g.id === _activeId) || _groups[0])?.name || 'No group yet'
 
   function reloadLive() {
     return api.rounds.open().then(d => {
@@ -507,7 +501,6 @@ export default function Home({ user, onUserUpdate }) {
         ['REVEALED', 'WON', 'LOST', 'DRAWN'].includes(r.display_status))
       setLastDrawn(drawn || null)
     }).catch(() => {})
-    api.stripe.subscription().then(r => setSub(r.subscription)).catch(() => {})
   }, [])
 
   const myShares  = round?.my_stake ? Math.round(round.my_stake / (round.price_per_share || 5)) : 0
@@ -522,48 +515,43 @@ export default function Home({ user, onUserUpdate }) {
 
   return (
     <div className="tab-content">
-      {trusteeName && (
-        <div style={{
-          margin: '8px 16px 0', padding: '12px 14px', borderRadius: 12,
-          background: 'linear-gradient(135deg, rgba(245,199,59,.12), rgba(46,166,255,.08))',
-          border: '.5px solid var(--hairline-2)',
-          display: 'flex', alignItems: 'center', gap: 12,
-        }}>
-          <TelegramAvatar user={user.trustee} size={44} />
+      <div className="home-trustee">
+        {trusteeName ? (
+          <>
+            <TelegramAvatar user={user.trustee} size={44} />
+            <div className="col gap-2 grow" style={{ minWidth: 0 }}>
+              <span className="home-trustee-label">Your trustee</span>
+              <span className="home-trustee-name">{trusteeName}</span>
+              {groupName && (
+                <span className="home-trustee-group">{groupName}</span>
+              )}
+            </div>
+          </>
+        ) : (
           <div className="col gap-2 grow" style={{ minWidth: 0 }}>
-            <span style={{ fontSize: 12, color: 'var(--tx-2)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
-              Your trustee
-            </span>
-            <span style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.2 }}>{trusteeName}</span>
-            {groupName && (
-              <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>{groupName}</span>
-            )}
+            <span className="home-trustee-label">Your group</span>
+            <span className="home-trustee-name">{groupName || 'Lotto Chee'}</span>
           </div>
-        </div>
-      )}
-
-      {/* Greeting + balance */}
-      <div style={{ padding: '12px 16px 8px', display: 'flex', alignItems: 'center', gap: 12 }}>
-        <TelegramAvatar user={user} size={40} />
-        <div className="col grow gap-4">
-          <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Welcome back</span>
-          <span style={{ fontSize: 16, fontWeight: 600 }}>{user.full_name || user.username || 'Player'}</span>
-        </div>
-        <div className="chip chip-money" onClick={() => navigate('/topup')} style={{ cursor: 'pointer', gap: 6 }}>
+        )}
+        <button
+          type="button"
+          className="home-trustee-balance chip chip-money"
+          onClick={() => navigate('/topup')}
+        >
           <WalletIcon width={13} height={13} />
           <span className="mono">{fmtCAD(user.credit ?? 0)}</span>
-        </div>
+        </button>
       </div>
 
       {/* Live rounds — swipe deck */}
       {liveRounds === undefined ? (
         <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
       ) : liveRounds.length === 0 ? (
-        <div style={{ padding: '8px 16px' }}>
-          <div className="jackpot" style={{ textAlign: 'center', padding: '40px 18px' }}>
-            <div style={{ fontSize: 40, marginBottom: 10 }}>🎰</div>
-            <p style={{ fontWeight: 600, marginBottom: 4 }}>No active round</p>
-            <p style={{ fontSize: 14, color: 'var(--tx-2)' }}>The trustee will open one soon!</p>
+        <div className="home-empty-wrap">
+          <div className="jackpot home-empty">
+            <div className="home-empty-icon">🎰</div>
+            <p className="home-empty-title">No active round</p>
+            <p className="home-empty-sub">The trustee will open one soon!</p>
           </div>
         </div>
       ) : (
@@ -618,29 +606,6 @@ export default function Home({ user, onUserUpdate }) {
           </div>
         </>
       )}
-
-      {/* Stats grid */}
-      <div className="section"><div className="label">Your stats</div></div>
-      <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <div className="stat">
-          <span className="k">Wallet</span>
-          <span className="v">{fmtCAD(user.credit ?? 0)}</span>
-          <span className="delta" style={{ color: 'var(--tg)', cursor: 'pointer' }}
-            onClick={() => navigate('/topup')}>Tap to top up →</span>
-        </div>
-        <div className="stat">
-          <span className="k">Status</span>
-          <span className="v" style={{ fontSize: 17 }}>{user.is_group_trustee ? 'Trustee' : 'Member'}</span>
-          <span className="delta">{activeGroupName}</span>
-        </div>
-        {sub && (
-          <div className="stat" style={{ gridColumn: 'span 2' }}>
-            <span className="k">Monthly plan</span>
-            <span className="v" style={{ color: 'var(--money)', fontSize: 19 }}>${sub.amount}/mo</span>
-            {sub.next_billing && <span className="delta">Next charge: {sub.next_billing}</span>}
-          </div>
-        )}
-      </div>
 
       <GroupsSections
         user={user}

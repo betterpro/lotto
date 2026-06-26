@@ -1,37 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Logo from '../components/Logo.jsx'
-import { api } from '../api.js'
+import { api, setAccessToken } from '../api.js'
+import { initAuthSession } from '../authSession.js'
 import { INVITE_SLUG_KEY } from '../routes.js'
 
 function pendingInviteSlug() {
   try { return localStorage.getItem(INVITE_SLUG_KEY) || undefined } catch { return undefined }
-}
-
-function oauthClientIds() {
-  return {
-    google: import.meta.env.VITE_GOOGLE_CLIENT_ID || import.meta.env.GOOGLE_CLIENT_ID || '',
-    apple: import.meta.env.VITE_APPLE_CLIENT_ID || import.meta.env.APPLE_CLIENT_ID || '',
-  }
-}
-
-function loadScript(id, src) {
-  return new Promise((resolve, reject) => {
-    const existing = document.getElementById(id)
-    if (existing) {
-      if (existing.dataset.loaded === '1') resolve()
-      else existing.addEventListener('load', () => resolve(), { once: true })
-      return
-    }
-    const script = document.createElement('script')
-    script.id = id
-    script.src = src
-    script.async = true
-    script.defer = true
-    script.onload = () => { script.dataset.loaded = '1'; resolve() }
-    script.onerror = reject
-    document.head.appendChild(script)
-  })
 }
 
 function GoogleIcon() {
@@ -55,42 +30,50 @@ function AppleIcon() {
 
 export default function Login({ onLogin }) {
   const widgetRef = useRef(null)
-  const googleRef = useRef(null)
   const botUsername = import.meta.env.VITE_BOT_USERNAME
+  const oauthHandled = useRef(false)
 
-  const [mode, setMode] = useState('signup') // 'login' | 'signup'
+  const [mode, setMode] = useState('signup')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [showGoogle, setShowGoogle] = useState(!!oauthClientIds().google)
-  const [showApple, setShowApple] = useState(!!oauthClientIds().apple)
-  const [googleReady, setGoogleReady] = useState(false)
-  const [appleReady, setAppleReady] = useState(false)
+  const [supabaseReady, setSupabaseReady] = useState(false)
+  const [supabase, setSupabase] = useState(null)
+
+  const completeAuth = useCallback(async (client) => {
+    const { data: { session } } = await client.auth.getSession()
+    if (!session?.access_token) throw new Error('No active session')
+    setAccessToken(session.access_token)
+    await api.auth.sync({ invite_slug: pendingInviteSlug() })
+    onLogin()
+  }, [onLogin])
 
   useEffect(() => {
     let cancelled = false
-    async function loadAuthConfig() {
-      let { google: googleId, apple: appleId } = oauthClientIds()
+    initAuthSession().then(async (client) => {
+      if (cancelled) return
+      setSupabase(client)
+      setSupabaseReady(!!client)
+      if (!client || oauthHandled.current) return
+      const { data: { session } } = await client.auth.getSession()
+      if (!session) return
+      oauthHandled.current = true
+      setBusy(true)
       try {
-        const cfg = await api.auth.config()
-        if (!googleId) googleId = cfg.google_client_id || ''
-        if (!appleId) appleId = cfg.apple_client_id || ''
-      } catch { /* API may be down; keep env-based ids */ }
-      if (!cancelled) {
-        setShowGoogle(!!googleId)
-        setShowApple(!!appleId)
+        await completeAuth(client)
+      } catch (e) {
+        setError(e.message || 'Could not finish sign-in')
+      } finally {
+        if (!cancelled) setBusy(false)
       }
-    }
-    loadAuthConfig()
+    })
     return () => { cancelled = true }
-  }, [])
+  }, [completeAuth])
 
-  // ── Telegram Login Widget ────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false
-
     window.onTelegramAuth = async (user) => {
       try {
         await api.auth.telegramLogin(user)
@@ -109,7 +92,6 @@ export default function Login({ onLogin }) {
         } catch { /* ignore */ }
       }
       if (cancelled || !username || !widgetRef.current) return
-
       widgetRef.current.innerHTML = ''
       const script = document.createElement('script')
       script.src = 'https://telegram.org/js/telegram-widget.js?22'
@@ -128,126 +110,51 @@ export default function Login({ onLogin }) {
     }
   }, [botUsername, onLogin])
 
-  // ── Google Identity Services button ──────────────────────────────────────
-  useEffect(() => {
-    if (!showGoogle) return
-    let cancelled = false
-
-    async function mountGoogle() {
-      let clientId = oauthClientIds().google
-      if (!clientId) {
-        try {
-          const cfg = await api.auth.config()
-          clientId = cfg.google_client_id || ''
-        } catch { /* ignore */ }
-      }
-      if (cancelled || !clientId || !googleRef.current) return
-
-      const handleCredential = async (resp) => {
-        setError('')
-        setBusy(true)
-        try {
-          await api.auth.google({ id_token: resp.credential, invite_slug: pendingInviteSlug() })
-          if (!cancelled) onLogin()
-        } catch (e) {
-          setError(e.message || 'Google sign-in failed')
-        } finally {
-          if (!cancelled) setBusy(false)
-        }
-      }
-
-      const render = () => {
-        if (cancelled || !window.google?.accounts?.id || !googleRef.current) return
-        window.google.accounts.id.initialize({ client_id: clientId, callback: handleCredential })
-        googleRef.current.innerHTML = ''
-        window.google.accounts.id.renderButton(googleRef.current, {
-          theme: 'outline', size: 'large', shape: 'pill', width: 320, text: 'continue_with',
-        })
-        if (!cancelled) setGoogleReady(true)
-      }
-
-      try {
-        await loadScript('gsi-script', 'https://accounts.google.com/gsi/client')
-        if (!cancelled) render()
-      } catch { /* ignore */ }
+  const signInWithOAuth = useCallback(async (provider) => {
+    if (!supabase) {
+      setError('Web sign-in is not configured yet')
+      return
     }
-
-    mountGoogle()
-    return () => { cancelled = true }
-  }, [onLogin, showGoogle])
-
-  // ── Sign in with Apple ───────────────────────────────────────────────────
-  useEffect(() => {
-    if (!showApple) return
-    let cancelled = false
-
-    async function mountApple() {
-      let clientId = oauthClientIds().apple
-      if (!clientId) {
-        try {
-          const cfg = await api.auth.config()
-          clientId = cfg.apple_client_id || ''
-        } catch { /* ignore */ }
-      }
-      if (cancelled || !clientId || !window.AppleID?.auth) return
-
-      window.AppleID.auth.init({
-        clientId,
-        scope: 'name email',
-        redirectURI: `${window.location.origin}/login`,
-        usePopup: true,
-      })
-      if (!cancelled) setAppleReady(true)
-    }
-
-    loadScript(
-      'appleid-script',
-      'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js',
-    )
-      .then(() => { if (!cancelled) mountApple() })
-      .catch(() => { /* ignore */ })
-
-    return () => { cancelled = true }
-  }, [showApple])
-
-  const signInWithApple = useCallback(async () => {
-    if (!window.AppleID?.auth) return
     setError('')
     setBusy(true)
     try {
-      const data = await window.AppleID.auth.signIn()
-      const u = data.user
-      const fullName = u?.name
-        ? [u.name.firstName, u.name.lastName].filter(Boolean).join(' ')
-        : undefined
-      await api.auth.apple({
-        id_token: data.authorization.id_token,
-        invite_slug: pendingInviteSlug(),
-        name: fullName,
-        email: u?.email,
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: `${window.location.origin}/login` },
       })
-      onLogin()
+      if (oauthError) throw oauthError
     } catch (e) {
-      if (e?.error !== 'popup_closed_by_user') {
-        setError(e.message || 'Apple sign-in failed')
-      }
-    } finally {
+      setError(e.message || `${provider} sign-in failed`)
       setBusy(false)
     }
-  }, [onLogin])
+  }, [supabase])
 
   async function submitEmail(e) {
     e.preventDefault()
+    if (!supabase) {
+      setError('Web sign-in is not configured yet')
+      return
+    }
     setError('')
     setBusy(true)
     try {
-      const invite_slug = pendingInviteSlug()
       if (mode === 'signup') {
-        await api.auth.signup({ name, email, password, invite_slug })
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { full_name: name.trim() || email.split('@')[0] } },
+        })
+        if (signUpError) throw signUpError
+        if (data.session) {
+          await completeAuth(supabase)
+        } else {
+          setError('Check your email to confirm your account, then log in.')
+        }
       } else {
-        await api.auth.login({ email, password })
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+        if (signInError) throw signInError
+        await completeAuth(supabase)
       }
-      onLogin()
     } catch (err) {
       setError(err.message || 'Something went wrong')
     } finally {
@@ -256,94 +163,92 @@ export default function Login({ onLogin }) {
   }
 
   const tgBot = botUsername ?? 'LottoCheeBot'
-  const showOAuth = showGoogle || showApple
+  const showOAuth = supabaseReady
 
   return (
-    <div className="center-screen" style={{ gap: 20 }}>
-      <Link to="/" style={{ textDecoration: 'none', color: 'inherit', cursor: 'pointer' }}>
-        <Logo size={60} wordmark fontSize={38} />
-      </Link>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <span style={{ fontSize: 23, fontWeight: 800, color: 'var(--tx)' }}>
-          {mode === 'signup' ? 'Create your account' : 'Welcome back'}
-        </span>
-        <span style={{ fontSize: 15, color: 'var(--tx-2)', lineHeight: 1.5, maxWidth: 320 }}>
-          Pool tickets with friends and share the winnings.
-        </span>
-      </div>
+    <div className="login-page">
+      <div className="login-panel">
+        <Link to="/" className="login-brand">
+          <Logo size={60} wordmark fontSize={38} />
+        </Link>
 
-      {showOAuth && (
-        <div className="oauth-stack">
-          {showGoogle && (
-            <div className={`oauth-btn${googleReady ? '' : ' oauth-btn-pending'}`}>
+        <div className="login-intro">
+          <h1 className="login-title">
+            {mode === 'signup' ? 'Create your account' : 'Welcome back'}
+          </h1>
+          <p className="login-intro-sub">
+            Pool tickets with friends and share the winnings.
+          </p>
+        </div>
+
+        {!supabaseReady && (
+          <p className="login-warn">
+            Email and social sign-in need Supabase Auth configured. Add SUPABASE_ANON_KEY to your environment.
+          </p>
+        )}
+
+        {showOAuth && (
+          <div className="oauth-stack login-oauth">
+            <button type="button" className="oauth-btn" disabled={busy} onClick={() => signInWithOAuth('google')}>
               <GoogleIcon />
               <span>Continue with Google</span>
-              <div ref={googleRef} className="oauth-btn-hit" aria-hidden="true" />
-            </div>
-          )}
-          {showApple && (
-            <button
-              type="button"
-              className="oauth-btn"
-              onClick={signInWithApple}
-              disabled={busy || !appleReady}
-            >
+            </button>
+            <button type="button" className="oauth-btn" disabled={busy} onClick={() => signInWithOAuth('apple')}>
               <AppleIcon />
               <span>Continue with Apple</span>
             </button>
-          )}
-        </div>
-      )}
+          </div>
+        )}
 
-      {showOAuth && (
-        <div className="oauth-divider">
+        {showOAuth && (
+          <div className="oauth-divider login-divider">
+            <div /> or <div />
+          </div>
+        )}
+
+        <form onSubmit={submitEmail} className="login-form">
+          {mode === 'signup' && (
+            <input
+              type="text" placeholder="Name" value={name} autoComplete="name"
+              onChange={e => setName(e.target.value)} className="input"
+            />
+          )}
+          <input
+            type="email" placeholder="Email" value={email} autoComplete="email" required
+            onChange={e => setEmail(e.target.value)} className="input"
+          />
+          <input
+            type="password" placeholder="Password" value={password} required minLength={8}
+            autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+            onChange={e => setPassword(e.target.value)} className="input"
+          />
+          {error && <span className="login-error">{error}</span>}
+          <button type="submit" className="btn btn-primary btn-block" disabled={busy || !supabaseReady}>
+            {busy ? 'Please wait…' : (mode === 'signup' ? 'Sign up with email' : 'Log in with email')}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          className="login-mode-toggle"
+          onClick={() => { setError(''); setMode(mode === 'signup' ? 'login' : 'signup') }}
+        >
+          {mode === 'signup' ? 'Already have an account? Log in' : "New here? Create an account"}
+        </button>
+
+        <div className="oauth-divider login-divider">
           <div /> or <div />
         </div>
-      )}
 
-      <form onSubmit={submitEmail} style={{ width: '100%', maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {mode === 'signup' && (
-          <input
-            type="text" placeholder="Name" value={name} autoComplete="name"
-            onChange={e => setName(e.target.value)} className="input"
-          />
-        )}
-        <input
-          type="email" placeholder="Email" value={email} autoComplete="email" required
-          onChange={e => setEmail(e.target.value)} className="input"
-        />
-        <input
-          type="password" placeholder="Password" value={password} required
-          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-          onChange={e => setPassword(e.target.value)} className="input"
-        />
-        {error && <span style={{ fontSize: 14, color: 'var(--danger)' }}>{error}</span>}
-        <button type="submit" className="btn btn-primary btn-block" disabled={busy}>
-          {busy ? 'Please wait…' : (mode === 'signup' ? 'Sign up with email' : 'Log in with email')}
-        </button>
-      </form>
+        <div ref={widgetRef} className="login-widget" />
 
-      <button
-        type="button"
-        onClick={() => { setError(''); setMode(mode === 'signup' ? 'login' : 'signup') }}
-        style={{ background: 'none', border: 'none', color: 'var(--tg)', fontSize: 15, cursor: 'pointer' }}
-      >
-        {mode === 'signup' ? 'Already have an account? Log in' : "New here? Create an account"}
-      </button>
-
-      <div className="oauth-divider">
-        <div /> or <div />
+        <div className="login-footer">
+          <a href={`https://t.me/${tgBot}?startapp=open`} className="login-telegram">
+            Or open in Telegram →
+          </a>
+          <span className="login-tagline">lottochee.com · with love and hope</span>
+        </div>
       </div>
-
-      <div ref={widgetRef} style={{ minHeight: 40 }} />
-
-      <a
-        href={`https://t.me/${tgBot}?startapp=open`}
-        style={{ fontSize: 14, color: 'var(--tx-2)', textDecoration: 'none', cursor: 'pointer' }}
-      >
-        Or open in Telegram →
-      </a>
-      <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>lottochee.com · with love and hope</span>
     </div>
   )
 }

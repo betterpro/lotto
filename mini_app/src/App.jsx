@@ -14,6 +14,7 @@ import NeedsInvite from './pages/NeedsInvite.jsx'
 import Login from './pages/Login.jsx'
 import Landing from './pages/Landing.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
+import { initAuthSession } from './authSession.js'
 import {
   INVITE_SLUG_KEY,
   PAGE_PATHS,
@@ -28,10 +29,10 @@ function TGHeader({ page }) {
   const logoSrc = page === 'home' ? HOME_LOGO_SRC : LOGO_SRC
   return (
     <header className="tg-header">
-      <img src={logoSrc} alt="Lotto Chee" style={{ height: 44, objectFit: 'contain' }} />
-      <div className="col" style={{ marginLeft: 10, gap: 1 }}>
-        <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>Play together,</span>
-        <span style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.25, color: 'var(--tx-1)' }}>dream bigger</span>
+      <img src={logoSrc} alt="Lotto Chee" className="tg-header-logo" />
+      <div className="col tg-header-tagline">
+        <span>Play together,</span>
+        <span>dream bigger</span>
       </div>
     </header>
   )
@@ -107,7 +108,7 @@ export default function App() {
 
   useEffect(() => {
     if (inviteSlug) localStorage.setItem(INVITE_SLUG_KEY, inviteSlug)
-    loadUser()
+    initAuthSession().finally(() => loadUser())
   }, [loadUser, inviteSlug])
 
   useEffect(() => {
@@ -184,6 +185,7 @@ export default function App() {
   const serverOnboarded = user.onboarded || !!user.agreement_accepted_at
   if (!onboarded && !serverOnboarded) return (
     <Onboarding
+      user={user}
       group={user.group}
       trustee={user.trustee}
       inviteSlug={inviteSlug}

@@ -3,10 +3,17 @@ import { isTelegram } from './routes.js'
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 20000)
 
+let _accessToken = null
+
+export function setAccessToken(token) {
+  _accessToken = token || null
+}
+
 export function authHeaders(extra = {}) {
   const headers = { ...extra }
   const id = window.Telegram?.WebApp?.initData
   if (id) headers['X-Init-Data'] = id
+  else if (_accessToken) headers.Authorization = `Bearer ${_accessToken}`
   return headers
 }
 
@@ -82,10 +89,7 @@ export const api = {
   auth: {
     config:        () => reqPublic('GET', '/api/auth/config'),
     telegramLogin: (data) => req('POST', '/api/auth/telegram', data),
-    signup:        (data) => req('POST', '/api/auth/signup', data),
-    login:         (data) => req('POST', '/api/auth/login', data),
-    google:        (data) => req('POST', '/api/auth/google', data),
-    apple:         (data) => req('POST', '/api/auth/apple', data),
+    sync:          (data) => req('POST', '/api/auth/sync', data),
     logout:        () => req('POST', '/api/auth/logout'),
   },
   me:           ()             => req('GET',  '/api/me'),

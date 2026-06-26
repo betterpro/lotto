@@ -34,7 +34,7 @@ export default function LiveRoundDeck({ rounds, index, onIndexChange, renderCard
 
   if (rounds.length === 1) {
     return (
-      <div style={{ padding: '8px 16px 4px' }}>
+      <div className="live-round-deck">
         {renderCard(rounds[0])}
       </div>
     )
@@ -45,7 +45,7 @@ export default function LiveRoundDeck({ rounds, index, onIndexChange, renderCard
   const peek = dragX < 0 ? next : dragX > 0 ? prev : next
 
   return (
-    <div style={{ padding: '8px 16px 4px', userSelect: 'none', touchAction: 'pan-y' }}>
+    <div className="live-round-deck live-round-deck--swipe">
       <div style={{ position: 'relative', minHeight: 320 }}>
         {peek && (
           <div style={{

@@ -179,6 +179,8 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_sub TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id UUID",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth_user_id ON users (auth_user_id) WHERE auth_user_id IS NOT NULL",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_auth_email ON users (lower(auth_email)) WHERE auth_email IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users (google_sub) WHERE google_sub IS NOT NULL",
@@ -211,6 +213,15 @@ _SCHEMA_STATEMENTS = [
     # Auto-results: timestamp when official winning numbers were fetched & matched
     # (so participants are notified once).
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS results_auto_at TEXT",
+    # Beneficiary / e-transfer profile (migrations 003–004)
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS province TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS postal_code TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS declaration_category TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS agreement_accepted_at TEXT",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT",
 ]
 
 _schema_ready = False
@@ -265,9 +276,14 @@ async def get_user_by_apple_sub(db, sub):
         return await c.fetchone()
 
 
+async def get_user_by_auth_user_id(db, auth_user_id):
+    async with db.execute("SELECT * FROM users WHERE auth_user_id = ?", (str(auth_user_id),)) as c:
+        return await c.fetchone()
+
+
 async def create_web_user(db, full_name, *, auth_email=None, password_hash=None,
-                          google_sub=None, apple_sub=None, auth_provider="email",
-                          photo_url=None, group_id=None):
+                          google_sub=None, apple_sub=None, auth_user_id=None,
+                          auth_provider="email", photo_url=None, group_id=None):
     """Create a web-only account with a synthetic negative id and seed its settings.
 
     Returns the full user row dict.
@@ -275,10 +291,10 @@ async def create_web_user(db, full_name, *, auth_email=None, password_hash=None,
     async with db.execute(
         """INSERT INTO users
              (telegram_id, full_name, auth_email, password_hash, google_sub, apple_sub,
-              auth_provider, photo_url, group_id)
-           VALUES (-nextval('web_user_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?)
+              auth_user_id, auth_provider, photo_url, group_id)
+           VALUES (-nextval('web_user_id_seq'), ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING telegram_id""",
-        (full_name, auth_email, password_hash, google_sub, apple_sub,
+        (full_name, auth_email, password_hash, google_sub, apple_sub, auth_user_id,
          auth_provider, photo_url, group_id),
     ) as c:
         uid = c.lastrowid

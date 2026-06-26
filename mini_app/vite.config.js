@@ -18,6 +18,12 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_APPLE_CLIENT_ID': JSON.stringify(
         env.VITE_APPLE_CLIENT_ID || env.APPLE_CLIENT_ID || '',
       ),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(
+        env.VITE_SUPABASE_URL || env.SUPABASE_URL || '',
+      ),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(
+        env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || '',
+      ),
     },
     server: {
       proxy: {

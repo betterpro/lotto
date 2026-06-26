@@ -24,8 +24,6 @@ import stripe
 from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException, Request
 import httpx
-import jwt
-from jwt import PyJWKClient
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -94,22 +92,18 @@ from group_context import (
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
 from database import (
-    create_web_user,
     ensure_schema,
     get_db,
     get_user,
-    get_user_by_auth_email,
-    get_user_by_google_sub,
-    get_user_by_apple_sub,
+    get_user_by_auth_user_id,
     merge_users,
 )
+from supabase_auth import ensure_app_user_from_supabase, verify_supabase_access_token
 from web_auth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE,
     create_session_token,
-    hash_password,
     validate_telegram_login,
-    verify_password,
     verify_session_token,
 )
 
@@ -903,6 +897,19 @@ async def _auth(request: Request):
     if init_data:
         user = await _get_user(init_data, db)
         return user, db
+
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        su = await verify_supabase_access_token(token)
+        if su:
+            user = await get_user_by_auth_user_id(db, su["id"])
+            if not user:
+                user = await ensure_app_user_from_supabase(db, su=su)
+            return user, db
+        await db.close()
+        raise HTTPException(401, "Session expired")
+
     session = request.cookies.get(SESSION_COOKIE)
     if session:
         telegram_id = verify_session_token(session)
@@ -1173,11 +1180,16 @@ async def api_auth_config():
         "bot_username": _bot_username,
         "google_client_id": config.GOOGLE_CLIENT_ID or None,
         "apple_client_id": config.APPLE_CLIENT_ID or None,
+        "supabase_url": config.SUPABASE_URL or None,
+        "supabase_anon_key": config.SUPABASE_ANON_KEY or None,
     }
 
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-MIN_PASSWORD_LEN = 8
+def _bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:].strip() or None
+    return None
 
 
 def _session_response(uid: int, **extra) -> Response:
@@ -1193,69 +1205,6 @@ def _current_session_uid(request: Request) -> int | None:
     """Resolve the caller's existing session id (may be a negative web id)."""
     cookie = request.cookies.get(SESSION_COOKIE)
     return verify_session_token(cookie) if cookie else None
-
-
-async def _verify_google_id_token(token: str) -> dict | None:
-    """Validate a Google Identity Services ID token; return its claims or None.
-
-    Google's tokeninfo endpoint verifies the signature and expiry for us; we
-    still check the audience and issuer ourselves.
-    """
-    if not config.GOOGLE_CLIENT_ID or not token:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                "https://oauth2.googleapis.com/tokeninfo", params={"id_token": token}
-            )
-    except httpx.HTTPError:
-        return None
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    if data.get("aud") != config.GOOGLE_CLIENT_ID:
-        return None
-    if data.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
-        return None
-    if str(data.get("email_verified")).lower() != "true":
-        return None
-    sub = data.get("sub")
-    if not sub:
-        return None
-    return {
-        "sub": sub,
-        "email": (data.get("email") or "").strip(),
-        "name": (data.get("name") or "").strip(),
-        "picture": data.get("picture"),
-    }
-
-
-_apple_jwk_client: PyJWKClient | None = None
-
-
-def _verify_apple_id_token(token: str) -> dict | None:
-    """Validate a Sign in with Apple ID token; return claims or None."""
-    global _apple_jwk_client
-    if not config.APPLE_CLIENT_ID or not token:
-        return None
-    try:
-        if _apple_jwk_client is None:
-            _apple_jwk_client = PyJWKClient("https://appleid.apple.com/auth/keys")
-        signing_key = _apple_jwk_client.get_signing_key_from_jwt(token)
-        data = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=config.APPLE_CLIENT_ID,
-            issuer="https://appleid.apple.com",
-        )
-    except jwt.PyJWTError:
-        return None
-    sub = data.get("sub")
-    if not sub:
-        return None
-    email = (data.get("email") or "").strip().lower()
-    return {"sub": sub, "email": email}
 
 
 @app.post("/api/auth/telegram")
@@ -1285,7 +1234,7 @@ async def _carry_over_credentials(db, web: dict, into_id: int) -> None:
     """Preserve a merged web account's email/OAuth logins on the surviving user."""
     target = await get_user(db, into_id)
     sets, params = [], []
-    for col in ("auth_email", "password_hash", "google_sub", "apple_sub"):
+    for col in ("auth_email", "password_hash", "google_sub", "apple_sub", "auth_user_id"):
         if web.get(col) and not (target and target.get(col)):
             sets.append(f"{col} = ?")
             params.append(web[col])
@@ -1296,114 +1245,30 @@ async def _carry_over_credentials(db, web: dict, into_id: int) -> None:
     await db.commit()
 
 
-@app.post("/api/auth/signup")
-async def api_auth_signup(request: Request):
-    body = await request.json()
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
-    name = (body.get("name") or "").strip()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(400, "Enter a valid email address")
-    if len(password) < MIN_PASSWORD_LEN:
-        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+@app.post("/api/auth/sync")
+async def api_auth_sync(request: Request):
+    """Link the Supabase Auth session to a public.users row and set the app cookie."""
+    token = _bearer_token(request)
+    if not token:
+        raise HTTPException(401, "Missing access token")
+    su = await verify_supabase_access_token(token)
+    if not su:
+        raise HTTPException(401, "Invalid session")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    invite_slug = (body.get("invite_slug") or "").strip().lower() or None
+
     db = await get_db()
     try:
-        if await get_user_by_auth_email(db, email):
-            raise HTTPException(409, "An account with this email already exists")
-        full_name = name or email.split("@")[0]
-        user = await create_web_user(
-            db, full_name, auth_email=email,
-            password_hash=hash_password(password), auth_provider="email",
-        )
-        invite_slug = (body.get("invite_slug") or "").strip().lower()
+        await ensure_schema()
+        user = await ensure_app_user_from_supabase(db, su=su)
         if invite_slug:
             await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
-    finally:
-        await db.close()
-    return _session_response(user["telegram_id"])
-
-
-@app.post("/api/auth/login")
-async def api_auth_login(request: Request):
-    body = await request.json()
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
-    db = await get_db()
-    try:
-        user = await get_user_by_auth_email(db, email)
-        if not user or not verify_password(password, user.get("password_hash")):
-            raise HTTPException(401, "Incorrect email or password")
-    finally:
-        await db.close()
-    return _session_response(user["telegram_id"])
-
-
-@app.post("/api/auth/google")
-async def api_auth_google(request: Request):
-    body = await request.json()
-    claims = await _verify_google_id_token(body.get("id_token") or body.get("credential") or "")
-    if claims is None:
-        raise HTTPException(401, "Invalid Google sign-in")
-    prior_uid = _current_session_uid(request)
-    db = await get_db()
-    try:
-        user = await get_user_by_google_sub(db, claims["sub"])
-        if user is None and claims["email"]:
-            # Link Google to an existing email/password account with the same email.
-            existing = await get_user_by_auth_email(db, claims["email"])
-            if existing:
-                await db.execute(
-                    "UPDATE users SET google_sub=?, photo_url=COALESCE(photo_url, ?) "
-                    "WHERE telegram_id=?",
-                    (claims["sub"], claims.get("picture"), existing["telegram_id"]),
-                )
-                await db.commit()
-                user = await get_user(db, existing["telegram_id"])
-        if user is None:
-            user = await create_web_user(
-                db, claims["name"] or (claims["email"].split("@")[0] if claims["email"] else "Member"),
-                auth_email=claims["email"] or None,
-                google_sub=claims["sub"], auth_provider="google",
-                photo_url=claims.get("picture"),
-            )
-            invite_slug = (body.get("invite_slug") or "").strip().lower()
-            if invite_slug:
-                await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
-    finally:
-        await db.close()
-    return _session_response(user["telegram_id"])
-
-
-@app.post("/api/auth/apple")
-async def api_auth_apple(request: Request):
-    body = await request.json()
-    claims = _verify_apple_id_token(body.get("id_token") or "")
-    if claims is None:
-        raise HTTPException(401, "Invalid Apple sign-in")
-    name = (body.get("name") or "").strip()
-    email = claims["email"] or (body.get("email") or "").strip().lower()
-    db = await get_db()
-    try:
-        user = await get_user_by_apple_sub(db, claims["sub"])
-        if user is None and email:
-            existing = await get_user_by_auth_email(db, email)
-            if existing:
-                await db.execute(
-                    "UPDATE users SET apple_sub=? WHERE telegram_id=?",
-                    (claims["sub"], existing["telegram_id"]),
-                )
-                await db.commit()
-                user = await get_user(db, existing["telegram_id"])
-        if user is None:
-            display = name or (email.split("@")[0] if email else "Member")
-            user = await create_web_user(
-                db, display,
-                auth_email=email or None,
-                apple_sub=claims["sub"], auth_provider="apple",
-            )
-            invite_slug = (body.get("invite_slug") or "").strip().lower()
-            if invite_slug:
-                await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
+            user = await get_user(db, user["telegram_id"])
     finally:
         await db.close()
     return _session_response(user["telegram_id"])
@@ -1675,11 +1540,12 @@ async def api_update_profile_email(request: Request):
     await db.execute(
         "UPDATE users SET email=? WHERE telegram_id=?", (email_addr, user["telegram_id"])
     )
-    await db.commit()
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     await db.close()
-    return {"ok": True, "user": dict(row) if row else None}
+    if not row or (row.get("email") or "").strip().lower() != email_addr:
+        raise HTTPException(500, "Failed to save email")
+    return {"ok": True, "email": email_addr, "user": dict(row)}
 
 
 @app.post("/api/beneficiary")

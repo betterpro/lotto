@@ -47,7 +47,7 @@ function Field({ label, required, children, flex }) {
   )
 }
 
-export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
+export default function Onboarding({ onAccept, group, trustee, inviteSlug, user }) {
   const [step, setStep] = useState(1)
   const [scrolled, setScrolled] = useState(false)
   const [preview, setPreview] = useState(group && trustee ? { group, trustee } : null)
@@ -64,10 +64,12 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
   const trusteeName = preview?.trustee?.full_name || preview?.trustee?.username || 'your trustee'
   const groupName = preview?.group?.name || 'this group'
 
-  const [info, setInfo] = useState({
-    fullName: '', email: '', street: '', city: '', province: 'BC', postal: '', phone: '',
+  const [info, setInfo] = useState(() => ({
+    fullName: '',
+    email: (user?.email || user?.auth_email || '').trim().toLowerCase(),
+    street: '', city: '', province: 'BC', postal: '', phone: '',
     age19: false, category: 'e',
-  })
+  }))
 
   const upd = (k, v) => setInfo(prev => ({ ...prev, [k]: v }))
 
@@ -85,25 +87,25 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
 
   return (
     <div className="ob">
-      {/* Top bar */}
-      <div className="ob-top">
-        <div className="row gap-10" style={{ alignItems: 'center' }}>
-          <img src={LOGO_SRC} alt="Lotto Chee" style={{ height: 30, objectFit: 'contain' }} />
-          <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>One-time setup · Step {step} of 3</span>
+      <div className="ob-panel">
+        <div className="ob-top">
+          <div className="ob-top-brand">
+            <img src={LOGO_SRC} alt="Lotto Chee" className="ob-top-logo" />
+            <span className="ob-top-step">One-time setup · Step {step} of 3</span>
+          </div>
+          <div className="ob-steps">
+            <span className={'dot' + (step >= 1 ? ' on' : '')} />
+            <span className={'dash' + (step >= 2 ? ' on' : '')} />
+            <span className={'dot' + (step >= 2 ? ' on' : '')} />
+            <span className={'dash' + (step >= 3 ? ' on' : '')} />
+            <span className={'dot' + (step >= 3 ? ' on' : '')} />
+          </div>
         </div>
-        <div className="ob-steps">
-          <span className={'dot' + (step >= 1 ? ' on' : '')} />
-          <span className={'dash' + (step >= 2 ? ' on' : '')} />
-          <span className={'dot' + (step >= 2 ? ' on' : '')} />
-          <span className={'dash' + (step >= 3 ? ' on' : '')} />
-          <span className={'dot' + (step >= 3 ? ' on' : '')} />
-        </div>
-      </div>
 
       {step === 1 && (
         <>
           <div className="ob-scroll">
-            <div className="ob-intro" style={{ textAlign: 'center' }}>
+            <div className="ob-intro ob-intro--center">
               <span className="ob-eyebrow">Confirm your group</span>
               <h2 className="ob-h2">Is this the right group?</h2>
               <p className="ob-p">
@@ -111,19 +113,18 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
                 on behalf of the group.
               </p>
             </div>
-            <div className="card" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-              <TelegramAvatar user={preview?.trustee || {}} size={64} />
-              <span style={{ fontSize: 19, fontWeight: 800 }}>{trusteeName}</span>
-              <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Group trustee · {groupName}</span>
+            <div className="ob-confirm-card">
+              <TelegramAvatar user={preview?.trustee || {}} size={72} />
+              <span className="ob-confirm-name">{trusteeName}</span>
+              <span className="ob-confirm-role">Group trustee · {groupName}</span>
             </div>
             {confirmError && (
-              <p style={{ color: 'var(--danger)', fontSize: 14, textAlign: 'center' }}>{confirmError}</p>
+              <p className="ob-error">{confirmError}</p>
             )}
           </div>
           <div className="ob-foot">
             <button
-              className="btn btn-primary"
-              style={{ width: '100%' }}
+              className="btn btn-primary btn-block"
               disabled={confirmLoading || (!preview && !!inviteSlug)}
               onClick={async () => {
                 setConfirmError(null)
@@ -155,7 +156,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
               <p className="ob-p">
                 Because Lotto Chee buys real BCLC group tickets on your behalf, we need to
                 register you as a <strong>Beneficiary</strong>. Your details are required by
-                the <strong>Group Prize Agreement</strong> if any pooled ticket wins $10,000 CAD or more.
+                the <strong>Group Prize Agreement</strong> if any pooled ticket wins $1,000 CAD or more.
               </p>
             </div>
 
@@ -254,7 +255,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
               <h2 className="ob-h2">Group Prize Agreement</h2>
               <p className="ob-p">
                 Agreement with your trustee <strong>{trusteeName}</strong> for {groupName}.
-                Required when a pooled ticket wins <strong>$10,000 CAD or more</strong>.
+                Required when a pooled ticket wins <strong>$1,000 CAD or more</strong>.
               </p>
             </div>
 
@@ -396,6 +397,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug }) {
           </div>
         </>
       )}
+      </div>
     </div>
   )
 }

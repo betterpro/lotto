@@ -84,6 +84,8 @@ SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
 
 SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
 
+SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
+
 ADMIN_ETRANSFER_EMAIL: str = os.getenv("ADMIN_ETRANSFER_EMAIL", "")
 
 # Auto-fetch official winning numbers and notify match results (best-effort WCLC
