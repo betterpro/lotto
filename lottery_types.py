@@ -198,6 +198,56 @@ def merge_round_ticket_rows(tickets: list[dict]) -> list[list]:
     return rows
 
 
+# Auto-results: main-number count + minimum matches that win any prize tier.
+# (Lotto Max 3/7 = free play; 6/49 2/6 = free play.) Daily Grand isn't auto-matched.
+RESULT_GAMES = {
+    "lotto_max": {"main_count": 7, "win_threshold": 3, "has_bonus": True},
+    "649":       {"main_count": 6, "win_threshold": 2, "has_bonus": True},
+}
+
+
+def supports_auto_results(lottery_type: str | None) -> bool:
+    return lottery_type in RESULT_GAMES
+
+
+def match_lines(lottery_type, winning_main, bonus, lines) -> dict:
+    """Match the pool's lines against official winning numbers.
+
+    Returns per-line match counts, whether any line hit a paying tier, and a
+    human label for the best line (e.g. "6/7 + bonus"). Cash amounts are not
+    computed — the trustee confirms the actual prize.
+    """
+    cfg = RESULT_GAMES.get(lottery_type)
+    main_count = cfg["main_count"] if cfg else len(winning_main or [])
+    threshold = cfg["win_threshold"] if cfg else None
+    wn = {int(x) for x in (winning_main or [])}
+    b = int(bonus) if bonus not in (None, "") else None
+
+    out = []
+    best = (-1, False)  # (main_matches, bonus_matched) for ordering
+    any_win = False
+    for line in lines or []:
+        nums = [int(x) for x in line if str(x).strip() != ""]
+        main = sum(1 for n in nums if n in wn)
+        bmatch = bool(b is not None and b in nums)
+        win = threshold is not None and main >= threshold
+        any_win = any_win or win
+        if (main, bmatch) > best:
+            best = (main, bmatch)
+        out.append({"numbers": nums, "main_matches": main, "bonus_matched": bmatch, "win": win})
+
+    best_main, best_bonus = (best if best[0] >= 0 else (0, False))
+    best_label = f"{best_main}/{main_count}" + (" + bonus" if best_bonus else "")
+    return {
+        "lines": out,
+        "any_win": any_win,
+        "best_main": best_main,
+        "best_bonus": best_bonus,
+        "best_label": best_label,
+        "main_count": main_count,
+    }
+
+
 def build_scan_prompt(lottery_type: str | None) -> str:
     layout = ticket_layout(lottery_type)
 

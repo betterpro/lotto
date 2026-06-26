@@ -84,6 +84,10 @@ SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
 
 ADMIN_ETRANSFER_EMAIL: str = os.getenv("ADMIN_ETRANSFER_EMAIL", "")
 
+# Auto-fetch official winning numbers and notify match results (best-effort WCLC
+# scrape). Set AUTO_RESULTS_ENABLED=0 to disable if the scrape misbehaves.
+AUTO_RESULTS_ENABLED: bool = os.getenv("AUTO_RESULTS_ENABLED", "1") == "1"
+
 IMAP_HOST: str = os.getenv("IMAP_HOST", "")
 
 IMAP_USER: str = os.getenv("IMAP_USER", "")

@@ -42,13 +42,22 @@ from lottery_types import (
     build_scan_prompt,
     format_ticket_numbers_message,
     lottery_share_price,
+    match_lines,
     merge_round_ticket_rows,
     normalize_ticket_rows,
     parse_round_tickets,
+    parse_ticket_numbers,
+    supports_auto_results,
     valid_lottery_type,
     validate_ticket_rows,
 )
-from lottery_draws import fetch_estimated_jackpot, next_draw_date, suggest_new_round
+from lottery_draws import (
+    draw_has_occurred,
+    fetch_draw_results,
+    fetch_estimated_jackpot,
+    next_draw_date,
+    suggest_new_round,
+)
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -980,6 +989,76 @@ _round_task: asyncio.Task | None = None
 ROUND_MAINTENANCE_INTERVAL_SECONDS = 1800
 
 
+async def _notify_round_results(db, rd, numbers, bonus, m):
+    """Tell each participant whether the pool won, based on the matched lines."""
+    seq = rd.get("group_seq") or rd["id"]
+    nums_html = "  ".join(f"<b>{int(n)}</b>" for n in numbers)
+    bonus_html = f"  ·  bonus <b>{int(bonus)}</b>" if bonus not in (None, "") else ""
+    if m["any_win"]:
+        body = (
+            f"🎉 <b>Results — Round #{seq}</b>\n"
+            f"Winning numbers: {nums_html}{bonus_html}\n"
+            f"Your pool matched <b>{m['best_label']}</b> — that's a winning tier! "
+            f"Your trustee will confirm your share of the prize."
+        )
+    else:
+        body = (
+            f"📣 <b>Results — Round #{seq}</b>\n"
+            f"Winning numbers: {nums_html}{bonus_html}\n"
+            f"Best line in the pool matched {m['best_label']} — no prize this time. Good luck next draw!"
+        )
+    cur = await db.execute(
+        """SELECT p.user_id FROM participations p
+           LEFT JOIN user_settings s ON s.user_id = p.user_id
+           WHERE p.round_id=? AND COALESCE(s.notif_results, 1) = 1""",
+        (rd["id"],),
+    )
+    for r in await cur.fetchall():
+        await _notify(r["user_id"], body)
+
+
+async def _fetch_and_apply_results(db):
+    """Auto-fetch official winning numbers for past draws, match the pool's lines,
+    and notify participants. Does NOT distribute cash — the trustee still confirms
+    the prize via the results screen (which is pre-filled with these numbers)."""
+    if not config.AUTO_RESULTS_ENABLED:
+        return
+    cur = await db.execute(
+        """SELECT * FROM rounds
+           WHERE (winning_numbers IS NULL OR winning_numbers = '')
+             AND results_auto_at IS NULL
+             AND status IN ('closed', 'uploaded')
+             AND draw_date IS NOT NULL
+             AND ticket_numbers IS NOT NULL
+             AND lottery_type IN ('lotto_max', '649')
+           ORDER BY id DESC LIMIT 50"""
+    )
+    rows = await cur.fetchall()
+    for row in rows:
+        rd = dict(row)
+        lt = rd.get("lottery_type")
+        if not supports_auto_results(lt) or not draw_has_occurred(lt, rd.get("draw_date")):
+            continue
+        pc = await db.execute("SELECT COUNT(*) AS n FROM participations WHERE round_id=?", (rd["id"],))
+        if int((await pc.fetchone())["n"] or 0) == 0:
+            continue
+        try:
+            res = await fetch_draw_results(lt, rd["draw_date"])
+        except Exception:
+            res = None
+        if not res or not res.get("numbers"):
+            continue  # couldn't read confidently — retry next cycle / trustee enters manually
+        numbers, bonus = res["numbers"], res.get("bonus")
+        lines = parse_ticket_numbers(rd.get("ticket_numbers"))
+        m = match_lines(lt, numbers, bonus, lines)
+        await db.execute(
+            "UPDATE rounds SET winning_numbers=?, bonus_number=?, results_auto_at=datetime('now') WHERE id=?",
+            (json.dumps(numbers), bonus, rd["id"]),
+        )
+        await db.commit()
+        await _notify_round_results(db, rd, numbers, bonus, m)
+
+
 async def _round_maintenance_loop():
     while True:
         try:
@@ -987,6 +1066,7 @@ async def _round_maintenance_loop():
             try:
                 await _auto_close_all_due_rounds(db)
                 await _send_round_reminders(db)
+                await _fetch_and_apply_results(db)
             finally:
                 await db.close()
         except asyncio.CancelledError:

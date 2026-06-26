@@ -203,6 +203,9 @@ _SCHEMA_STATEMENTS = [
     # 'locked'. status='locked' is a system lock (distinct from admin 'suspended').
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_id TEXT",
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform_sub_status TEXT NOT NULL DEFAULT 'none'",
+    # Auto-results: timestamp when official winning numbers were fetched & matched
+    # (so participants are notified once).
+    "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS results_auto_at TEXT",
 ]
 
 _schema_ready = False

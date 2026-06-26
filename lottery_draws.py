@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -109,6 +109,105 @@ async def fetch_estimated_jackpot(lottery_type: str) -> int | None:
             return _parse_wclc_jackpot_millions(resp.text, section)
     except Exception:
         return None
+
+
+# --- Official winning numbers (auto-results) ---------------------------------
+# WCLC publishes the latest winning numbers on the game page. Parsing is
+# best-effort and conservative: it only returns a result when the page clearly
+# shows the requested draw date alongside exactly the expected count of numbers
+# in range. If anything is off it returns None (the trustee enters results
+# manually). The HTML structure should be verified against the live page.
+WCLC_WINNING_URL = {
+    "lotto_max": "https://www.wclc.com/games/lotto-max.htm",
+    "649": "https://www.wclc.com/games/lotto-649.htm",
+}
+# main-number count and inclusive max value per game
+_RESULT_SPEC = {"lotto_max": (7, 50), "649": (6, 49)}
+
+_MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def _draw_date_strings(d: date) -> list[str]:
+    mon = _MONTHS[d.month - 1]
+    return [
+        d.isoformat(),                       # 2026-06-26
+        f"{mon} {d.day}, {d.year}",          # June 26, 2026
+        f"{mon} {d.day:02d}, {d.year}",      # June 26, 2026 (padded)
+        f"{mon[:3]} {d.day}, {d.year}",      # Jun 26, 2026
+    ]
+
+
+def draw_has_occurred(
+    lottery_type: str, draw_date, *, buffer_minutes: int = 45, from_dt: datetime | None = None
+) -> bool:
+    """True once a draw's scheduled cutoff (+ a buffer) has passed in Pacific time."""
+    if not valid_lottery_type(lottery_type):
+        return False
+    try:
+        d = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
+    except Exception:
+        return False
+    sched = DRAW_SCHEDULE.get(lottery_type)
+    if not sched:
+        return False
+    now = (from_dt or datetime.now(PT)).astimezone(PT)
+    cutoff = datetime.combine(d, time(sched["hour"], sched["minute"]), PT) + timedelta(minutes=buffer_minutes)
+    return now >= cutoff
+
+
+def _parse_wclc_results(html: str, draw: date, main_count: int, max_n: int) -> dict | None:
+    # Anchor on the draw date so we read the right draw, then pull ball numbers
+    # (element text content like ">7<") that follow it.
+    idx = -1
+    for s in _draw_date_strings(draw):
+        idx = html.find(s)
+        if idx >= 0:
+            idx += len(s)
+            break
+    if idx < 0:
+        return None
+    window = html[idx: idx + 1500]
+    seq = [int(m.group(1)) for m in re.finditer(r">\s*0*(\d{1,2})\s*<", window)
+           if 1 <= int(m.group(1)) <= max_n]
+    main: list[int] = []
+    for n in seq:
+        if n not in main:
+            main.append(n)
+        if len(main) == main_count:
+            break
+    if len(main) != main_count:
+        return None
+    bonus = next((n for n in seq if n not in main), None)
+    return {"numbers": main, "bonus": bonus, "draw_date": draw.isoformat()}
+
+
+async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
+    """Fetch official winning numbers for a past draw, or None if unavailable.
+
+    Returns {"numbers": [int...], "bonus": int|None, "draw_date": "YYYY-MM-DD"}.
+    """
+    spec = _RESULT_SPEC.get(lottery_type)
+    url = WCLC_WINNING_URL.get(lottery_type)
+    if not spec or not url:
+        return None
+    try:
+        d = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
+    except Exception:
+        return None
+    main_count, max_n = spec
+    try:
+        async with httpx.AsyncClient(
+            timeout=12.0, headers={"User-Agent": _USER_AGENT}, follow_redirects=True
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+    except Exception:
+        return None
+    return _parse_wclc_results(html, d, main_count, max_n)
 
 
 def is_valid_draw_date(
