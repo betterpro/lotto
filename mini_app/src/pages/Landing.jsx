@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Logo, { LogoMark } from '../components/Logo.jsx'
 import './landing.css'
@@ -18,6 +19,8 @@ const Check = () => (
 export default function Landing() {
   const navigate = useNavigate()
   const go = () => navigate('/login')
+  const [drawer, setDrawer] = useState(false)
+  const closeDrawer = () => setDrawer(false)
 
   return (
     <div className="lcl">
@@ -40,9 +43,34 @@ export default function Landing() {
             <a className="nav-login" onClick={go}>Sign in</a>
             <a className="btn btn-tg" onClick={go}>Get started <Arrow /></a>
           </div>
+          <button className="nav-burger" type="button" aria-label="Open menu" onClick={() => setDrawer(true)}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+          </button>
         </div>
       </nav>
       <span id="top" />
+
+      {/* Mobile drawer */}
+      <div className={'drawer' + (drawer ? ' open' : '')} onClick={closeDrawer}>
+        <div className="drawer-panel" onClick={e => e.stopPropagation()}>
+          <div className="drawer-head">
+            <a className="brand" onClick={closeDrawer}><LogoMark size={28} /><div className="brand-name">Lottochee</div></a>
+            <button className="drawer-close" type="button" aria-label="Close menu" onClick={closeDrawer}>✕</button>
+          </div>
+          <nav className="drawer-links">
+            <a href="#how" onClick={closeDrawer}>How it works <span className="ar">→</span></a>
+            <a href="#groups" onClick={closeDrawer}>Groups <span className="ar">→</span></a>
+            <a href="#odds" onClick={closeDrawer}>The odds <span className="ar">→</span></a>
+            <a href="#plans" onClick={closeDrawer}>Plans <span className="ar">→</span></a>
+            <a href="#trust" onClick={closeDrawer}>Transparency <span className="ar">→</span></a>
+            <a href="#faq" onClick={closeDrawer}>FAQ <span className="ar">→</span></a>
+          </nav>
+          <div className="drawer-cta">
+            <a className="btn btn-tg btn-lg" onClick={() => { closeDrawer(); go() }}>Get started</a>
+            <a className="btn btn-ghost btn-lg" onClick={() => { closeDrawer(); go() }}>Sign in</a>
+          </div>
+        </div>
+      </div>
 
       {/* ── HERO ── */}
       <header className="hero">
@@ -474,6 +502,15 @@ export default function Landing() {
           </div>
         </div>
       </footer>
+
+      {/* Sticky bottom action bar (mobile) */}
+      <div className="mobile-bar">
+        <div className="mb-meta">
+          <div className="mb-amt"><span>3 draws</span> pooled</div>
+          <div className="mb-sub"><span className="dot live" />Real BCLC tickets · split by share</div>
+        </div>
+        <a className="btn btn-tg" onClick={go}>Get started</a>
+      </div>
     </div>
   )
 }

@@ -890,3 +890,47 @@
   color:var(--tx-2); font-size:14px; line-height:1.55 }
 .lcl .plan-lock svg{ flex:0 0 auto; color:var(--gold); margin-top:1px }
 @media (max-width:720px){ .lcl .plans-grid{ grid-template-columns:1fr } }
+
+/* ════════════════════ MOBILE NAV (burger + drawer) + STICKY BAR ════════════════════ */
+.lcl{ --mobile-w:430px; --m-gut:20px; }
+.lcl .nav-burger{ display:none; appearance:none; border:1px solid var(--line-2); background:rgba(255,255,255,.04);
+  width:42px; height:42px; border-radius:11px; cursor:pointer; color:var(--tx-1);
+  align-items:center; justify-content:center; flex-shrink:0; }
+.lcl .nav-burger svg{ display:block }
+.lcl .drawer{ position:fixed; inset:0; z-index:90; background:rgba(6,9,13,.6);
+  backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  opacity:0; pointer-events:none; transition:opacity .22s ease; }
+.lcl .drawer.open{ opacity:1; pointer-events:auto }
+.lcl .drawer-panel{ position:absolute; top:0; left:0; right:0; margin:0 auto; max-width:var(--mobile-w);
+  background:var(--bg-2); border-bottom:1px solid var(--line-2); border-radius:0 0 22px 22px;
+  padding:calc(14px + env(safe-area-inset-top)) var(--m-gut) 20px; transform:translateY(-16px);
+  transition:transform .26s cubic-bezier(.2,.7,.2,1); box-shadow:0 30px 60px -20px rgba(0,0,0,.7); }
+.lcl .drawer.open .drawer-panel{ transform:none }
+.lcl .drawer-head{ display:flex; align-items:center; justify-content:space-between; height:44px; margin-bottom:8px }
+.lcl .drawer-close{ appearance:none; border:1px solid var(--line-2); background:rgba(255,255,255,.04);
+  width:38px; height:38px; border-radius:10px; color:var(--tx-1); font-size:18px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; }
+.lcl .drawer-links{ display:flex; flex-direction:column }
+.lcl .drawer-links a{ font-family:var(--display); font-weight:600; font-size:20px; letter-spacing:-.01em;
+  color:#fff; padding:14px 4px; border-bottom:1px solid var(--line);
+  display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+.lcl .drawer-links a:last-child{ border-bottom:0 }
+.lcl .drawer-links a .ar{ color:var(--tx-3) }
+.lcl .drawer-cta{ display:flex; flex-direction:column; gap:10px; margin-top:16px }
+.lcl .drawer-cta .btn{ width:100% }
+.lcl .mobile-bar{ display:none; position:fixed; left:50%; transform:translateX(-50%); bottom:0;
+  width:100%; max-width:var(--mobile-w); z-index:70; align-items:center; gap:12px;
+  padding:12px var(--m-gut) calc(12px + env(safe-area-inset-bottom));
+  background:linear-gradient(180deg, rgba(11,17,24,0), rgba(8,12,17,.92) 22%);
+  backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border-top:1px solid var(--line); }
+.lcl .mobile-bar .mb-meta{ flex:1; min-width:0; line-height:1.2 }
+.lcl .mobile-bar .mb-amt{ font-family:var(--mono); font-weight:700; font-size:17px; color:#fff; letter-spacing:-.02em }
+.lcl .mobile-bar .mb-amt span{ color:var(--gold) }
+.lcl .mobile-bar .mb-sub{ font-size:12px; color:var(--tx-2); margin-top:2px; display:flex; align-items:center; gap:6px }
+.lcl .mobile-bar .btn{ padding:14px 22px; white-space:nowrap; flex-shrink:0 }
+@media (max-width:1000px){
+  .lcl .nav-cta{ display:none }
+  .lcl .nav-burger{ display:flex }
+  .lcl .mobile-bar{ display:flex }
+  .lcl .foot{ padding-bottom:96px }
+}
