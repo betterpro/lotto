@@ -3618,6 +3618,128 @@ async def platform_patch_group(
     return {"ok": True, **detail}
 
 
+@app.post("/api/platform/groups")
+async def platform_create_group(request: Request):
+    """Super-admin creates a group directly, assigning a trustee + plan."""
+    admin, db = await _require_platform_admin(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        await db.close()
+        raise HTTPException(400, "Group name required")
+    trustee_id = body.get("trustee_user_id")
+    if not trustee_id:
+        await db.close()
+        raise HTTPException(400, "A trustee user id is required")
+    trustee_id = int(trustee_id)
+    cur = await db.execute("SELECT telegram_id FROM users WHERE telegram_id=?", (trustee_id,))
+    if not await cur.fetchone():
+        await db.close()
+        raise HTTPException(400, "Trustee user not found")
+    plan = body.get("pricing_plan") or "subscription"
+    if plan not in ("subscription", "prize_share"):
+        plan = "subscription"
+    base_slug = slugify(name)
+    slug = base_slug
+    n = 0
+    while True:
+        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
+        if not await cur.fetchone():
+            break
+        n += 1
+        slug = f"{base_slug}-{n}"
+    join_code = generate_join_code()
+    while True:
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
+        if not await cur.fetchone():
+            break
+        join_code = generate_join_code()
+    cur = await db.execute(
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan)
+           VALUES (?,?,?, 'active', ?, ?) RETURNING id""",
+        (name, slug, trustee_id, join_code, plan),
+    )
+    gid = cur.lastrowid
+    await db.execute("UPDATE users SET group_id=? WHERE telegram_id=?", (gid, trustee_id))
+    await add_group_member(db, gid, trustee_id, "trustee")
+    await db.commit()
+    await db.close()
+    return {"ok": True, "group_id": gid, "slug": slug}
+
+
+@app.delete("/api/platform/groups/{group_id}")
+async def platform_delete_group(group_id: int, request: Request):
+    """Delete a group. Blocked if any of its rounds have participants (money) —
+    deactivate instead. Otherwise removes the group, its rounds and memberships."""
+    admin, db = await _require_platform_admin(request)
+    cur = await db.execute("SELECT id FROM groups WHERE id=?", (group_id,))
+    if not await cur.fetchone():
+        await db.close()
+        raise HTTPException(404, "Group not found")
+    cur = await db.execute(
+        "SELECT COUNT(*) AS n FROM participations p JOIN rounds r ON r.id=p.round_id WHERE r.group_id=?",
+        (group_id,),
+    )
+    if int((await cur.fetchone())["n"] or 0) > 0:
+        await db.close()
+        raise HTTPException(400, "Group has rounds with participants — deactivate it instead of deleting")
+    await db.execute("DELETE FROM rounds WHERE group_id=?", (group_id,))
+    await db.execute("UPDATE users SET group_id=NULL WHERE group_id=?", (group_id,))
+    await db.execute("DELETE FROM group_members WHERE group_id=?", (group_id,))
+    await db.execute("DELETE FROM groups WHERE id=?", (group_id,))
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+@app.patch("/api/platform/rounds/{round_id}")
+async def platform_patch_round(round_id: int, request: Request):
+    """Super-admin edits a round (status, draw date, jackpot, winning numbers)."""
+    admin, db = await _require_platform_admin(request)
+    cur = await db.execute("SELECT id FROM rounds WHERE id=?", (round_id,))
+    if not await cur.fetchone():
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    body = await request.json()
+    if "status" in body:
+        st = body.get("status")
+        if st not in ("open", "closed", "uploaded", "drawn", "cancelled", "locked"):
+            await db.close()
+            raise HTTPException(400, "Invalid status")
+        await db.execute("UPDATE rounds SET status=? WHERE id=?", (st, round_id))
+    if "draw_date" in body:
+        await db.execute("UPDATE rounds SET draw_date=? WHERE id=?", (body.get("draw_date") or None, round_id))
+    if "jackpot" in body:
+        try:
+            await db.execute("UPDATE rounds SET jackpot=? WHERE id=?", (int(body.get("jackpot") or 0), round_id))
+        except (TypeError, ValueError):
+            await db.close()
+            raise HTTPException(400, "Invalid jackpot")
+    if "winning_numbers" in body:
+        wn = body.get("winning_numbers")
+        val = json.dumps(wn) if isinstance(wn, list) else (wn or None)
+        await db.execute("UPDATE rounds SET winning_numbers=? WHERE id=?", (val, round_id))
+    if "bonus_number" in body:
+        b = body.get("bonus_number")
+        await db.execute("UPDATE rounds SET bonus_number=? WHERE id=?", (int(b) if str(b).strip() not in ("", "None") else None, round_id))
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
+@app.delete("/api/platform/rounds/{round_id}")
+async def platform_delete_round(round_id: int, request: Request):
+    admin, db = await _require_platform_admin(request)
+    cur = await db.execute("SELECT COUNT(*) AS n FROM participations WHERE round_id=?", (round_id,))
+    if int((await cur.fetchone())["n"] or 0) > 0:
+        await db.close()
+        raise HTTPException(400, "Round has participants — cannot delete")
+    await db.execute("DELETE FROM rounds WHERE id=?", (round_id,))
+    await db.commit()
+    await db.close()
+    return {"ok": True}
+
+
 @app.patch("/api/platform/users/{telegram_id}")
 async def platform_patch_user(
     telegram_id: int,

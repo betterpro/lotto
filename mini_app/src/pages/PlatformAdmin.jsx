@@ -84,6 +84,18 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
     }
   }
 
+  async function deleteGroup() {
+    if (!confirm(`Delete "${detail?.group?.name}"? This permanently removes the group, its empty rounds and memberships. Groups with participant money can't be deleted — deactivate instead.`)) return
+    try {
+      await api.platform.deleteGroup(groupId)
+      showToast('Group deleted', 'success')
+      onUpdated?.()
+      onClose?.()
+    } catch (e) {
+      showToast(e.message, 'error')
+    }
+  }
+
   const slug = detail?.group?.slug
   const inviteUrl = slug && botUsername
     ? `https://t.me/${botUsername}?startapp=join_${slug}` : null
@@ -140,8 +152,18 @@ function GroupDetailSheet({ groupId, onClose, onUpdated, botUsername }) {
                 <div style={{ marginTop: 6, wordBreak: 'break-all' }}>{inviteUrl}</div>
               )}
             </div>
-            <button className="btn btn-primary" disabled={saving || !name.trim()} onClick={save}>
-              {saving ? 'Saving…' : 'Save changes'}
+            <div className="row gap-8">
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }}
+                onClick={() => { setStatus(status === 'active' ? 'suspended' : 'active') }}>
+                {status === 'active' ? 'Set inactive' : 'Set active'}
+              </button>
+              <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={saving || !name.trim()} onClick={save}>
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+            <button className="btn btn-sm" style={{ background: 'rgba(242,107,107,.12)', color: 'var(--danger)' }}
+              onClick={deleteGroup}>
+              Delete group
             </button>
           </div>
 
@@ -242,6 +264,86 @@ function UserEditSheet({ user, groups, onClose, onUpdated }) {
         </button>
       </div>
     </Sheet>
+  )
+}
+
+function CreateGroupForm({ onCreated }) {
+  const showToast = useToast()
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [trustee, setTrustee] = useState('')
+  const [plan, setPlan] = useState('subscription')
+  const [busy, setBusy] = useState(false)
+  async function create() {
+    setBusy(true)
+    try {
+      await api.platform.createGroup({ name: name.trim(), trustee_user_id: Number(trustee), pricing_plan: plan })
+      showToast('Group created', 'success')
+      setName(''); setTrustee(''); setOpen(false); onCreated?.()
+    } catch (e) { showToast(e.message, 'error') } finally { setBusy(false) }
+  }
+  if (!open) return (
+    <div style={{ padding: '0 16px 10px' }}>
+      <button className="btn btn-primary btn-block" onClick={() => setOpen(true)}>+ Create group</button>
+    </div>
+  )
+  return (
+    <div className="card col gap-10" style={{ margin: '0 16px 12px', padding: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--tx-3)', textTransform: 'uppercase' }}>New group</div>
+      <input className="input" placeholder="Group name" value={name} onChange={e => setName(e.target.value)} />
+      <input className="input mono" placeholder="Trustee Telegram ID" value={trustee}
+        onChange={e => setTrustee(e.target.value.replace(/[^0-9-]/g, ''))} />
+      <select className="input" value={plan} onChange={e => setPlan(e.target.value)}>
+        <option value="subscription">Subscription ($6.99/mo)</option>
+        <option value="prize_share">Big-prize share (5% over $1k)</option>
+      </select>
+      <div className="row gap-8">
+        <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => setOpen(false)}>Cancel</button>
+        <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={busy || !name.trim() || !trustee} onClick={create}>
+          {busy ? 'Creating…' : 'Create'}
+        </button>
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--tx-3)', margin: 0, lineHeight: 1.4 }}>
+        The trustee must be an existing user — enter their Telegram ID. They’re assigned as trustee and added to the group.
+      </p>
+    </div>
+  )
+}
+
+function RoundAdminRow({ r, onChanged }) {
+  const showToast = useToast()
+  const [busy, setBusy] = useState(false)
+  let won = ''
+  try { won = r.winning_numbers ? JSON.parse(r.winning_numbers).join(' ') : '' } catch { won = r.winning_numbers || '' }
+  async function setStatus(status) {
+    setBusy(true)
+    try { await api.platform.patchRound(r.id, { status }); showToast('Round updated', 'success'); onChanged?.() }
+    catch (e) { showToast(e.message, 'error') } finally { setBusy(false) }
+  }
+  async function del() {
+    if (!confirm(`Delete round #${r.id}? Only rounds with no participants can be deleted.`)) return
+    try { await api.platform.deleteRound(r.id); showToast('Round deleted', 'success'); onChanged?.() }
+    catch (e) { showToast(e.message, 'error') }
+  }
+  return (
+    <div className="card col gap-8" style={{ padding: 12 }}>
+      <div className="row between">
+        <span style={{ fontWeight: 600 }}>Round #{r.id} · {r.group_name}</span>
+        <StatusChip status={r.status} />
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
+        {r.lottery_type} · {r.draw_date || 'no date'} · pool {fmtCAD(r.pool)} · {r.participants_count} players
+        {won ? ` · won: ${won}` : ''}
+      </div>
+      <div className="row gap-8" style={{ alignItems: 'center' }}>
+        <select className="input" style={{ flex: 1, padding: '8px 10px' }} value={r.status} disabled={busy}
+          onChange={e => setStatus(e.target.value)}>
+          {['open', 'closed', 'uploaded', 'drawn', 'cancelled'].map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button className="btn btn-sm" style={{ background: 'rgba(242,107,107,.12)', color: 'var(--danger)' }}
+          disabled={r.participants_count > 0} onClick={del}>Delete</button>
+      </div>
+    </div>
   )
 }
 
@@ -371,6 +473,7 @@ export default function PlatformAdmin() {
         </div>
       ) : tab === 'groups' ? (
         <div className="stack">
+          <CreateGroupForm onCreated={load} />
           {groups.length === 0 ? (
             <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 14 }}>No groups yet.</p>
           ) : groups.map(g => (
@@ -427,13 +530,10 @@ export default function PlatformAdmin() {
         </>
       ) : (
         <div className="stack">
-          {rounds.map(r => (
-            <div key={r.id} className="card" style={{ padding: 12 }}>
-              <div className="font-weight-600" style={{ fontWeight: 600 }}>Round #{r.id} · {r.group_name}</div>
-              <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
-                {r.status} · pool {fmtCAD(r.pool)} · {r.participants_count} players
-              </div>
-            </div>
+          {rounds.length === 0 ? (
+            <p style={{ padding: 16, color: 'var(--tx-2)', fontSize: 14 }}>No rounds.</p>
+          ) : rounds.map(r => (
+            <RoundAdminRow key={r.id} r={r} onChanged={load} />
           ))}
         </div>
       )}

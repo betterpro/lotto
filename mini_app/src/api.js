@@ -125,6 +125,10 @@ export const api = {
     approveApp:    (id) => req('POST', `/api/platform/applications/${id}/approve`),
     rejectApp:     (id, review_notes) => req('POST', `/api/platform/applications/${id}/reject`, { review_notes }),
     patchGroup:    (id, body) => req('PATCH', `/api/platform/groups/${id}`, body),
+    createGroup:   (body) => req('POST', '/api/platform/groups', body),
+    deleteGroup:   (id) => req('DELETE', `/api/platform/groups/${id}`),
+    patchRound:    (id, body) => req('PATCH', `/api/platform/rounds/${id}`, body),
+    deleteRound:   (id) => req('DELETE', `/api/platform/rounds/${id}`),
   },
   agreement: {
     master: () => req('GET', '/api/agreement/master'),
