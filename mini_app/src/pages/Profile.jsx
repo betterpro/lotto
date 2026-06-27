@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
+import { signOutEverywhere } from '../authSession.js'
 import { isTelegram } from '../routes.js'
 import { useToast } from '../components/Toast.jsx'
 import { BellIcon, PersonIcon, TicketIcon } from '../components/Icon.jsx'
@@ -110,12 +111,18 @@ const DEFAULTS = {
   notif_contribution: true, notif_round_closed: true,
 }
 
+function initialProfileEmail(user) {
+  return (user?.email ?? user?.auth_email ?? '').trim().toLowerCase()
+}
+
 export default function Profile({ user, onUserUpdate }) {
   const showToast = useToast()
   const [settings, setSettings] = useState(null)
   const [saved,    setSaved]    = useState(false)
   const [busy,     setBusy]     = useState(false)
-  const [email,    setEmail]    = useState(user?.email ?? '')
+  const [email,    setEmail]    = useState(() => initialProfileEmail(user))
+  const [emailBusy, setEmailBusy] = useState(false)
+  const [emailSaved, setEmailSaved] = useState(false)
   const [trusteeApp, setTrusteeApp] = useState(null)
   const [groupName, setGroupName] = useState('')
   const [applyBusy, setApplyBusy] = useState(false)
@@ -130,20 +137,38 @@ export default function Profile({ user, onUserUpdate }) {
   }, [user?.is_group_trustee])
 
   useEffect(() => {
-    setEmail(user?.email ?? '')
+    const stored = (user?.email ?? '').trim().toLowerCase()
+    if (stored) setEmail(stored)
   }, [user?.email])
 
   const set = useCallback((key, val) =>
     setSettings(prev => ({ ...prev, [key]: val })), [])
 
+  async function saveEmail() {
+    const trimmed = email.trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      showToast('Enter a valid email', 'error')
+      return
+    }
+    setEmailBusy(true)
+    try {
+      await api.profile.updateEmail(trimmed)
+      const me = await api.me()
+      onUserUpdate(me)
+      setEmail((me.email ?? trimmed).trim().toLowerCase())
+      setEmailSaved(true)
+      setTimeout(() => setEmailSaved(false), 2000)
+    } catch (e) {
+      showToast(e.message || 'Save failed', 'error')
+    } finally {
+      setEmailBusy(false)
+    }
+  }
+
   async function save() {
     setBusy(true)
     try {
-      const profile = await api.profile.updateEmail(email)
       await api.settings.put(settings)
-      if (profile?.user) {
-        onUserUpdate(prev => ({ ...prev, ...profile.user }))
-      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
@@ -152,6 +177,10 @@ export default function Profile({ user, onUserUpdate }) {
       setBusy(false)
     }
   }
+
+  const savedEmail = (user?.email ?? '').trim().toLowerCase()
+  const emailDirty = email.trim().toLowerCase() !== savedEmail
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
 
   const photoUrl  = user?.photo_url
   const name      = user?.full_name || user?.first_name || 'You'
@@ -193,9 +222,23 @@ export default function Profile({ user, onUserUpdate }) {
               <p style={{ fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5, margin: '0 0 10px' }}>
                 Use the same email address that appears as the sender on your Interac e-Transfer.
               </p>
-              <input className="input mono" type="email" value={email}
-                onChange={e => setEmail(e.target.value.trim().toLowerCase())}
-                placeholder="you@example.com" />
+              <div className="input-action">
+                <input
+                  className="input mono"
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value.trim().toLowerCase())}
+                  placeholder="you@example.com"
+                />
+                <button
+                  type="button"
+                  className={'input-action-btn' + (emailSaved ? ' saved' : '')}
+                  disabled={emailBusy || !emailValid || !emailDirty}
+                  onClick={saveEmail}
+                >
+                  {emailSaved ? 'Saved' : emailBusy ? '…' : 'Save'}
+                </button>
+              </div>
             </div>
 
             {/* ── Round participation ── */}
@@ -455,7 +498,10 @@ export default function Profile({ user, onUserUpdate }) {
               <button className="btn btn-ghost btn-block"
                 style={{ marginTop: 12, color: 'var(--danger)' }}
                 onClick={async () => {
-                  try { await api.auth.logout() } catch { /* clear locally anyway */ }
+                  try {
+                    await signOutEverywhere()
+                    await api.auth.logout()
+                  } catch { /* clear locally anyway */ }
                   window.location.href = '/login'
                 }}>
                 Log out

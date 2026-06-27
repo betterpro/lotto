@@ -16,6 +16,20 @@ DEFAULT_TRUSTEE = {
 # Legacy alias
 TRUSTEE = DEFAULT_TRUSTEE
 
+DECLARATION_CATEGORIES = {
+    "a": "A Lottery Retailer (operates or works at a BCLC retail location)",
+    "b": "A family member of a Lottery Retailer (parent, child, spouse, household)",
+    "c": "A BCLC employee",
+    "d": "A family member of a BCLC employee",
+    "e": "None of the above",
+}
+
+
+def declaration_category_label(code: str | None) -> str:
+    key = (code or "e").lower()
+    label = DECLARATION_CATEGORIES.get(key, DECLARATION_CATEGORIES["e"])
+    return f"{key.upper()} — {label}"
+
 
 def build_trustee_from_user(user: dict) -> dict:
     """Build trustee dict from a users row (group trustee beneficiary profile)."""
@@ -92,14 +106,14 @@ def build_master_agreement(
     trustee_address = _format_address(
         t["street"], t["city"], t["province"], None
     )
-    decl = (declaration_category or "e").lower()
+    decl = declaration_category_label(declaration_category)
     signed_date = accepted_at[:10] if accepted_at and len(accepted_at) >= 10 else "See Lotto Chee account"
 
     return f"""GROUP PRIZE AGREEMENT
 (BCLC Group Release Form - Lotto Chee)
 
 This Group Prize Agreement is required when a group lottery ticket wins a prize of
-$10,000.00 CAD or greater and must be completed by all group members entitled to a
+$1,000.00 CAD or greater and must be completed by all group members entitled to a
 share of the prize won. Lotto Chee uses this agreement for pooled play and registers
 each member as a Beneficiary with the Group Trustee named below.
 
@@ -114,7 +128,6 @@ BENEFICIARY
   Address:  {ben_address}
   Phone:    {beneficiary_phone or "-"}
   Email:    {beneficiary_email or "-"}
-  Telegram: {beneficiary_id}
   Declaration category: {decl}
 
 ROUND AMENDMENT (ADDENDUM)

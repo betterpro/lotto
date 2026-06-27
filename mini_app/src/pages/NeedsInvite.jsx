@@ -1,6 +1,96 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { loadStripe } from '@stripe/stripe-js'
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import Logo from '../components/Logo.jsx'
 import { api } from '../api.js'
+
+function formatApproveCountdown(autoApproveAt) {
+  if (!autoApproveAt) return null
+  const target = new Date(String(autoApproveAt).replace(' ', 'T') + 'Z').getTime()
+  const ms = target - Date.now()
+  if (ms <= 0) return 'soon'
+  const h = Math.floor(ms / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function AppSubPayForm({ onSuccess, onError }) {
+  const stripe = useStripe()
+  const elements = useElements()
+  const [busy, setBusy] = useState(false)
+
+  async function submit(e) {
+    e.preventDefault()
+    if (!stripe || !elements) return
+    setBusy(true)
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: { return_url: window.location.origin },
+      redirect: 'if_required',
+    })
+    setBusy(false)
+    if (error) onError(error.message)
+    else onSuccess()
+  }
+
+  return (
+    <form onSubmit={submit} style={{ width: '100%', textAlign: 'left' }}>
+      <PaymentElement options={{ layout: 'tabs' }} />
+      <button type="submit" className="btn btn-primary btn-block" style={{ marginTop: 12 }} disabled={busy || !stripe}>
+        {busy ? 'Processing…' : 'Pay $6.99/mo · start subscription'}
+      </button>
+    </form>
+  )
+}
+
+function ApplicationSubscriptionPay({ onPaid, onError }) {
+  const [pk, setPk] = useState(null)
+  const [cs, setCs] = useState(null)
+  const [sp, setSp] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.stripe.config().then(c => setPk(c.publishable_key)).catch(() => {})
+  }, [])
+
+  const startPayment = useCallback(async () => {
+    setBusy(true)
+    try {
+      const r = await api.trustee.subscriptionCreate()
+      if (!pk) {
+        onError('Card payment is unavailable right now')
+        return
+      }
+      setSp(loadStripe(pk))
+      setCs(r.client_secret)
+    } catch (e) {
+      onError(e.message || 'Could not start subscription')
+    } finally {
+      setBusy(false)
+    }
+  }, [pk, onError])
+
+  if (cs && sp) {
+    return (
+      <Elements stripe={sp} options={{ clientSecret: cs, appearance: { theme: 'night' } }}>
+        <AppSubPayForm
+          onSuccess={() => {
+            setCs(null)
+            setTimeout(onPaid, 2500)
+          }}
+          onError={onError}
+        />
+      </Elements>
+    )
+  }
+
+  return (
+    <button type="button" className="btn btn-primary btn-block" disabled={busy} onClick={startPayment}>
+      {busy ? 'Loading…' : 'Pay $6.99/mo subscription'}
+    </button>
+  )
+}
 
 export default function NeedsInvite({ error, onJoined }) {
   const [tab, setTab] = useState('join') // 'join' | 'request'
@@ -10,10 +100,26 @@ export default function NeedsInvite({ error, onJoined }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [application, setApplication] = useState(null)
+  const [, setTick] = useState(0)
+
+  const reloadApplication = useCallback(() => {
+    return api.trustee.application().then(r => {
+      setApplication(r.application)
+      if (r.application?.status === 'approved') onJoined?.()
+      return r.application
+    }).catch(() => {})
+  }, [onJoined])
 
   useEffect(() => {
-    api.trustee.application().then(r => setApplication(r.application)).catch(() => {})
-  }, [])
+    reloadApplication()
+  }, [reloadApplication])
+
+  useEffect(() => {
+    if (application?.status !== 'pending' || application?.payment_status !== 'paid') return
+    const poll = setInterval(() => reloadApplication(), 15000)
+    const clock = setInterval(() => setTick(t => t + 1), 60000)
+    return () => { clearInterval(poll); clearInterval(clock) }
+  }, [application?.status, application?.payment_status, reloadApplication])
 
   async function joinByCode(e) {
     e.preventDefault()
@@ -35,8 +141,7 @@ export default function NeedsInvite({ error, onJoined }) {
     setErr(''); setBusy(true)
     try {
       await api.trustee.apply(groupName.trim(), plan)
-      const r = await api.trustee.application()
-      setApplication(r.application)
+      await reloadApplication()
       setGroupName('')
     } catch (e2) {
       setErr(e2.message || 'Could not submit request')
@@ -46,6 +151,9 @@ export default function NeedsInvite({ error, onJoined }) {
   }
 
   const pending = application?.status === 'pending'
+  const isSubscription = (application?.pricing_plan || 'subscription') === 'subscription'
+  const paid = application?.payment_status === 'paid'
+  const countdown = paid ? formatApproveCountdown(application?.auto_approve_at) : null
 
   return (
     <div className="center-screen" style={{ gap: 16 }}>
@@ -95,20 +203,51 @@ export default function NeedsInvite({ error, onJoined }) {
           </button>
         </form>
       ) : pending ? (
-        <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center' }}>
-          <p style={{ fontSize: 15, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
-            Your request for <strong>{application.proposed_group_name}</strong> is pending platform approval.
-          </p>
-          <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
-            We’ll set up your group once it’s approved. In the meantime you can join an existing
-            group with a code.
-          </p>
+        <div style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 12, textAlign: 'center' }}>
+          {isSubscription && !paid ? (
+            <>
+              <p style={{ fontSize: 15, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
+                Your request for <strong>{application.proposed_group_name}</strong> is almost ready.
+                Pay the <strong>$6.99/mo</strong> subscription to continue — your group will be set up
+                within <strong>24 hours</strong> after payment (often sooner).
+              </p>
+              <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
+                Flat fee · keep 100% of every prize. You can still join an existing group with a code.
+              </p>
+              {err && <span style={{ fontSize: 14, color: 'var(--danger)', lineHeight: 1.5 }}>{err}</span>}
+              <ApplicationSubscriptionPay
+                onPaid={reloadApplication}
+                onError={m => setErr(m)}
+              />
+            </>
+          ) : isSubscription && paid ? (
+            <>
+              <p style={{ fontSize: 15, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
+                Payment received for <strong>{application.proposed_group_name}</strong>.
+                Your group will be activated within 24 hours
+                {countdown ? ` (${countdown} remaining)` : ''}.
+              </p>
+              <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
+                A platform admin may approve it sooner. We’ll refresh automatically once it’s ready.
+              </p>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 15, color: 'var(--tx-1)', margin: 0, lineHeight: 1.6 }}>
+                Your request for <strong>{application.proposed_group_name}</strong> is pending platform approval.
+              </p>
+              <p style={{ fontSize: 13, color: 'var(--tx-3)', margin: 0, lineHeight: 1.5 }}>
+                We’ll set up your group once it’s approved. In the meantime you can join an existing
+                group with a code.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <form onSubmit={requestGroup} style={{ width: '100%', maxWidth: 300, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <p style={{ fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.6, margin: 0, textAlign: 'center' }}>
-            Want to run your own pool? Request a group — once a platform admin approves it, you’ll
-            become its trustee with your own join code.
+            Want to run your own pool? Request a group — subscription plans require payment first;
+            your group is set up within 24 hours after payment.
           </p>
           {application?.status === 'rejected' && (
             <span style={{ fontSize: 13, color: 'var(--danger)', lineHeight: 1.5 }}>
@@ -148,11 +287,12 @@ export default function NeedsInvite({ error, onJoined }) {
             )
           })}
           <span style={{ fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.5 }}>
-            Your plan is locked into the group agreement when approved and can’t be changed later.
+            Subscription plans are charged $6.99/mo before your group is created. Your plan is locked
+            when approved and can’t be changed later.
           </span>
           {err && <span style={{ fontSize: 14, color: 'var(--danger)', lineHeight: 1.5 }}>{err}</span>}
           <button type="submit" className="btn btn-primary btn-block" disabled={busy || !groupName.trim()}>
-            {busy ? 'Submitting…' : 'Request group'}
+            {busy ? 'Submitting…' : plan === 'subscription' ? 'Continue · pay $6.99/mo next' : 'Request group'}
           </button>
         </form>
       )}

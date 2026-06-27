@@ -16,7 +16,7 @@ import os
 import random
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
 from urllib.parse import parse_qsl
 
@@ -92,21 +92,18 @@ from group_context import (
 from agreement_pdf import build_agreement_pdf
 from bot import build_application
 from database import (
-    create_web_user,
     ensure_schema,
     get_db,
     get_user,
-    get_user_by_auth_email,
-    get_user_by_google_sub,
+    get_user_by_auth_user_id,
     merge_users,
 )
+from supabase_auth import ensure_app_user_from_supabase, verify_supabase_access_token
 from web_auth import (
     SESSION_COOKIE,
     SESSION_MAX_AGE,
     create_session_token,
-    hash_password,
     validate_telegram_login,
-    verify_password,
     verify_session_token,
 )
 
@@ -900,6 +897,19 @@ async def _auth(request: Request):
     if init_data:
         user = await _get_user(init_data, db)
         return user, db
+
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        su = await verify_supabase_access_token(token)
+        if su:
+            user = await get_user_by_auth_user_id(db, su["id"])
+            if not user:
+                user = await ensure_app_user_from_supabase(db, su=su)
+            return user, db
+        await db.close()
+        raise HTTPException(401, "Session expired")
+
     session = request.cookies.get(SESSION_COOKIE)
     if session:
         telegram_id = verify_session_token(session)
@@ -1169,11 +1179,17 @@ async def api_auth_config():
     return {
         "bot_username": _bot_username,
         "google_client_id": config.GOOGLE_CLIENT_ID or None,
+        "apple_client_id": config.APPLE_CLIENT_ID or None,
+        "supabase_url": config.SUPABASE_URL or None,
+        "supabase_anon_key": config.SUPABASE_ANON_KEY or None,
     }
 
 
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-MIN_PASSWORD_LEN = 8
+def _bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:].strip() or None
+    return None
 
 
 def _session_response(uid: int, **extra) -> Response:
@@ -1189,41 +1205,6 @@ def _current_session_uid(request: Request) -> int | None:
     """Resolve the caller's existing session id (may be a negative web id)."""
     cookie = request.cookies.get(SESSION_COOKIE)
     return verify_session_token(cookie) if cookie else None
-
-
-async def _verify_google_id_token(token: str) -> dict | None:
-    """Validate a Google Identity Services ID token; return its claims or None.
-
-    Google's tokeninfo endpoint verifies the signature and expiry for us; we
-    still check the audience and issuer ourselves.
-    """
-    if not config.GOOGLE_CLIENT_ID or not token:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                "https://oauth2.googleapis.com/tokeninfo", params={"id_token": token}
-            )
-    except httpx.HTTPError:
-        return None
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    if data.get("aud") != config.GOOGLE_CLIENT_ID:
-        return None
-    if data.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
-        return None
-    if str(data.get("email_verified")).lower() != "true":
-        return None
-    sub = data.get("sub")
-    if not sub:
-        return None
-    return {
-        "sub": sub,
-        "email": (data.get("email") or "").strip(),
-        "name": (data.get("name") or "").strip(),
-        "picture": data.get("picture"),
-    }
 
 
 @app.post("/api/auth/telegram")
@@ -1253,7 +1234,7 @@ async def _carry_over_credentials(db, web: dict, into_id: int) -> None:
     """Preserve a merged web account's email/OAuth logins on the surviving user."""
     target = await get_user(db, into_id)
     sets, params = [], []
-    for col in ("auth_email", "password_hash", "google_sub", "apple_sub"):
+    for col in ("auth_email", "password_hash", "google_sub", "apple_sub", "auth_user_id"):
         if web.get(col) and not (target and target.get(col)):
             sets.append(f"{col} = ?")
             params.append(web[col])
@@ -1264,79 +1245,30 @@ async def _carry_over_credentials(db, web: dict, into_id: int) -> None:
     await db.commit()
 
 
-@app.post("/api/auth/signup")
-async def api_auth_signup(request: Request):
-    body = await request.json()
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
-    name = (body.get("name") or "").strip()
-    if not _EMAIL_RE.match(email):
-        raise HTTPException(400, "Enter a valid email address")
-    if len(password) < MIN_PASSWORD_LEN:
-        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+@app.post("/api/auth/sync")
+async def api_auth_sync(request: Request):
+    """Link the Supabase Auth session to a public.users row and set the app cookie."""
+    token = _bearer_token(request)
+    if not token:
+        raise HTTPException(401, "Missing access token")
+    su = await verify_supabase_access_token(token)
+    if not su:
+        raise HTTPException(401, "Invalid session")
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    invite_slug = (body.get("invite_slug") or "").strip().lower() or None
+
     db = await get_db()
     try:
-        if await get_user_by_auth_email(db, email):
-            raise HTTPException(409, "An account with this email already exists")
-        full_name = name or email.split("@")[0]
-        user = await create_web_user(
-            db, full_name, auth_email=email,
-            password_hash=hash_password(password), auth_provider="email",
-        )
-        invite_slug = (body.get("invite_slug") or "").strip().lower()
+        await ensure_schema()
+        user = await ensure_app_user_from_supabase(db, su=su)
         if invite_slug:
             await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
-    finally:
-        await db.close()
-    return _session_response(user["telegram_id"])
-
-
-@app.post("/api/auth/login")
-async def api_auth_login(request: Request):
-    body = await request.json()
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
-    db = await get_db()
-    try:
-        user = await get_user_by_auth_email(db, email)
-        if not user or not verify_password(password, user.get("password_hash")):
-            raise HTTPException(401, "Incorrect email or password")
-    finally:
-        await db.close()
-    return _session_response(user["telegram_id"])
-
-
-@app.post("/api/auth/google")
-async def api_auth_google(request: Request):
-    body = await request.json()
-    claims = await _verify_google_id_token(body.get("id_token") or body.get("credential") or "")
-    if claims is None:
-        raise HTTPException(401, "Invalid Google sign-in")
-    prior_uid = _current_session_uid(request)
-    db = await get_db()
-    try:
-        user = await get_user_by_google_sub(db, claims["sub"])
-        if user is None and claims["email"]:
-            # Link Google to an existing email/password account with the same email.
-            existing = await get_user_by_auth_email(db, claims["email"])
-            if existing:
-                await db.execute(
-                    "UPDATE users SET google_sub=?, photo_url=COALESCE(photo_url, ?) "
-                    "WHERE telegram_id=?",
-                    (claims["sub"], claims.get("picture"), existing["telegram_id"]),
-                )
-                await db.commit()
-                user = await get_user(db, existing["telegram_id"])
-        if user is None:
-            user = await create_web_user(
-                db, claims["name"] or (claims["email"].split("@")[0] if claims["email"] else "Member"),
-                auth_email=claims["email"] or None,
-                google_sub=claims["sub"], auth_provider="google",
-                photo_url=claims.get("picture"),
-            )
-            invite_slug = (body.get("invite_slug") or "").strip().lower()
-            if invite_slug:
-                await _assign_group_from_slug(db, user["telegram_id"], invite_slug)
+            user = await get_user(db, user["telegram_id"])
     finally:
         await db.close()
     return _session_response(user["telegram_id"])
@@ -1608,11 +1540,12 @@ async def api_update_profile_email(request: Request):
     await db.execute(
         "UPDATE users SET email=? WHERE telegram_id=?", (email_addr, user["telegram_id"])
     )
-    await db.commit()
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     await db.close()
-    return {"ok": True, "user": dict(row) if row else None}
+    if not row or (row.get("email") or "").strip().lower() != email_addr:
+        raise HTTPException(500, "Failed to save email")
+    return {"ok": True, "email": email_addr, "user": dict(row)}
 
 
 @app.post("/api/beneficiary")
@@ -2329,9 +2262,85 @@ async def etransfer_deposit(request: Request):
 # Trustee application
 # ---------------------------------------------------------------------------
 
+TRUSTEE_AUTO_APPROVE_HOURS = 24
+
+
+async def _approve_trustee_application(db, app_row, reviewed_by=None):
+    """Create a group from a pending trustee application."""
+    plan = app_row["pricing_plan"] if "pricing_plan" in app_row.keys() else None
+    if plan not in ("subscription", "prize_share"):
+        plan = "subscription"
+    if plan == "subscription" and (app_row.get("payment_status") or "none") != "paid":
+        raise HTTPException(400, "Subscription payment required before approval")
+
+    applicant_id = app_row["applicant_user_id"]
+    base_slug = slugify(app_row["proposed_group_name"])
+    slug = base_slug
+    n = 0
+    while True:
+        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
+        if not await cur.fetchone():
+            break
+        n += 1
+        slug = f"{base_slug}-{n}"
+    join_code = generate_join_code()
+    while True:
+        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
+        if not await cur.fetchone():
+            break
+        join_code = generate_join_code()
+
+    platform_sub_id = app_row.get("stripe_sub_id") if plan == "subscription" else None
+    platform_sub_status = (
+        "active"
+        if plan == "subscription" and platform_sub_id and app_row.get("payment_status") == "paid"
+        else "none"
+    )
+    cur = await db.execute(
+        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan,
+           platform_sub_id, platform_sub_status)
+           VALUES (?,?,?, 'active', ?, ?, ?, ?) RETURNING id""",
+        (
+            app_row["proposed_group_name"],
+            slug,
+            applicant_id,
+            join_code,
+            plan,
+            platform_sub_id,
+            platform_sub_status,
+        ),
+    )
+    group_id = cur.lastrowid
+    await db.execute(
+        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
+    )
+    await add_group_member(db, group_id, applicant_id, "trustee")
+    await db.execute(
+        """UPDATE trustee_applications SET status='approved', reviewed_by=?,
+           reviewed_at=datetime('now') WHERE id=?""",
+        (reviewed_by, app_row["id"]),
+    )
+    return {"group_id": group_id, "slug": slug}
+
+
+async def _maybe_auto_approve_applications(db):
+    cur = await db.execute(
+        """SELECT * FROM trustee_applications
+           WHERE status='pending' AND payment_status='paid'
+             AND auto_approve_at IS NOT NULL AND auto_approve_at <= datetime('now')"""
+    )
+    rows = await cur.fetchall()
+    for app_row in rows:
+        await _approve_trustee_application(db, app_row, reviewed_by=None)
+    if rows:
+        await db.commit()
+
+
 @app.get("/api/trustee/application")
 async def api_trustee_application_status(request: Request):
     user, db = await _auth(request)
+    await ensure_schema()
+    await _maybe_auto_approve_applications(db)
     cur = await db.execute(
         """SELECT * FROM trustee_applications
            WHERE applicant_user_id = ? ORDER BY id DESC LIMIT 1""",
@@ -2345,6 +2354,7 @@ async def api_trustee_application_status(request: Request):
 @app.post("/api/trustee/apply")
 async def api_trustee_apply(request: Request):
     user, db = await _auth(request)
+    await ensure_schema()
     if await trustee_group_id(db, user):
         await db.close()
         raise HTTPException(400, "You already manage a group")
@@ -2363,12 +2373,98 @@ async def api_trustee_apply(request: Request):
     if plan not in ("subscription", "prize_share"):
         plan = "subscription"
     await db.execute(
-        "INSERT INTO trustee_applications (applicant_user_id, proposed_group_name, pricing_plan) VALUES (?,?,?)",
+        """INSERT INTO trustee_applications
+           (applicant_user_id, proposed_group_name, pricing_plan, payment_status)
+           VALUES (?,?,?, 'none')""",
         (user["telegram_id"], name, plan),
     )
     await db.commit()
     await db.close()
     return {"ok": True}
+
+
+@app.post("/api/trustee/application/subscription/create")
+async def api_trustee_application_subscription_create(request: Request):
+    """Start $6.99/mo subscription for a pending subscription-plan application."""
+    user, db = await _auth(request)
+    await ensure_schema()
+    if not config.STRIPE_SECRET_KEY:
+        await db.close()
+        raise HTTPException(400, "Stripe not configured")
+    cur = await db.execute(
+        """SELECT * FROM trustee_applications
+           WHERE applicant_user_id=? AND status='pending' ORDER BY id DESC LIMIT 1""",
+        (user["telegram_id"],),
+    )
+    app_row = await cur.fetchone()
+    if not app_row:
+        await db.close()
+        raise HTTPException(404, "No pending application")
+    plan = app_row.get("pricing_plan") or "subscription"
+    if plan != "subscription":
+        await db.close()
+        raise HTTPException(400, "Subscription payment is not required for this plan")
+    if (app_row.get("payment_status") or "none") == "paid":
+        await db.close()
+        raise HTTPException(400, "Subscription already paid")
+
+    existing_sub_id = app_row.get("stripe_sub_id")
+    if existing_sub_id:
+        try:
+            sub = stripe.Subscription.retrieve(
+                existing_sub_id, expand=["latest_invoice.payment_intent"]
+            )
+            pi = sub.latest_invoice.payment_intent
+            if pi and pi.status in (
+                "requires_payment_method",
+                "requires_confirmation",
+                "requires_action",
+            ):
+                await db.close()
+                return {
+                    "client_secret": pi.client_secret,
+                    "subscription_id": existing_sub_id,
+                    "price": GROUP_SUB_PRICE,
+                }
+        except Exception:
+            pass
+
+    try:
+        customer_id = await _get_or_create_customer(user, db)
+        price = stripe.Price.create(
+            unit_amount=int(round(GROUP_SUB_PRICE * 100)),
+            currency=config.CURRENCY.lower(),
+            recurring={"interval": "month"},
+            product_data={
+                "name": f"Lotto Chee group plan — {app_row['proposed_group_name']}",
+            },
+        )
+        sub = stripe.Subscription.create(
+            customer=customer_id,
+            items=[{"price": price.id}],
+            payment_behavior="default_incomplete",
+            payment_settings={"save_default_payment_method": "on_subscription"},
+            expand=["latest_invoice.payment_intent"],
+            metadata={
+                "kind": "application_sub",
+                "application_id": str(app_row["id"]),
+                "trustee_id": str(user["telegram_id"]),
+            },
+        )
+        await db.execute(
+            """UPDATE trustee_applications SET stripe_sub_id=?, payment_status='pending'
+               WHERE id=?""",
+            (sub.id, app_row["id"]),
+        )
+        await db.commit()
+        cs = sub.latest_invoice.payment_intent.client_secret
+        await db.close()
+        return {"client_secret": cs, "subscription_id": sub.id, "price": GROUP_SUB_PRICE}
+    except Exception as e:
+        await db.close()
+        log.exception("application subscription create error: %s", e)
+        msg = getattr(e, "user_message", None) or str(e)
+        raise HTTPException(400, f"Subscription error: {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -3460,6 +3556,7 @@ async def platform_rounds(
 @app.get("/api/platform/applications")
 async def platform_applications(request: Request):
     user, db = await _require_platform_admin(request)
+    await _maybe_auto_approve_applications(db)
     cur = await db.execute("""
         SELECT a.*, u.full_name, u.username
         FROM trustee_applications a
@@ -3480,43 +3577,10 @@ async def platform_approve_application(app_id: int, request: Request):
     if not app_row or app_row["status"] != "pending":
         await db.close()
         raise HTTPException(404, "Pending application not found")
-    applicant_id = app_row["applicant_user_id"]
-    base_slug = slugify(app_row["proposed_group_name"])
-    slug = base_slug
-    n = 0
-    while True:
-        cur = await db.execute("SELECT id FROM groups WHERE slug=?", (slug,))
-        if not await cur.fetchone():
-            break
-        n += 1
-        slug = f"{base_slug}-{n}"
-    join_code = generate_join_code()
-    while True:
-        cur = await db.execute("SELECT 1 FROM groups WHERE join_code=?", (join_code,))
-        if not await cur.fetchone():
-            break
-        join_code = generate_join_code()
-    plan = app_row["pricing_plan"] if "pricing_plan" in app_row.keys() else None
-    if plan not in ("subscription", "prize_share"):
-        plan = "subscription"
-    cur = await db.execute(
-        """INSERT INTO groups (name, slug, trustee_user_id, status, join_code, pricing_plan)
-           VALUES (?,?,?, 'active', ?, ?) RETURNING id""",
-        (app_row["proposed_group_name"], slug, applicant_id, join_code, plan),
-    )
-    group_id = cur.lastrowid
-    await db.execute(
-        "UPDATE users SET group_id=? WHERE telegram_id=?", (group_id, applicant_id)
-    )
-    await add_group_member(db, group_id, applicant_id, "trustee")
-    await db.execute(
-        """UPDATE trustee_applications SET status='approved', reviewed_by=?,
-           reviewed_at=datetime('now') WHERE id=?""",
-        (admin["telegram_id"], app_id),
-    )
+    result = await _approve_trustee_application(db, app_row, reviewed_by=admin["telegram_id"])
     await db.commit()
     await db.close()
-    return {"ok": True, "group_id": group_id, "slug": slug}
+    return {"ok": True, **result}
 
 
 @app.post("/api/platform/applications/{app_id}/reject")
@@ -4252,6 +4316,24 @@ async def stripe_webhook(request: Request):
         invoice = event["data"]["object"]
         sub_id = invoice.get("subscription")
         if not sub_id:
+            await db.close()
+            return {"ok": True}
+        # Application subscription ($6.99/mo before group exists): mark paid, auto-approve in 24h.
+        acur = await db.execute(
+            "SELECT * FROM trustee_applications WHERE stripe_sub_id=? AND status='pending'",
+            (sub_id,),
+        )
+        app_row = await acur.fetchone()
+        if app_row:
+            auto_at = (
+                datetime.now(timezone.utc) + timedelta(hours=TRUSTEE_AUTO_APPROVE_HOURS)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            await db.execute(
+                """UPDATE trustee_applications SET payment_status='paid', paid_at=datetime('now'),
+                   auto_approve_at=? WHERE id=?""",
+                (auto_at, app_row["id"]),
+            )
+            await db.commit()
             await db.close()
             return {"ok": True}
         # Group platform plan ($6.99/mo): activate and unlock the group.
