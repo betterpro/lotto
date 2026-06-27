@@ -4,7 +4,7 @@ import { useToast } from '../components/Toast.jsx'
 import { Sheet } from '../components/Sheet.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
 
-const TABS = ['overview', 'applications', 'groups', 'users', 'rounds']
+const TABS = ['overview', 'applications', 'groups', 'users', 'rounds', 'messages']
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2)
@@ -347,6 +347,79 @@ function RoundAdminRow({ r, onChanged }) {
   )
 }
 
+function MessagesTab() {
+  const showToast = useToast()
+  const [items, setItems] = useState(null)
+  const [edits, setEdits] = useState({})
+  const [busy, setBusy] = useState({})
+  const load = useCallback(
+    () => api.platform.notifTemplates().then(r => setItems(r.templates || [])).catch(e => showToast(e.message, 'error')),
+    [showToast],
+  )
+  useEffect(() => { load() }, [load])
+  const setB = (k, v) => setBusy(p => ({ ...p, [k]: v }))
+  const clearEdit = (key) => setEdits(p => { const n = { ...p }; delete n[key]; return n })
+
+  async function save(t) {
+    setB(t.key, true)
+    try {
+      await api.platform.saveNotifTemplate(t.key, edits[t.key] ?? t.text)
+      showToast('Saved', 'success'); clearEdit(t.key); await load()
+    } catch (e) { showToast(e.message, 'error') } finally { setB(t.key, false) }
+  }
+  async function reset(t) {
+    setB(t.key, true)
+    try {
+      await api.platform.saveNotifTemplate(t.key, '', true)
+      showToast('Reset to default', 'success'); clearEdit(t.key); await load()
+    } catch (e) { showToast(e.message, 'error') } finally { setB(t.key, false) }
+  }
+  async function test(t) {
+    setB(t.key + '_t', true)
+    try {
+      await api.platform.testNotifTemplate(t.key, edits[t.key] ?? t.text)
+      showToast('Test sent to your Telegram', 'success')
+    } catch (e) { showToast(e.message, 'error') } finally { setB(t.key + '_t', false) }
+  }
+
+  if (!items) return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
+  return (
+    <div className="stack">
+      <p style={{ padding: '0 16px', fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+        Edit the bot’s Telegram messages. Keep the <span className="mono">{'{placeholders}'}</span> for dynamic values
+        and use <span className="mono">&lt;b&gt;…&lt;/b&gt;</span> for bold. “Send test” delivers a sample to your own Telegram.
+      </p>
+      {items.map(t => {
+        const val = edits[t.key] ?? t.text
+        const dirty = edits[t.key] !== undefined && edits[t.key] !== t.text
+        return (
+          <div key={t.key} className="card col gap-8" style={{ padding: 14 }}>
+            <div className="row between" style={{ alignItems: 'center' }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>{t.label}</span>
+              {t.overridden && <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 8px' }}>custom</span>}
+            </div>
+            <span style={{ fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.4 }}>{t.desc}</span>
+            <textarea className="input" rows={5} value={val}
+              onChange={e => setEdits(p => ({ ...p, [t.key]: e.target.value }))}
+              style={{ fontFamily: 'var(--mono)', fontSize: 13, lineHeight: 1.5, resize: 'vertical' }} />
+            <div className="row gap-8">
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} disabled={busy[t.key + '_t']} onClick={() => test(t)}>
+                {busy[t.key + '_t'] ? '…' : '📤 Send test'}
+              </button>
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} disabled={busy[t.key] || !t.overridden} onClick={() => reset(t)}>
+                Reset
+              </button>
+              <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={busy[t.key] || !dirty} onClick={() => save(t)}>
+                {busy[t.key] ? '…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function PlatformAdmin() {
   const showToast = useToast()
   const botUsername = import.meta.env.VITE_BOT_USERNAME ?? ''
@@ -542,6 +615,8 @@ export default function PlatformAdmin() {
             ))}
           </div>
         </>
+      ) : tab === 'messages' ? (
+        <MessagesTab />
       ) : (
         <div className="stack">
           {rounds.length === 0 ? (

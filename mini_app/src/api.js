@@ -135,6 +135,9 @@ export const api = {
     deleteGroup:   (id) => req('DELETE', `/api/platform/groups/${id}`),
     patchRound:    (id, body) => req('PATCH', `/api/platform/rounds/${id}`, body),
     deleteRound:   (id) => req('DELETE', `/api/platform/rounds/${id}`),
+    notifTemplates:    () => req('GET', '/api/platform/notif-templates'),
+    saveNotifTemplate: (key, text, reset) => req('PATCH', `/api/platform/notif-templates/${key}`, { text, reset }),
+    testNotifTemplate: (key, text) => req('POST', `/api/platform/notif-templates/${key}/test`, { text }),
   },
   agreement: {
     master: () => req('GET', '/api/agreement/master'),

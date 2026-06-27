@@ -58,6 +58,7 @@ from lottery_draws import (
     next_draw_date,
     suggest_new_round,
 )
+from notif_templates import NOTIF_TEMPLATES, render_template
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -359,6 +360,33 @@ def _open_app_markup() -> InlineKeyboardMarkup | None:
     ]])
 
 
+_NOTIF_OVERRIDES: dict[str, str] = {}
+
+
+async def _load_notif_overrides(db=None):
+    """Cache super-admin notification-template overrides (call at startup + on edit)."""
+    own = db is None
+    if own:
+        db = await get_db()
+    try:
+        cur = await db.execute("SELECT key, text FROM notif_templates")
+        rows = await cur.fetchall()
+        _NOTIF_OVERRIDES.clear()
+        for r in rows:
+            _NOTIF_OVERRIDES[r["key"]] = r["text"]
+    except Exception:
+        pass
+    finally:
+        if own:
+            await db.close()
+
+
+def render_notif(key: str, **vars) -> str:
+    """Render a named notification with the admin override (if any) or the default."""
+    tmpl = _NOTIF_OVERRIDES.get(key) or NOTIF_TEMPLATES.get(key, {}).get("default", "")
+    return render_template(tmpl, vars)
+
+
 async def _notify(telegram_id: int, text: str):
     """Send a Telegram message with an Open App button. Silently swallows errors."""
     if _ptb_app is None:
@@ -480,10 +508,7 @@ async def _notify_round_contribution(db, round_d: dict, contributor: dict):
     rid = round_d["id"]
     name = contributor.get("full_name") or contributor.get("username") or "A member"
     pool = float(round_d.get("pool") or 0)
-    text = (
-        f"💸 <b>{html.escape(name)}</b> just contributed to Round #{rid}\n"
-        f"Pool is now ${pool:.0f}"
-    )
+    text = render_notif("contribution", name=html.escape(name), rid=rid, pool=f"{pool:.0f}")
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
@@ -523,8 +548,8 @@ async def _notify_round_closed(db, round_id: int):
     draw_str = f" · draw {html.escape(str(draw))}" if draw else ""
     await _notify(
         trustee_id,
-        f"🎫 <b>Round #{round_id} closed — time to buy the ticket</b>\n"
-        f"Pool ${pool:.0f} · {tickets} ticket{'s' if tickets != 1 else ''} to purchase{draw_str}",
+        render_notif("round_closed_trustee", rid=round_id, pool=f"{pool:.0f}",
+                     tickets=tickets, ticket_s="" if tickets == 1 else "s", draw=draw_str),
     )
 
 
@@ -536,11 +561,8 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
         return
     emoji = "⏰" if hours >= 48 else "⏳"
     jackpot = int(round_d.get("jackpot") or 0)
-    jp = f" · ${jackpot:,} jackpot" if jackpot else ""
-    text = (
-        f"{emoji} <b>Round #{rid} closes in ~{hours}h</b>\n"
-        f"You haven't joined yet — add your shares before entries close{jp}."
-    )
+    jp = f" · <b>${jackpot:,}</b> jackpot" if jackpot else ""
+    text = render_notif("round_closing", emoji=emoji, rid=rid, hours=hours, jp=jp)
     cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
@@ -639,10 +661,9 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
 
         # Balance check
         if u["credit"] < amount:
-            await _notify(u["telegram_id"],
-                f"⚠️ <b>Auto-join skipped — Round #{round_id}</b>\n"
-                f"Balance ${u['credit']:.2f} is less than ${amount:.2f} needed.\n"
-                f"Top up your account to stay in the next draw! 🎟")
+            await _notify(u["telegram_id"], render_notif(
+                "auto_join_skipped", rid=round_id,
+                balance=f"{u['credit']:.2f}", needed=f"{amount:.2f}"))
             continue
 
         # Already in this round?
@@ -666,10 +687,9 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         )
         await db.commit()
         bal = u["credit"] - amount
-        await _notify(u["telegram_id"],
-            f"🎟 <b>Auto-joined Round #{round_id}</b>\n"
-            f"{shares} share{'s' if shares > 1 else ''} · <b>${amount:.2f}</b> deducted\n"
-            f"Remaining balance: ${bal:.2f}")
+        await _notify(u["telegram_id"], render_notif(
+            "auto_joined", rid=round_id, shares=shares, share_s="" if shares == 1 else "s",
+            amount=f"{amount:.2f}", balance=f"{bal:.2f}"))
 
 
 # ---------------------------------------------------------------------------
@@ -866,11 +886,7 @@ async def _approve_etransfer_deposit(db, dep: dict, receipt: dict) -> bool:
         (dep["user_id"], "deposit", dep["amount"], f"E-transfer deposit #{dep['id']}"),
     )
     await db.commit()
-    await _notify(
-        dep["user_id"],
-        f"✅ <b>E-transfer received — ${dep['amount']:.2f}</b>\n"
-        f"Your account has been credited.",
-    )
+    await _notify(dep["user_id"], render_notif("etransfer_received", amount=f"{dep['amount']:.2f}"))
     return True
 
 
@@ -1003,20 +1019,9 @@ async def _notify_round_results(db, rd, numbers, bonus, m):
     """Tell each participant whether the pool won, based on the matched lines."""
     seq = rd.get("group_seq") or rd["id"]
     nums_html = "  ".join(f"<b>{int(n)}</b>" for n in numbers)
-    bonus_html = f"  ·  bonus <b>{int(bonus)}</b>" if bonus not in (None, "") else ""
-    if m["any_win"]:
-        body = (
-            f"🎉 <b>Results — Round #{seq}</b>\n"
-            f"Winning numbers: {nums_html}{bonus_html}\n"
-            f"Your pool matched <b>{m['best_label']}</b> — that's a winning tier! "
-            f"Your trustee will confirm your share of the prize."
-        )
-    else:
-        body = (
-            f"📣 <b>Results — Round #{seq}</b>\n"
-            f"Winning numbers: {nums_html}{bonus_html}\n"
-            f"Best line in the pool matched {m['best_label']} — no prize this time. Good luck next draw!"
-        )
+    bonus_html = f" · bonus <b>{int(bonus)}</b>" if bonus not in (None, "") else ""
+    key = "results_auto_win" if m["any_win"] else "results_auto_nowin"
+    body = render_notif(key, seq=seq, numbers=nums_html, bonus=bonus_html, best=m["best_label"])
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
@@ -1111,6 +1116,10 @@ async def lifespan(app: FastAPI):
         log.info("Database schema verified")
     except Exception:
         log.exception("Schema bootstrap failed — run migrations in Supabase SQL Editor")
+    try:
+        await _load_notif_overrides()
+    except Exception:
+        log.exception("Notification template load failed")
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url and not config.MINI_APP_URL:
         os.environ["MINI_APP_URL"] = render_url
@@ -2675,23 +2684,16 @@ async def admin_new_round(request: Request):
         )
         for row in await cur.fetchall():
             shares = row["free_ticket_shares"]
-            await _notify(
-                row["user_id"],
-                f"🎟 <b>Free tickets applied — Round #{group_seq}</b>\n"
-                f"You were auto-enrolled with <b>{shares}</b> free share(s) from the previous "
-                f"{lottery_label(lottery_type)} win. No credit was charged.",
-            )
+            await _notify(row["user_id"], render_notif(
+                "free_tickets", seq=group_seq, shares=shares,
+                share_s="" if shares == 1 else "s", game=lottery_label(lottery_type)))
 
-    draw_str = f" · Draw {draw_date}" if draw_date else ""
-    jackpot_str = (
-        f" · ${jackpot/1_000_000:.0f}M jackpot"
-        if jackpot
-        else " · jackpot announced closer to draw"
-    )
+    jackpot_line = f"🏆 Jackpot: <b>${jackpot/1_000_000:.0f}M</b>\n" if jackpot else ""
+    draw_line = f"📅 Draw: <b>{draw_date}</b>\n" if draw_date else ""
     target_str = f"target {tickets_target} tickets" if tickets_target else "no ticket limit"
     await _notify_all(db,
-        f"🎟 <b>New round opened — #{group_seq}</b>{draw_str}{jackpot_str}\n"
-        f"${price_per_share:.0f}/share · {target_str}",
+        render_notif("new_round", seq=group_seq, jackpot_line=jackpot_line, draw_line=draw_line,
+                     price=f"{price_per_share:.0f}", target=target_str),
         setting_col="notif_new_round",
         group_id=gid,
     )
@@ -2959,12 +2961,9 @@ async def admin_upload_ticket(request: Request):
         notif_reminder = s["notif_reminder"] if s else 1
         msg_parts = []
         if notif_ticket:
-            msg_parts.append(
-                f"✅ <b>Ticket purchased — Round #{round_['id']}</b>\n"
-                f"Numbers: {nums_str}"
-            )
+            msg_parts.append(render_notif("ticket_purchased", rid=round_["id"], numbers=nums_str))
         if notif_reminder:
-            msg_parts.append(f"⏰ Draw date: <b>{draw_date_str}</b> — good luck! 🍀")
+            msg_parts.append(render_notif("draw_reminder", draw=draw_date_str))
         if msg_parts:
             await _notify(uid, "\n".join(msg_parts))
 
@@ -3236,24 +3235,14 @@ async def admin_enter_results(request: Request):
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
         ft = free_ticket_allocation.get(p["user_id"], 0)
         if prize > 0 or ft > 0:
-            lines = [f"🏆 <b>You won — Round #{round_['id']}</b>"]
-            if prize > 0:
-                lines.append(f"Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)")
-            if ft > 0:
-                lines.append(
-                    f"Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round"
-                )
-            lines.append(f"Winning numbers: {win_str}")
-            if prize > 0:
-                lines.append("Credited to your balance! 💰")
-            msg = "\n".join(lines)
+            prize_line = f"💵 Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n" if prize > 0 else ""
+            ft_line = f"🎟️ Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round\n" if ft > 0 else ""
+            credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""
+            msg = render_notif("you_won", rid=round_["id"], prize_line=prize_line,
+                               ft_line=ft_line, numbers=win_str, credited_line=credited_line)
         else:
-            msg = (
-                f"🎟 <b>Results — Round #{round_['id']}</b>\n"
-                f"Winning numbers: {win_str}\n"
-                f"Your stake: ${p['amount']:.2f} ({share_pct}%)\n"
-                f"No prize this time — better luck next round! 🍀"
-            )
+            msg = render_notif("results_no_prize", rid=round_["id"], numbers=win_str,
+                               stake=f"{p['amount']:.2f}", pct=share_pct)
         await _notify(p["user_id"], msg)
 
     await db.close()
@@ -3815,6 +3804,65 @@ async def platform_delete_round(round_id: int, request: Request):
     await db.commit()
     await db.close()
     return {"ok": True}
+
+
+@app.get("/api/platform/notif-templates")
+async def platform_notif_templates(request: Request):
+    admin, db = await _require_platform_admin(request)
+    await _load_notif_overrides(db)
+    await db.close()
+    out = []
+    for key, t in NOTIF_TEMPLATES.items():
+        out.append({
+            "key": key,
+            "label": t["label"],
+            "desc": t.get("desc", ""),
+            "default": t["default"],
+            "text": _NOTIF_OVERRIDES.get(key, t["default"]),
+            "overridden": key in _NOTIF_OVERRIDES,
+        })
+    return {"templates": out}
+
+
+@app.patch("/api/platform/notif-templates/{key}")
+async def platform_update_notif_template(key: str, request: Request):
+    admin, db = await _require_platform_admin(request)
+    if key not in NOTIF_TEMPLATES:
+        await db.close()
+        raise HTTPException(404, "Unknown template")
+    body = await request.json()
+    text = body.get("text")
+    if text is None:
+        await db.close()
+        raise HTTPException(400, "text required")
+    text = str(text)
+    # Empty, equal to default, or an explicit reset → drop the override.
+    reset = bool(body.get("reset")) or text.strip() == "" or text.strip() == NOTIF_TEMPLATES[key]["default"].strip()
+    await db.execute("DELETE FROM notif_templates WHERE key=?", (key,))
+    if not reset:
+        await db.execute(
+            "INSERT INTO notif_templates (key, text, updated_at) VALUES (?,?,datetime('now'))",
+            (key, text),
+        )
+    await db.commit()
+    await _load_notif_overrides(db)
+    await db.close()
+    return {"ok": True, "reset": reset}
+
+
+@app.post("/api/platform/notif-templates/{key}/test")
+async def platform_test_notif_template(key: str, request: Request):
+    """Send a sample of the message to the admin's own Telegram chat."""
+    admin, db = await _require_platform_admin(request)
+    await db.close()
+    if key not in NOTIF_TEMPLATES:
+        raise HTTPException(404, "Unknown template")
+    body = await request.json()
+    sample = NOTIF_TEMPLATES[key].get("sample", {})
+    text = body.get("text")
+    rendered = render_template(str(text), sample) if text else render_notif(key, **sample)
+    await _notify(admin["telegram_id"], rendered)
+    return {"ok": True, "sent_to": admin["telegram_id"], "preview": rendered}
 
 
 @app.patch("/api/platform/users/{telegram_id}")
