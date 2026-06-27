@@ -3250,16 +3250,29 @@ async def admin_resolve_deposit(
     if dep["status"] != "pending":
         raise HTTPException(400, "Already resolved")
     if action == "approve":
+        # The trustee may adjust the amount before approving (e.g. the e-transfer
+        # actually received differs from what the member requested).
+        amount = dep["amount"]
+        if body.get("amount") is not None:
+            try:
+                amount = round(float(body["amount"]), 2)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Invalid amount")
+            if amount <= 0:
+                raise HTTPException(400, "Amount must be positive")
+        note = f"Approved deposit #{req_id}"
+        if amount != dep["amount"]:
+            note += f" (adjusted from ${dep['amount']:.2f})"
         await db.execute(
-            "UPDATE users SET credit=credit+? WHERE telegram_id=?", (dep["amount"], dep["user_id"])
+            "UPDATE users SET credit=credit+? WHERE telegram_id=?", (amount, dep["user_id"])
         )
         await db.execute(
             "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
-            (dep["user_id"], "deposit", dep["amount"], f"Approved deposit #{req_id}", gid),
+            (dep["user_id"], "deposit", amount, note, gid),
         )
         await db.execute(
-            "UPDATE deposit_requests SET status='approved', resolved_at=datetime('now') WHERE id=?",
-            (req_id,)
+            "UPDATE deposit_requests SET status='approved', amount=?, resolved_at=datetime('now') WHERE id=?",
+            (amount, req_id)
         )
     elif action == "reject":
         await db.execute(

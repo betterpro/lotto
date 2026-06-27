@@ -195,7 +195,8 @@ export const api = {
     round:        ()              => req('GET',  '/api/admin/round'),
     rounds:       ()              => req('GET',  '/api/admin/rounds'),
     deposits:     ()              => req('GET',  '/api/admin/deposits'),
-    resolve:      (id, action)    => req('POST', `/api/admin/deposits/${id}`, { action }),
+    resolve:      (id, action, amount) => req('POST', `/api/admin/deposits/${id}`,
+      amount != null ? { action, amount } : { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
     group: {
