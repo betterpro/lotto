@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Book Now — NEXUS VR</title>
+  <meta name="theme-color" content="#0a0a12" />
+  <meta name="description" content="Book your free-roam virtual reality mission. Up to 8 players." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/book/styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/book/">
+        <span class="brand-mark">◢◣</span>
+        <span class="brand-name" id="brandName">NEXUS VR</span>
+      </a>
+      <div class="venue-pill" id="venuePill">Richmond City</div>
+    </div>
+  </header>
+
+  <div class="stepbar">
+    <div class="wrap">
+      <ol id="stepbar" class="steps">
+        <li data-step="1"><span>1</span> Experience</li>
+        <li data-step="2"><span>2</span> Date</li>
+        <li data-step="3"><span>3</span> Time</li>
+        <li data-step="4"><span>4</span> Players</li>
+        <li data-step="5"><span>5</span> Details</li>
+        <li data-step="6"><span>6</span> Pay</li>
+      </ol>
+    </div>
+  </div>
+
+  <main class="wrap main">
+    <div id="banner" class="banner" hidden></div>
+
+    <!-- STEP 1 — Experience -->
+    <section class="step" data-step="1">
+      <h1 class="step-title">Choose your mission</h1>
+      <p class="step-sub" id="tagline">Free-roam virtual reality. Up to 8 players.</p>
+      <div id="experienceGrid" class="exp-grid">
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+      </div>
+    </section>
+
+    <!-- STEP 2 — Date -->
+    <section class="step" data-step="2" hidden>
+      <button class="back" data-goto="1">← Experiences</button>
+      <h1 class="step-title">Pick a date</h1>
+      <p class="step-sub" id="dateSub"></p>
+      <div id="dateGrid" class="date-grid"></div>
+    </section>
+
+    <!-- STEP 3 — Time -->
+    <section class="step" data-step="3" hidden>
+      <button class="back" data-goto="2">← Date</button>
+      <h1 class="step-title">Select a session time</h1>
+      <p class="step-sub" id="timeSub"></p>
+      <div id="timeGrid" class="time-grid"></div>
+    </section>
+
+    <!-- STEP 4 — Players -->
+    <section class="step" data-step="4" hidden>
+      <button class="back" data-goto="3">← Time</button>
+      <h1 class="step-title">How many players?</h1>
+      <p class="step-sub" id="playersSub"></p>
+      <div class="counter">
+        <button id="minusBtn" class="counter-btn" aria-label="Fewer players">−</button>
+        <div class="counter-val"><span id="playerCount">1</span><small>players</small></div>
+        <button id="plusBtn" class="counter-btn" aria-label="More players">+</button>
+      </div>
+      <div class="price-line">Total <strong id="playersTotal">$0</strong></div>
+      <button id="toDetails" class="cta">Continue →</button>
+    </section>
+
+    <!-- STEP 5 — Details -->
+    <section class="step" data-step="5" hidden>
+      <button class="back" data-goto="4">← Players</button>
+      <h1 class="step-title">Your details</h1>
+      <p class="step-sub">We'll send your booking confirmation here.</p>
+      <form id="detailsForm" class="form">
+        <label>Full name<input id="fName" type="text" autocomplete="name" required placeholder="Alex Rivera" /></label>
+        <label>Email<input id="fEmail" type="email" autocomplete="email" required placeholder="you@email.com" /></label>
+        <label>Phone <span class="opt">(optional)</span><input id="fPhone" type="tel" autocomplete="tel" placeholder="+1 604 555 0123" /></label>
+        <button type="submit" class="cta">Review booking →</button>
+      </form>
+    </section>
+
+    <!-- STEP 6 — Review & Pay -->
+    <section class="step" data-step="6" hidden>
+      <button class="back" data-goto="5">← Details</button>
+      <h1 class="step-title">Review &amp; pay</h1>
+      <div class="summary-card">
+        <div class="summary-poster" id="sumPoster">🎮</div>
+        <div class="summary-body">
+          <h2 id="sumExp">—</h2>
+          <ul class="summary-list">
+            <li><span>When</span><strong id="sumWhen">—</strong></li>
+            <li><span>Players</span><strong id="sumPlayers">—</strong></li>
+            <li><span>Name</span><strong id="sumName">—</strong></li>
+            <li><span>Email</span><strong id="sumEmail">—</strong></li>
+          </ul>
+          <div class="summary-total"><span>Total</span><strong id="sumTotal">$0</strong></div>
+        </div>
+      </div>
+      <p class="paynote" id="payNote">Secure payment powered by Stripe.</p>
+      <button id="payBtn" class="cta pay">Pay &amp; confirm</button>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span id="footAddr"></span>
+      <span class="dot">·</span>
+      <span>Powered by Stripe</span>
+    </div>
+  </footer>
+
+  <script src="/book/app.js"></script>
+</body>
+</html>
