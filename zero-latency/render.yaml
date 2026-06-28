@@ -1,3 +1,15 @@
+# Render Blueprint — provisions the web service AND a Postgres database, and
+# wires DATABASE_URL between them automatically.
+#
+# Deploy: Render Dashboard → New → Blueprint → pick this repo → Apply.
+# Then set the Stripe secrets (marked sync:false) in the service's Environment.
+
+databases:
+  - name: zl-booking-db
+    plan: free            # 90-day free Postgres; bump to "starter" for production
+    databaseName: bookings
+    user: bookings
+
 services:
   - type: web
     name: zero-latency-booking
@@ -6,19 +18,23 @@ services:
     pythonVersion: "3.12.9"
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
     envVars:
-      # Postgres connection string. Omit to fall back to a local SQLite file
-      # (not recommended in production — Render's disk is ephemeral).
+      # Auto-filled from the database above — no manual setup needed.
       - key: DATABASE_URL
+        fromDatabase:
+          name: zl-booking-db
+          property: connectionString
+      - key: CURRENCY
+        value: CAD
+      # Set after the first deploy to your live URL, e.g.
+      # https://zero-latency-booking.onrender.com  (used for Stripe redirects).
+      - key: PUBLIC_BASE_URL
         sync: false
+      # Add your Stripe keys in the dashboard (kept out of source).
       - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
         sync: false
       - key: STRIPE_PUBLISHABLE_KEY
         sync: false
-      - key: CURRENCY
-        value: CAD
-      # Public origin used to build Stripe success/cancel links.
-      - key: PUBLIC_BASE_URL
+      - key: STRIPE_WEBHOOK_SECRET
         sync: false

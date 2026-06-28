@@ -36,6 +36,27 @@ The checkout flow uses Stripe **Checkout Sessions** (hosted payment page). When 
 session completes, the webhook marks the booking `confirmed`; the confirmation
 page polls until it flips.
 
+## Deploy to Render
+
+The included `render.yaml` is a Blueprint that provisions both the web service
+and a Postgres database, and wires `DATABASE_URL` between them automatically.
+
+1. Push this project to a Git repo (its folder must be the **repo root**, so
+   `render.yaml` sits at the top level).
+2. Render Dashboard → **New → Blueprint** → pick the repo → **Apply**. Render
+   creates the Postgres DB and the web service.
+3. In the service's **Environment**, add your Stripe keys:
+   `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, and
+   set `PUBLIC_BASE_URL` to the service's URL
+   (e.g. `https://zero-latency-booking.onrender.com`).
+4. In **Stripe → Developers → Webhooks**, add an endpoint at
+   `https://<your-url>/api/webhook` for `checkout.session.completed` and
+   `checkout.session.expired`, then copy its signing secret into
+   `STRIPE_WEBHOOK_SECRET` and redeploy.
+
+Health check: `GET /healthz`. The `bookings` table is created automatically on
+first boot. Until you set `STRIPE_SECRET_KEY` the live site runs in demo mode.
+
 ## How it works
 
 | Step | What happens |
