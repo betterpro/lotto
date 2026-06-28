@@ -50,29 +50,6 @@ python bot.py
 
 **Chance example:** Alice 50 + Bob 30 + Carol 20 = 100 pool → Alice 50%, Bob 30%, Carol 20%
 
-## VR Experience Booking (`/book`)
-
-A self-contained, Zero Latency–style booking site for reserving free-roam VR
-sessions and paying with Stripe. It runs inside the same FastAPI service.
-
-- **Booking page:** `GET /book` — choose experience → date → time slot → players
-  → details → Stripe Checkout.
-- **Confirmation:** `/book/confirmation.html?ref=VR-XXXXXX` (guests land here
-  after paying).
-- **API:** `/api/vr/config`, `/api/vr/availability`, `/api/vr/checkout`,
-  `/api/vr/booking/{ref}`, and the Stripe webhook `POST /api/vr/webhook`.
-
-Experiences, venue hours, and pricing are configured in `vr_booking.py`
-(`EXPERIENCES` / `VENUE`). Bookings are stored in the `vr_bookings` table
-(created idempotently at startup; see `migrations/015_vr_bookings.sql`).
-
-**Stripe setup:** set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, then add a
-webhook endpoint in the Stripe dashboard pointing at
-`https://<your-host>/api/vr/webhook` for the `checkout.session.completed` and
-`checkout.session.expired` events. If `STRIPE_SECRET_KEY` is unset, the flow
-still works in **demo mode** — reservations are confirmed without a charge (and
-clearly labelled as such).
-
 ## Deploy 24/7 (Linux systemd)
 
 ```ini

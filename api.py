@@ -4538,11 +4538,4 @@ class _SPAStaticFiles(StaticFiles):
         return response
 
 
-# VR experience booking (Zero Latency–style flow + Stripe). Routes live under
-# /api/vr/* and the booking page is served at /book — registered before the SPA
-# catch-all so those paths resolve to the booking app, not the Mini App.
-import vr_booking
-vr_booking.register(app)
-
-
 app.mount("/", _SPAStaticFiles(directory="mini_app/dist", html=True), name="static")

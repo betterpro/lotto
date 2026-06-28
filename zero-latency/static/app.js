@@ -3,15 +3,8 @@
   "use strict";
 
   var state = {
-    config: null,
-    experience: null,
-    date: null,      // YYYY-MM-DD
-    time: null,      // HH:MM
-    timeLabel: null,
-    players: 1,
-    name: "",
-    email: "",
-    phone: "",
+    config: null, experience: null, date: null, time: null, timeLabel: null,
+    maxRemaining: 8, players: 1, name: "", email: "", phone: "",
   };
 
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
@@ -38,7 +31,7 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  /* ---- Step 1: experiences ---- */
+  /* Step 1: experiences */
   function renderExperiences() {
     var grid = $("#experienceGrid");
     grid.innerHTML = "";
@@ -76,7 +69,7 @@
     gotoStep(2);
   }
 
-  /* ---- Step 2: dates ---- */
+  /* Step 2: dates */
   function renderDates() {
     var grid = $("#dateGrid");
     grid.innerHTML = "";
@@ -109,14 +102,14 @@
     gotoStep(3);
   }
 
-  /* ---- Step 3: times ---- */
+  /* Step 3: times */
   function loadTimes() {
     var grid = $("#timeGrid");
     grid.innerHTML = '<div class="empty">Loading sessions…</div>';
     var prettyDate = new Date(state.date + "T00:00:00").toLocaleDateString(undefined,
       { weekday: "long", month: "long", day: "numeric" });
     $("#timeSub").textContent = state.experience.name + " · " + prettyDate;
-    fetch("/api/vr/availability?experience_id=" + encodeURIComponent(state.experience.id) +
+    fetch("/api/availability?experience_id=" + encodeURIComponent(state.experience.id) +
           "&date=" + encodeURIComponent(state.date))
       .then(function (r) { return r.json(); })
       .then(function (data) {
@@ -130,9 +123,7 @@
           cell.className = "time-cell" + (s.soldout ? " soldout" : "");
           cell.innerHTML = '<div class="t">' + s.label + '</div>' +
             '<div class="left">' + (s.soldout ? "Sold out" : s.remaining + " spots left") + '</div>';
-          if (!s.soldout) {
-            cell.addEventListener("click", function () { selectTime(s); });
-          }
+          if (!s.soldout) { cell.addEventListener("click", function () { selectTime(s); }); }
           grid.appendChild(cell);
         });
       })
@@ -148,7 +139,7 @@
     gotoStep(4);
   }
 
-  /* ---- Step 4: players ---- */
+  /* Step 4: players */
   function renderPlayers() {
     var e = state.experience;
     var cap = Math.min(e.max_players, state.maxRemaining || e.max_players);
@@ -161,7 +152,7 @@
     $("#plusBtn").disabled = state.players >= cap;
   }
 
-  /* ---- Step 6: summary ---- */
+  /* Step 6: summary */
   function renderSummary() {
     var e = state.experience;
     var prettyDate = new Date(state.date + "T00:00:00").toLocaleDateString(undefined,
@@ -180,22 +171,17 @@
     $("#payBtn").textContent = state.config.stripe_enabled ? "Pay " + money(e.price * state.players) + " →" : "Confirm reservation →";
   }
 
-  /* ---- Pay ---- */
+  /* Pay */
   function pay() {
     var btn = $("#payBtn");
     btn.disabled = true;
     btn.textContent = "Starting checkout…";
-    fetch("/api/vr/checkout", {
+    fetch("/api/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        experience_id: state.experience.id,
-        date: state.date,
-        time: state.time,
-        players: state.players,
-        name: state.name,
-        email: state.email,
-        phone: state.phone,
+        experience_id: state.experience.id, date: state.date, time: state.time,
+        players: state.players, name: state.name, email: state.email, phone: state.phone,
       }),
     })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
@@ -213,21 +199,17 @@
       });
   }
 
-  /* ---- Wire up ---- */
+  /* Init */
   function init() {
-    // Cancelled-return notice.
-    var params = new URLSearchParams(window.location.search);
-    if (params.get("cancelled")) {
+    if (new URLSearchParams(window.location.search).get("cancelled")) {
       banner("Payment cancelled — your spot wasn't booked. You can pick another time.", "warn");
     }
-
     $$("[data-goto]").forEach(function (b) {
       b.addEventListener("click", function () { gotoStep(parseInt(b.dataset.goto, 10)); });
     });
     $("#minusBtn").addEventListener("click", function () { state.players--; renderPlayers(); });
     $("#plusBtn").addEventListener("click", function () { state.players++; renderPlayers(); });
     $("#toDetails").addEventListener("click", function () {
-      // prefill if returning
       $("#fName").value = state.name; $("#fEmail").value = state.email; $("#fPhone").value = state.phone;
       gotoStep(5);
     });
@@ -245,7 +227,7 @@
     });
     $("#payBtn").addEventListener("click", pay);
 
-    fetch("/api/vr/config")
+    fetch("/api/config")
       .then(function (r) { return r.json(); })
       .then(function (cfg) {
         state.config = cfg;

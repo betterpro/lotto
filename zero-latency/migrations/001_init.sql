@@ -1,7 +1,8 @@
--- VR experience bookings (Zero Latency–style "book a time slot + pay with Stripe").
--- See vr_booking.py. Mirrors the idempotent statements in database.py ensure_schema().
+-- Postgres schema for the Zero Latency VR Richmond booking app.
+-- (The app also creates this automatically on startup via db.py; this file is
+-- here for reference / running migrations manually.)
 
-CREATE TABLE IF NOT EXISTS vr_bookings (
+CREATE TABLE IF NOT EXISTS bookings (
     id              BIGSERIAL PRIMARY KEY,
     ref             TEXT UNIQUE NOT NULL,
     venue_id        TEXT NOT NULL,
@@ -19,9 +20,9 @@ CREATE TABLE IF NOT EXISTS vr_bookings (
     status          TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | cancelled
     stripe_session_id     TEXT,
     stripe_payment_intent TEXT,
-    created_at      TEXT,
+    created_at      TEXT NOT NULL,
     confirmed_at    TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_vr_bookings_slot ON vr_bookings (experience_id, slot_date, slot_time);
-CREATE INDEX IF NOT EXISTS idx_vr_bookings_status ON vr_bookings (status);
+CREATE INDEX IF NOT EXISTS idx_bookings_slot ON bookings (experience_id, slot_date, slot_time);
+CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings (status);

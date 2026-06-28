@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: zero-latency-booking
+    env: python
+    plan: starter
+    pythonVersion: "3.12.9"
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Postgres connection string. Omit to fall back to a local SQLite file
+      # (not recommended in production — Render's disk is ephemeral).
+      - key: DATABASE_URL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: CURRENCY
+        value: CAD
+      # Public origin used to build Stripe success/cancel links.
+      - key: PUBLIC_BASE_URL
+        sync: false

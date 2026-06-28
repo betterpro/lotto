@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/book/styles.css" />
+  <link rel="stylesheet" href="/styles.css" />
   <style>
     .conf-wrap { max-width: 560px; margin: 40px auto 80px; }
     .tick { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center;
@@ -26,7 +26,7 @@
 <body>
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand" href="/book/"><span class="brand-mark">◢◣</span><span class="brand-name">ZERO LATENCY VR</span></a>
+      <a class="brand" href="/"><span class="brand-mark">◢◣</span><span class="brand-name">ZERO LATENCY VR</span></a>
     </div>
   </header>
 
@@ -52,7 +52,7 @@
           </div>
         </div>
         <p class="paynote" id="note">A confirmation email is on its way. Please arrive 15 minutes early for your safety briefing.</p>
-        <a href="/book/" class="cta pay" style="text-align:center;text-decoration:none;display:block;">Book another mission</a>
+        <a href="/" class="cta pay" style="text-align:center;text-decoration:none;display:block;">Book another mission</a>
       </div>
     </div>
   </main>
@@ -74,13 +74,10 @@
 
       var tries = 0;
       function load() {
-        fetch("/api/vr/booking/" + encodeURIComponent(ref))
+        fetch("/api/booking/" + encodeURIComponent(ref))
           .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
           .then(function (b) {
-            // If still pending (webhook not in yet), retry a few times.
-            if (b.status === "pending" && tries < 5) {
-              tries++; setTimeout(load, 1500); return;
-            }
+            if (b.status === "pending" && tries < 5) { tries++; setTimeout(load, 1500); return; }
             loading.hidden = true; content.hidden = false;
             var confirmed = b.status === "confirmed";
             var tick = document.getElementById("tick");
@@ -102,9 +99,7 @@
             document.getElementById("cname").textContent = b.customer_name;
             document.getElementById("amount").textContent = b.amount_display;
           })
-          .catch(function () {
-            loading.textContent = "We couldn't find that booking (" + ref + ").";
-          });
+          .catch(function () { loading.textContent = "We couldn't find that booking (" + ref + ")."; });
       }
       load();
     })();
