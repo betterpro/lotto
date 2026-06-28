@@ -1,4 +1,4 @@
-/* NEXUS VR — booking flow (vanilla JS, no build step). */
+/* Zero Latency VR Richmond — booking flow (vanilla JS, no build step). */
 (function () {
   "use strict";
 

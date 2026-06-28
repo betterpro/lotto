@@ -41,7 +41,7 @@ log = logging.getLogger("vr_booking")
 VENUE = {
     "id": "richmond-city",
     "name": "Richmond City",
-    "brand": "NEXUS VR",
+    "brand": "ZERO LATENCY VR",
     "tagline": "Free-roam virtual reality. Up to 8 players. One unforgettable mission.",
     "timezone": "America/Vancouver",
     "address": "Lansdowne Centre, Richmond, BC",
