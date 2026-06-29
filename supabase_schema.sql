@@ -1,4 +1,4 @@
--- Lotto Chee — Supabase / PostgreSQL schema
+-- LottoChee — Supabase / PostgreSQL schema
 -- Run this once in the Supabase SQL Editor:
 --   https://supabase.com/dashboard/project/thowyteqaavuewsaujot/sql
 

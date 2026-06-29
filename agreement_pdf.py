@@ -1,4 +1,4 @@
-"""Themed PDF export for Lotto Chee agreements (matches mini app palette)."""
+"""Themed PDF export for LottoChee agreements (matches mini app palette)."""
 
 from io import BytesIO
 
@@ -39,7 +39,7 @@ class _AgreementPDF(FPDF):
         self.set_y(-16)
         self.set_font("Helvetica", "I", 8)
         self.set_text_color(*THEME["tx3"])
-        self.cell(0, 5, "Lotto Chee · BC, Canada", align="C")
+        self.cell(0, 5, "LottoChee · BC, Canada", align="C")
 
 
 def _paint_page_bg(pdf: FPDF) -> None:

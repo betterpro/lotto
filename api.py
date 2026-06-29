@@ -355,7 +355,7 @@ def _open_app_markup() -> InlineKeyboardMarkup | None:
     if not _bot_username:
         return None
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("Open Lotto Chee 🎟", url=f"https://t.me/{_bot_username}?startapp=open")
+        InlineKeyboardButton("Open LottoChee 🎟", url=f"https://t.me/{_bot_username}?startapp=open")
     ]])
 
 
@@ -2436,7 +2436,7 @@ async def api_trustee_application_subscription_create(request: Request):
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
             product_data={
-                "name": f"Lotto Chee group plan — {app_row['proposed_group_name']}",
+                "name": f"LottoChee group plan — {app_row['proposed_group_name']}",
             },
         )
         sub = stripe.Subscription.create(
@@ -4001,7 +4001,7 @@ async def admin_group_subscription_create(request: Request):
             unit_amount=int(round(GROUP_SUB_PRICE * 100)),
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
-            product_data={"name": f"Lotto Chee group plan — {group['name']}"},
+            product_data={"name": f"LottoChee group plan — {group['name']}"},
         )
         sub = stripe.Subscription.create(
             customer=customer_id,
@@ -4145,7 +4145,7 @@ async def stripe_create_subscription(
             unit_amount=int(charge_amount * 100),
             currency=config.CURRENCY.lower(),
             recurring={"interval": "month"},
-            product_data={"name": "Lotto Chee Monthly Deposit"},
+            product_data={"name": "LottoChee Monthly Deposit"},
         )
         subscription = stripe.Subscription.create(
             customer=customer_id,

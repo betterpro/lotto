@@ -90,7 +90,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug, user 
       <div className="ob-panel">
         <div className="ob-top">
           <div className="ob-top-brand">
-            <img src={LOGO_SRC} alt="Lotto Chee" className="ob-top-logo" />
+            <img src={LOGO_SRC} alt="LottoChee" className="ob-top-logo" />
             <span className="ob-top-step">One-time setup · Step {step} of 3</span>
           </div>
           <div className="ob-steps">
@@ -154,7 +154,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug, user 
               <span className="ob-eyebrow">Beneficiary information</span>
               <h2 className="ob-h2">Tell us who you are</h2>
               <p className="ob-p">
-                Because Lotto Chee buys real BCLC group tickets on your behalf, we need to
+                Because LottoChee buys real BCLC group tickets on your behalf, we need to
                 register you as a <strong>Beneficiary</strong>. Your details are required by
                 the <strong>Group Prize Agreement</strong> if any pooled ticket wins $1,000 CAD or more.
               </p>
@@ -282,7 +282,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug, user 
                 Corporations as follows:
               </p>
               <Clause n={1}>That the Beneficiaries are the only individuals with a legal or beneficial
-                interest in the <em>Lotto Max</em> ticket bearing the control number assigned by Lotto Chee
+                interest in the <em>Lotto Max</em> ticket bearing the control number assigned by LottoChee
                 for the round joined (the <strong>Ticket</strong>).</Clause>
               <Clause n={2}>The Group Trustee is the lawful holder of the Ticket and no person other than
                 the Beneficiaries has any interest in the Ticket or any right to payment or delivery
@@ -391,7 +391,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug, user 
               <button className="btn btn-primary" style={{ flex: 1, opacity: scrolled && allChecked ? 1 : .45 }}
                 disabled={!(scrolled && allChecked)}
                 onClick={() => onAccept({ ...info, acceptedAt: new Date().toISOString() })}>
-                <CheckIcon width={16} height={16} /> Agree &amp; start using Lotto Chee
+                <CheckIcon width={16} height={16} /> Agree &amp; start using LottoChee
               </button>
             </div>
           </div>

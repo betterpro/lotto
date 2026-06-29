@@ -29,7 +29,7 @@ function TGHeader({ page }) {
   const logoSrc = page === 'home' ? HOME_LOGO_SRC : LOGO_SRC
   return (
     <header className="tg-header">
-      <img src={logoSrc} alt="Lotto Chee" className="tg-header-logo" />
+      <img src={logoSrc} alt="LottoChee" className="tg-header-logo" />
       <div className="col tg-header-tagline">
         <span>Play together,</span>
         <span>dream bigger</span>

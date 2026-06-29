@@ -1,4 +1,4 @@
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Lottochee">
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LottoChee">
   <defs>
     <linearGradient id="lcg" x1="12%" y1="2%" x2="86%" y2="98%">
       <stop offset="6%" stop-color="#2ea6ff"/>
@@ -18,7 +18,7 @@
       <stop offset="100%" stop-color="#e3ab1f"/>
     </radialGradient>
   </defs>
-  <!-- Lottochee token: lotto ball + luck spark -->
+  <!-- LottoChee token: lotto ball + luck spark -->
   <circle cx="50" cy="50" r="46" fill="url(#lcg)"/>
   <circle cx="50" cy="50" r="46" fill="url(#lcsh)"/>
   <circle cx="50" cy="50" r="46" fill="url(#lchi)"/>

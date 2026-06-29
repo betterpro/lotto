@@ -88,7 +88,7 @@ def build_master_agreement(
             "PLATFORM SERVICE PLAN\n"
             "  This group is on the Big-Prize Share plan, chosen by the Group Trustee when the\n"
             "  group was created and fixed for the life of the group. No monthly fee applies.\n"
-            "  The Beneficiaries acknowledge and agree that Lotto Chee may claim a service fee\n"
+            "  The Beneficiaries acknowledge and agree that LottoChee may claim a service fee\n"
             "  of five percent (5%) of any single Prize exceeding $1,000.00 CAD, deducted from\n"
             "  that Prize before the remainder is distributed to the Beneficiaries by share."
         )
@@ -97,7 +97,7 @@ def build_master_agreement(
             "PLATFORM SERVICE PLAN\n"
             "  This group is on the Monthly Subscription plan, chosen by the Group Trustee when\n"
             "  the group was created and fixed for the life of the group. The Group Trustee pays\n"
-            "  Lotto Chee a service fee of $6.99 CAD per month. Lotto Chee claims no share of\n"
+            "  LottoChee a service fee of $6.99 CAD per month. LottoChee claims no share of\n"
             "  any Prize won by the group."
         )
     ben_address = _format_address(
@@ -107,14 +107,14 @@ def build_master_agreement(
         t["street"], t["city"], t["province"], None
     )
     decl = declaration_category_label(declaration_category)
-    signed_date = accepted_at[:10] if accepted_at and len(accepted_at) >= 10 else "See Lotto Chee account"
+    signed_date = accepted_at[:10] if accepted_at and len(accepted_at) >= 10 else "See LottoChee account"
 
     return f"""GROUP PRIZE AGREEMENT
-(BCLC Group Release Form - Lotto Chee)
+(BCLC Group Release Form - LottoChee)
 
 This Group Prize Agreement is required when a group lottery ticket wins a prize of
 $1,000.00 CAD or greater and must be completed by all group members entitled to a
-share of the prize won. Lotto Chee uses this agreement for pooled play and registers
+share of the prize won. LottoChee uses this agreement for pooled play and registers
 each member as a Beneficiary with the Group Trustee named below.
 
 GROUP TRUSTEE
@@ -141,7 +141,7 @@ TICKET INFORMATION
   Ticket name:            Pooled BCLC ticket per round (Lotto Max, 6/49, or as stated
                           in your round amendment)
   Draw date(s):           As stated in each round amendment you join
-  Ticket control number:  Assigned by Lotto Chee per round when the ticket is purchased
+  Ticket control number:  Assigned by LottoChee per round when the ticket is purchased
 
 The Group Trustee holds each pooled ticket on behalf of all Beneficiaries who joined
 that round.
@@ -232,10 +232,10 @@ SIGNATURES & DECLARATIONS
 Group Trustee: {t["name"]}
 
 Beneficiary: {beneficiary_name}
-Digitally signed via Lotto Chee / Telegram - {signed_date}
+Digitally signed via LottoChee / Telegram - {signed_date}
 Declaration: {decl}
 
-- Lotto Chee - BC, Canada
+- LottoChee - BC, Canada
 """
 
 

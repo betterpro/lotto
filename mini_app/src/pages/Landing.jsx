@@ -29,7 +29,7 @@ export default function Landing() {
         <div className="wrap nav-in">
           <a className="brand" href="#top" onClick={e => { e.preventDefault() }}>
             <LogoMark size={30} />
-            <div className="brand-name">Lottochee</div>
+            <div className="brand-name">LottoChee</div>
           </a>
           <div className="nav-links">
             <a href="#how">How it works</a>
@@ -54,7 +54,7 @@ export default function Landing() {
       <div className={'drawer' + (drawer ? ' open' : '')} onClick={closeDrawer}>
         <div className="drawer-panel" onClick={e => e.stopPropagation()}>
           <div className="drawer-head">
-            <a className="brand" onClick={closeDrawer}><LogoMark size={28} /><div className="brand-name">Lottochee</div></a>
+            <a className="brand" onClick={closeDrawer}><LogoMark size={28} /><div className="brand-name">LottoChee</div></a>
             <button className="drawer-close" type="button" aria-label="Close menu" onClick={closeDrawer}>✕</button>
           </div>
           <nav className="drawer-links">
@@ -81,7 +81,7 @@ export default function Landing() {
               <span className="chip"><span className="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>Lotto Max · 6/49 · Daily Grand</span>
             </div>
             <h1 className="display">Play Canada's biggest draws. <span className="accentword">Together.</span></h1>
-            <p className="lede">Lottochee pools your group into real BCLC tickets — Lotto&nbsp;Max, Lotto&nbsp;6/49 and Daily&nbsp;Grand. Buy a share from $3, the pool buys the tickets, and every prize is split by your share — automatically. On Telegram or the web.</p>
+            <p className="lede">LottoChee pools your group into real BCLC tickets — Lotto&nbsp;Max, Lotto&nbsp;6/49 and Daily&nbsp;Grand. Buy a share from $3, the pool buys the tickets, and every prize is split by your share — automatically. On Telegram or the web.</p>
 
             <div className="hero-games">
               <span className="games-label">Pooling every major draw</span>
@@ -126,7 +126,7 @@ export default function Landing() {
                 <div className="phone-island" />
                 <div className="tg-bar">
                   <div className="x">✕</div>
-                  <div className="t"><b>Lottochee</b><small>mini app</small></div>
+                  <div className="t"><b>LottoChee</b><small>mini app</small></div>
                   <div className="x">⋯</div>
                 </div>
                 <div className="scr">
@@ -284,7 +284,7 @@ export default function Landing() {
           <div className="sec-head">
             <span className="eyebrow">The math</span>
             <h2 className="h-sec">One ticket is one shot.<br />A pool is many.</h2>
-            <p className="lede">For the price of a single line, a Lottochee share puts you across the whole pool. More lines in play means more chances to land a prize tier — you simply own your slice of whatever comes back.</p>
+            <p className="lede">For the price of a single line, a LottoChee share puts you across the whole pool. More lines in play means more chances to land a prize tier — you simply own your slice of whatever comes back.</p>
           </div>
           <div className="odds-grid">
             <div className="odds-card solo">
@@ -295,7 +295,7 @@ export default function Landing() {
               <div className="odds-foot">One ticket means <b>one</b> path to a prize — and a near-certain blank on most draws.</div>
             </div>
             <div className="odds-card pool">
-              <div className="tag">A Lottochee pool</div>
+              <div className="tag">A LottoChee pool</div>
               <div className="big">The pool</div>
               <div className="sub">The same share rides every ticket the pool holds.</div>
               <div className="lines">{Array.from({ length: 24 }).map((_, i) => <span className="ln" key={i} />)}</div>
@@ -431,7 +431,7 @@ export default function Landing() {
               </details>
               <details className="faq">
                 <summary>Who can play?<span className="faq-plus" /></summary>
-                <div className="ans">Lottochee is for players 19+ located in British Columbia. Please play within your means — set a budget and treat it as entertainment, not income. Support resources are linked below.</div>
+                <div className="ans">LottoChee is for players 19+ located in British Columbia. Please play within your means — set a budget and treat it as entertainment, not income. Support resources are linked below.</div>
               </details>
             </div>
           </div>
@@ -464,7 +464,7 @@ export default function Landing() {
             <div>
               <a className="brand" href="#top" onClick={e => e.preventDefault()}>
                 <LogoMark size={28} />
-                <div className="brand-name">Lottochee</div>
+                <div className="brand-name">LottoChee</div>
               </a>
               <p>The group lottery syndicate for Lotto&nbsp;Max, 6/49 and Daily&nbsp;Grand — on Telegram or the web. Pool in, play more lines, split every prize.</p>
             </div>
@@ -497,7 +497,7 @@ export default function Landing() {
             </div>
           </div>
           <div className="foot-base">
-            <p>Lottochee organizes group ticket purchases on behalf of its members. It is an independent service and is not affiliated with, endorsed by, or operated by any official lottery operator. Estimated jackpot amounts are illustrative.</p>
+            <p>LottoChee organizes group ticket purchases on behalf of its members. It is an independent service and is not affiliated with, endorsed by, or operated by any official lottery operator. Estimated jackpot amounts are illustrative.</p>
             <div className="respo"><span className="age">19+</span> If gambling stops being fun, take a break — help is available in BC through the Responsible &amp; Problem Gambling Program at 1-888-795-6111.</div>
           </div>
         </div>
