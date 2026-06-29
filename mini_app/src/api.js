@@ -135,6 +135,9 @@ export const api = {
     deleteGroup:   (id) => req('DELETE', `/api/platform/groups/${id}`),
     patchRound:    (id, body) => req('PATCH', `/api/platform/rounds/${id}`, body),
     deleteRound:   (id) => req('DELETE', `/api/platform/rounds/${id}`),
+    notifTemplates:    () => req('GET', '/api/platform/notif-templates'),
+    saveNotifTemplate: (key, text, reset) => req('PATCH', `/api/platform/notif-templates/${key}`, { text, reset }),
+    testNotifTemplate: (key, text) => req('POST', `/api/platform/notif-templates/${key}/test`, { text }),
   },
   agreement: {
     master: () => req('GET', '/api/agreement/master'),
@@ -201,7 +204,8 @@ export const api = {
     round:        ()              => req('GET',  '/api/admin/round'),
     rounds:       ()              => req('GET',  '/api/admin/rounds'),
     deposits:     ()              => req('GET',  '/api/admin/deposits'),
-    resolve:      (id, action)    => req('POST', `/api/admin/deposits/${id}`, { action }),
+    resolve:      (id, action, amount) => req('POST', `/api/admin/deposits/${id}`,
+      amount != null ? { action, amount } : { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
     group: {

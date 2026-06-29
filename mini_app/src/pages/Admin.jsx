@@ -1345,10 +1345,12 @@ export default function Admin({ user }) {
     finally { setB(key, false) }
   }
 
-  async function resolveDeposit(id, action) {
+  const [depAmt, setDepAmt] = useState({})   // per-deposit edited amount (string)
+
+  async function resolveDeposit(id, action, amount) {
     setB(`d${id}`, true)
     try {
-      await api.admin.resolve(id, action)
+      await api.admin.resolve(id, action, amount)
       showToast(action === 'approve' ? 'Deposit approved!' : 'Deposit rejected.', 'success')
       await loadDeposits()
     } catch (err) { showToast(err.message, 'error') }
@@ -1710,11 +1712,29 @@ export default function Admin({ user }) {
                   </span>
                 </div>
               </div>
+              {d.payment_method === 'etransfer' && (
+                <div className="row gap-8" style={{ alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>Amount to credit</span>
+                  <div style={{ position: 'relative', width: 130, marginLeft: 'auto' }}>
+                    <span className="mono" style={{ position: 'absolute', left: 10, top: '50%',
+                      transform: 'translateY(-50%)', color: 'var(--tx-3)', fontSize: 14 }}>$</span>
+                    <input type="number" inputMode="decimal" step="0.01" min="0" className="input mono"
+                      value={depAmt[d.id] ?? String(d.amount)}
+                      onChange={e => setDepAmt(p => ({ ...p, [d.id]: e.target.value }))}
+                      style={{ paddingLeft: 22, textAlign: 'right', height: 40 }} />
+                  </div>
+                </div>
+              )}
               <div className="row gap-8">
                 <button className="btn btn-block"
                   style={{ flex: 1, background: 'rgba(78,208,122,.12)', color: 'var(--money)', border: 'none' }}
                   disabled={busy[`d${d.id}`]}
-                  onClick={() => resolveDeposit(d.id, 'approve')}>
+                  onClick={() => {
+                    const raw = depAmt[d.id]
+                    const amt = raw != null && raw !== '' ? Number(raw) : d.amount
+                    if (!(amt > 0)) { showToast('Enter a valid amount', 'error'); return }
+                    resolveDeposit(d.id, 'approve', amt)
+                  }}>
                   <CheckIcon width={14} height={14} /> Approve
                 </button>
                 <button className="btn btn-block"

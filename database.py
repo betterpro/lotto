@@ -213,6 +213,8 @@ _SCHEMA_STATEMENTS = [
     # Auto-results: timestamp when official winning numbers were fetched & matched
     # (so participants are notified once).
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS results_auto_at TEXT",
+    # Editable Telegram notification templates (super-admin overrides per key).
+    "CREATE TABLE IF NOT EXISTS notif_templates (key TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at TEXT)",
     # Beneficiary / e-transfer profile (migrations 003–004)
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT",
