@@ -67,7 +67,7 @@ export default function Onboarding({ onAccept, group, trustee, inviteSlug, user 
   const [info, setInfo] = useState(() => ({
     fullName: '',
     email: (user?.email || user?.auth_email || '').trim().toLowerCase(),
-    street: '', city: '', province: 'BC', postal: '', phone: '',
+    street: '', city: '', province: '', postal: '', phone: '',
     age19: false, category: 'e',
   }))
 

@@ -1,0 +1,24 @@
+{
+  "name": "LottoChee",
+  "short_name": "LottoChee",
+  "description": "Transparent Canada-wide group lottery pools for Lotto Max, Lotto 6/49 and Daily Grand.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1118",
+  "theme_color": "#E8503A",
+  "icons": [
+    {
+      "src": "/fav.png",
+      "sizes": "2000x2000",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

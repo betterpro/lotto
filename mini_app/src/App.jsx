@@ -1,18 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { api } from './api.js'
 import BottomNav       from './components/BottomNav.jsx'
-import Home      from './pages/Home.jsx'
-import Rounds    from './pages/Rounds.jsx'
-import History   from './pages/History.jsx'
-import Profile   from './pages/Profile.jsx'
-import TopUp     from './pages/TopUp.jsx'
-import Admin     from './pages/Admin.jsx'
-import PlatformAdmin from './pages/PlatformAdmin.jsx'
-import Onboarding from './pages/Onboarding.jsx'
-import NeedsInvite from './pages/NeedsInvite.jsx'
-import Login from './pages/Login.jsx'
-import Landing from './pages/Landing.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
 import { initAuthSession } from './authSession.js'
 import {
@@ -24,6 +13,27 @@ import {
 } from './routes.js'
 
 const ONB_KEY = 'lottoo_beneficiary'
+
+const Home = lazy(() => import('./pages/Home.jsx'))
+const Rounds = lazy(() => import('./pages/Rounds.jsx'))
+const History = lazy(() => import('./pages/History.jsx'))
+const Profile = lazy(() => import('./pages/Profile.jsx'))
+const TopUp = lazy(() => import('./pages/TopUp.jsx'))
+const Admin = lazy(() => import('./pages/Admin.jsx'))
+const PlatformAdmin = lazy(() => import('./pages/PlatformAdmin.jsx'))
+const Onboarding = lazy(() => import('./pages/Onboarding.jsx'))
+const NeedsInvite = lazy(() => import('./pages/NeedsInvite.jsx'))
+const Login = lazy(() => import('./pages/Login.jsx'))
+const Landing = lazy(() => import('./pages/Landing.jsx'))
+
+function ScreenLoader({ label = 'Loading...' }) {
+  return (
+    <div className="center-screen">
+      <div className="spinner" />
+      <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>{label}</span>
+    </div>
+  )
+}
 
 function TGHeader({ page }) {
   const logoSrc = page === 'home' ? HOME_LOGO_SRC : LOGO_SRC
@@ -68,15 +78,17 @@ function AppShell({ user, onUserUpdate, loadUser, inviteSlug }) {
     <div className="app">
       <TGHeader page={page} />
       <div className="scroll">
-        <Routes>
-          <Route path="/" element={<Home user={user} onUserUpdate={onUserUpdate} />} />
-          <Route path="/topup" element={<TopUp user={user} onUserUpdate={onUserUpdate} />} />
-          <Route path="/rounds" element={<Rounds user={user} />} />
-          <Route path="/activity" element={<History user={user} />} />
-          <Route path="/profile" element={<Profile user={user} onUserUpdate={onUserUpdate} />} />
-          <Route path="/admin" element={<Admin user={user} />} />
-          <Route path="/platform" element={<PlatformAdmin user={user} />} />
-        </Routes>
+        <Suspense fallback={<ScreenLoader />}>
+          <Routes>
+            <Route path="/" element={<Home user={user} onUserUpdate={onUserUpdate} />} />
+            <Route path="/topup" element={<TopUp user={user} onUserUpdate={onUserUpdate} />} />
+            <Route path="/rounds" element={<Rounds user={user} />} />
+            <Route path="/activity" element={<History user={user} />} />
+            <Route path="/profile" element={<Profile user={user} onUserUpdate={onUserUpdate} />} />
+            <Route path="/admin" element={<Admin user={user} />} />
+            <Route path="/platform" element={<PlatformAdmin user={user} />} />
+          </Routes>
+        </Suspense>
       </div>
       <BottomNav
         page={page}
@@ -145,12 +157,20 @@ export default function App() {
     )
     if (needsLogin) {
       if (location.pathname === '/login') {
-        return <Login onLogin={loadUser} />
+        return (
+          <Suspense fallback={<ScreenLoader />}>
+            <Login onLogin={loadUser} />
+          </Suspense>
+        )
       }
       // Invite recipients go straight to sign-in so they can join the group;
       // everyone else lands on the marketing page first.
       if (inviteSlug) return <Navigate to="/login" replace />
-      return <Landing />
+      return (
+        <Suspense fallback={<ScreenLoader />}>
+          <Landing />
+        </Suspense>
+      )
     }
     return (
       <div className="center-screen">
@@ -179,31 +199,39 @@ export default function App() {
         </div>
       )
     }
-    return <NeedsInvite error={inviteJoinError} onJoined={loadUser} />
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        <NeedsInvite error={inviteJoinError} onJoined={loadUser} />
+      </Suspense>
+    )
   }
 
   const serverOnboarded = user.onboarded || !!user.agreement_accepted_at
   if (!onboarded && !serverOnboarded) return (
-    <Onboarding
-      user={user}
-      group={user.group}
-      trustee={user.trustee}
-      inviteSlug={inviteSlug}
-      onAccept={(data) => {
-        localStorage.setItem(ONB_KEY, JSON.stringify(data))
-        localStorage.removeItem(INVITE_SLUG_KEY)
-        api.beneficiary.save(data).then(() => loadUser()).catch(() => {})
-        setOnboarded(true)
-      }}
-    />
+    <Suspense fallback={<ScreenLoader />}>
+      <Onboarding
+        user={user}
+        group={user.group}
+        trustee={user.trustee}
+        inviteSlug={inviteSlug}
+        onAccept={(data) => {
+          localStorage.setItem(ONB_KEY, JSON.stringify(data))
+          localStorage.removeItem(INVITE_SLUG_KEY)
+          api.beneficiary.save(data).then(() => loadUser()).catch(() => {})
+          setOnboarded(true)
+        }}
+      />
+    </Suspense>
   )
 
   return (
-    <Routes>
-      <Route path="/join/:slug" element={<JoinRedirect />} />
-      <Route path="/*" element={
-        <AppShell user={user} onUserUpdate={setUser} loadUser={loadUser} inviteSlug={inviteSlug} />
-      } />
-    </Routes>
+    <Suspense fallback={<ScreenLoader />}>
+      <Routes>
+        <Route path="/join/:slug" element={<JoinRedirect />} />
+        <Route path="/*" element={
+          <AppShell user={user} onUserUpdate={setUser} loadUser={loadUser} inviteSlug={inviteSlug} />
+        } />
+      </Routes>
+    </Suspense>
   )
 }

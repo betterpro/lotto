@@ -77,11 +77,11 @@ export default function Landing() {
         <div className="wrap hero-grid">
           <div className="hero-copy">
             <div className="hero-eyebrow-row">
-              <span className="eyebrow"><span className="dot live" />Real BCLC tickets</span>
+              <span className="eyebrow"><span className="dot live" />Official lottery tickets</span>
               <span className="chip"><span className="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg></span>Lotto Max · 6/49 · Daily Grand</span>
             </div>
             <h1 className="display">Play Canada's biggest draws. <span className="accentword">Together.</span></h1>
-            <p className="lede">LottoChee pools your group into real BCLC tickets — Lotto&nbsp;Max, Lotto&nbsp;6/49 and Daily&nbsp;Grand. Buy a share from $3, the pool buys the tickets, and every prize is split by your share — automatically. On Telegram or the web.</p>
+            <p className="lede">LottoChee pools your group into official lottery tickets — Lotto&nbsp;Max, Lotto&nbsp;6/49 and Daily&nbsp;Grand. Buy a share from $3, the pool buys the tickets, and every prize is split by your share — automatically. On Telegram or the web.</p>
 
             <div className="hero-games">
               <span className="games-label">Pooling every major draw</span>
@@ -108,7 +108,7 @@ export default function Landing() {
             <div className="hero-trust">
               <span className="trust-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m4 7 8-4 8 4v5c0 5-3.4 7.7-8 9-4.6-1.3-8-4-8-9V7Z" /><path d="m9 12 2 2 4-4" /></svg>Every ticket photographed</span>
               <span className="trust-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M12 3v18" /></svg>Prizes auto-split by share</span>
-              <span className="trust-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2 2" /></svg>19+ · BC only</span>
+              <span className="trust-item"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2 2" /></svg>19+ · Canada</span>
             </div>
 
             <div className="hero-stats">
@@ -210,7 +210,7 @@ export default function Landing() {
             <div className="step">
               <div className="step-n">2</div>
               <h3>The pool buys in</h3>
-              <p>When the round fills, your trustee buys the official BCLC tickets — Lotto&nbsp;Max, 6/49 or Daily&nbsp;Grand — on behalf of everyone in the group.</p>
+              <p>When the round fills, your trustee buys the official lottery tickets — Lotto&nbsp;Max, 6/49 or Daily&nbsp;Grand — on behalf of everyone in the group.</p>
               <div className="step-meta"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7h18l-1.5 10.5a2 2 0 0 1-2 1.5H6.5a2 2 0 0 1-2-1.5L3 7Z" /><path d="M8 7V5a4 4 0 0 1 8 0v2" /></svg>Official tickets</div>
             </div>
             <div className="step">
@@ -415,7 +415,7 @@ export default function Landing() {
               </details>
               <details className="faq">
                 <summary>How do I know the tickets are real?<span className="faq-plus" /></summary>
-                <div className="ans">Every official BCLC ticket is photographed and attached to the round before the draw, so the numbers are public and locked in advance. You can check them against the published draw yourself.</div>
+                <div className="ans">Every official lottery ticket is photographed and attached to the round before the draw, so the numbers are public and locked in advance. You can check them against the published draw yourself.</div>
               </details>
               <details className="faq">
                 <summary>Is there an agreement for each round?<span className="faq-plus" /></summary>
@@ -431,7 +431,7 @@ export default function Landing() {
               </details>
               <details className="faq">
                 <summary>Who can play?<span className="faq-plus" /></summary>
-                <div className="ans">LottoChee is for players 19+ located in British Columbia. Please play within your means — set a budget and treat it as entertainment, not income. Support resources are linked below.</div>
+                <div className="ans">LottoChee is for players 19+ located in Canada. Please play within your means — set a budget and treat it as entertainment, not income. Support resources are linked below.</div>
               </details>
             </div>
           </div>
@@ -453,7 +453,7 @@ export default function Landing() {
             <span className="channel"><TgIcon />Telegram</span>
             <span className="channel"><WebIcon />Web app</span>
           </div>
-          <div className="cta-fine">19+ · BC only · Play responsibly · Withdraw unspent credits anytime</div>
+          <div className="cta-fine">19+ · Canada · Play responsibly · Withdraw unspent credits anytime</div>
         </div>
       </section>
 
@@ -479,26 +479,28 @@ export default function Landing() {
               </ul>
             </div>
             <div>
-              <h4>Play</h4>
+              <h4>Guides</h4>
               <ul>
-                <li><a onClick={go}>Sign in</a></li>
-                <li><a onClick={go}>Start a group</a></li>
-                <li><a onClick={go}>Join with a code</a></li>
-                <li><a href="#faq">FAQ</a></li>
+                <li><a href="/canada-lottery-pool-guide/">Canada lottery pool guide</a></li>
+                <li><a href="/how-lottery-pools-work/">How lottery pools work</a></li>
+                <li><a href="/lotto-max-pool/">Lotto Max pools</a></li>
+                <li><a href="/lotto-649-pool/">Lotto 6/49 pools</a></li>
+                <li><a href="/daily-grand-pool/">Daily Grand pools</a></li>
               </ul>
             </div>
             <div>
               <h4>Responsible play</h4>
               <ul>
-                <li><a href="#faq">Eligibility (19+ · BC)</a></li>
-                <li><a href="https://www.gamesensebc.com" target="_blank" rel="noreferrer">GameSense</a></li>
+                <li><a href="/responsible-play/">Responsible play guide</a></li>
+                <li><a href="#faq">Eligibility (19+ · Canada)</a></li>
+                <li><a href="https://www.responsiblegambling.org" target="_blank" rel="noreferrer">Responsible Gambling Council</a></li>
                 <li><a href="#trust">How prizes split</a></li>
               </ul>
             </div>
           </div>
           <div className="foot-base">
             <p>LottoChee organizes group ticket purchases on behalf of its members. It is an independent service and is not affiliated with, endorsed by, or operated by any official lottery operator. Estimated jackpot amounts are illustrative.</p>
-            <div className="respo"><span className="age">19+</span> If gambling stops being fun, take a break — help is available in BC through the Responsible &amp; Problem Gambling Program at 1-888-795-6111.</div>
+            <div className="respo"><span className="age">19+</span> If gambling stops being fun, take a break — help is available across Canada through provincial responsible gambling resources.</div>
           </div>
         </div>
       </footer>
@@ -507,7 +509,7 @@ export default function Landing() {
       <div className="mobile-bar">
         <div className="mb-meta">
           <div className="mb-amt"><span>3 draws</span> pooled</div>
-          <div className="mb-sub"><span className="dot live" />Real BCLC tickets · split by share</div>
+          <div className="mb-sub"><span className="dot live" />Official tickets · split by share</div>
         </div>
         <a className="btn btn-tg" onClick={go}>Get started</a>
       </div>
