@@ -1,6 +1,6 @@
 import { LOGO_SRC } from '../brand.js'
 
-/** The Lottochee token mark (blue→green lotto ball with a gold luck spark). */
+/** The LottoChee token mark (blue→green lotto ball with a gold luck spark). */
 export function LogoMark({ size = 48, style }) {
   return (
     <img src={LOGO_SRC} alt="" width={size} height={size}
@@ -9,7 +9,7 @@ export function LogoMark({ size = 48, style }) {
 }
 
 /**
- * Full brand lockup: token mark + "Lottochee" wordmark.
+ * Full brand lockup: token mark + "LottoChee" wordmark.
  * `ink` renders the wordmark in navy for light backgrounds (default white).
  */
 export default function Logo({ size = 48, wordmark = false, ink = false, gap, fontSize, style }) {
@@ -22,7 +22,7 @@ export default function Logo({ size = 48, wordmark = false, ink = false, gap, fo
           fontWeight: 800, letterSpacing: '-.035em', lineHeight: 1,
           fontSize: fontSize ?? Math.round(size * 0.66),
           color: ink ? '#0b1118' : '#fff',
-        }}>Lottochee</span>
+        }}>LottoChee</span>
       )}
     </div>
   )

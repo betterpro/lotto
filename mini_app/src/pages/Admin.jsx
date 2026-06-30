@@ -998,7 +998,7 @@ function GroupSubscriptionCard({ showToast, onChange }) {
         </span>
       </div>
       <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.55 }}>
-        Your group runs on the <strong>$6.99/month</strong> plan, billed to your card by Lotto Chee.
+        Your group runs on the <strong>$6.99/month</strong> plan, billed to your card by LottoChee.
         {active && sub.next_billing ? ` Next charge ${sub.next_billing}.` : ''}
       </p>
       {active ? (

@@ -34,7 +34,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS group_id BIGINT REFERENCES gro
 -- Default group for existing deployment (trustee from first user with is_trustee=1, else first user)
 INSERT INTO groups (name, slug, trustee_user_id, status)
 SELECT
-    'Lotto Chee',
+    'LottoChee',
     'lotto-chee',
     COALESCE(
         (SELECT telegram_id FROM users WHERE is_trustee = 1 ORDER BY telegram_id LIMIT 1),

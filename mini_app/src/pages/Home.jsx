@@ -184,7 +184,7 @@ function GroupsSections({ user, onUserUpdate, onActiveGroupChange, showToast }) 
     }
     try {
       const { link } = await api.invite(g.id)
-      const text = `Join ${g.name} on Lotto Chee — group lottery with friends!`
+      const text = `Join ${g.name} on LottoChee — group lottery with friends!`
       const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`
       if (window.Telegram?.WebApp?.openTelegramLink) {
         window.Telegram.WebApp.openTelegramLink(shareUrl)
@@ -530,7 +530,7 @@ export default function Home({ user, onUserUpdate }) {
         ) : (
           <div className="col gap-2 grow" style={{ minWidth: 0 }}>
             <span className="home-trustee-label">Your group</span>
-            <span className="home-trustee-name">{groupName || 'Lotto Chee'}</span>
+            <span className="home-trustee-name">{groupName || 'LottoChee'}</span>
           </div>
         )}
         <button
