@@ -3983,6 +3983,24 @@ async def admin_group_stripe_connect(request: Request):
         raise HTTPException(400, f"Stripe Connect error: {msg}")
 
 
+@app.post("/api/admin/broadcast")
+async def admin_broadcast(request: Request):
+    """Trustee sends a one-off message to every member of their group."""
+    user, db, group = await _require_group_trustee(request)
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        await db.close()
+        raise HTTPException(400, "Message can't be empty")
+    message = message[:2000]
+    text = render_notif("broadcast", group=html.escape(group["name"]), message=html.escape(message))
+    cur = await db.execute("SELECT COUNT(*) AS n FROM group_members WHERE group_id=?", (group["id"],))
+    n = int((await cur.fetchone())["n"] or 0)
+    await _notify_all(db, text, group_id=group["id"])
+    await db.close()
+    return {"ok": True, "sent": n}
+
+
 @app.get("/api/admin/group/stripe/status")
 async def admin_group_stripe_status(request: Request):
     """Live status of the trustee's connected Stripe account."""

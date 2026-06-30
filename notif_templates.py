@@ -10,6 +10,12 @@ import re
 
 # key -> {label, desc, default, sample}
 NOTIF_TEMPLATES: dict[str, dict] = {
+    "broadcast": {
+        "label": "Trustee broadcast",
+        "desc": "Wrapper around a message the trustee sends to all group members.",
+        "default": "📢 <b>{group}</b>\n{message}",
+        "sample": {"group": "Friday Office Pool", "message": "Hey team! A new round is live — jump in before the draw 🎉"},
+    },
     "new_round": {
         "label": "New round opened",
         "desc": "Broadcast to the group when a new round goes live.",

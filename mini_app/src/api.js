@@ -208,6 +208,7 @@ export const api = {
       amount != null ? { action, amount } : { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
+    broadcast:    (message)       => req('POST', '/api/admin/broadcast', { message }),
     group: {
       get:   () => req('GET', '/api/admin/group'),
       patch: (body) => req('PATCH', '/api/admin/group', body),

@@ -1048,6 +1048,20 @@ function PaymentsTab({ showToast, onGroupChange }) {
   const [freeTicketMode, setFreeTicketMode] = useState('next_round')
   const [busy, setBusy] = useState(false)
   const [stripe, setStripe] = useState(null)   // { connected, charges_enabled, ... }
+  const [bcast, setBcast] = useState('')
+  const [bcastBusy, setBcastBusy] = useState(false)
+
+  async function sendBroadcast() {
+    const msg = bcast.trim()
+    if (!msg) return
+    if (!window.confirm('Send this message to all members of your group?')) return
+    setBcastBusy(true)
+    try {
+      const r = await api.admin.broadcast(msg)
+      showToast(`Sent to ${r.sent} member${r.sent === 1 ? '' : 's'}`, 'success')
+      setBcast('')
+    } catch (e) { showToast(e.message, 'error') } finally { setBcastBusy(false) }
+  }
   const [stripeBusy, setStripeBusy] = useState(false)
 
   const loadStripeStatus = useCallback(() => {
@@ -1167,6 +1181,21 @@ function PaymentsTab({ showToast, onGroupChange }) {
       </div>
 
       <GroupSubscriptionCard showToast={showToast} onChange={onGroupChange} />
+
+      <div className="card col" style={{ gap: 10, marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Message your members</div>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+          Send a one-off announcement to everyone in your group on Telegram.
+        </p>
+        <textarea className="input" rows={3} maxLength={2000}
+          placeholder="e.g. New round is up — join before Friday's draw! 🎉"
+          value={bcast} onChange={e => setBcast(e.target.value)}
+          style={{ resize: 'vertical', lineHeight: 1.5 }} />
+        <button type="button" className="btn btn-primary btn-block"
+          disabled={bcastBusy || !bcast.trim()} onClick={sendBroadcast}>
+          {bcastBusy ? 'Sending…' : '📢 Send to all members'}
+        </button>
+      </div>
 
       <div className="card col" style={{ gap: 14, marginBottom: 12 }}>
         <FieldLabel label="Accepted payment methods">
