@@ -92,6 +92,7 @@ from group_context import (
     user_in_group,
 )
 from agreement_pdf import build_agreement_pdf
+from emailer import email_enabled, image_attachment, pdf_attachment, send_email
 from bot import build_application
 from database import (
     ensure_schema,
@@ -2926,6 +2927,115 @@ async def admin_save_round_ticket(request: Request):
     }
 
 
+# Keep strong references to fire-and-forget tasks so they aren't GC'd mid-run.
+_bg_tasks: set = set()
+
+
+def _spawn_bg(coro):
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+def _round_email_html(*, round_id, name, group_name, game_label, draw_date, nums_str,
+                      shares, stake_amount, share_pct, pool, ticket_count):
+    """Simple, themed HTML body for the per-participant round email."""
+    grp = html.escape(group_name)
+    pct_line = f"{share_pct}% of ${pool:.2f}" if share_pct is not None else "—"
+    ticket_note = (
+        f"Your {ticket_count} ticket photo{'s' if ticket_count != 1 else ''} "
+        "and your signed round agreement are attached to this email."
+        if ticket_count else
+        "Your signed round agreement is attached to this email."
+    )
+    return f"""\
+<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#17212b">
+  <div style="background:#17212b;color:#fff;padding:22px 24px;border-radius:14px 14px 0 0">
+    <div style="font-size:20px;font-weight:800">🎟️ {grp}</div>
+    <div style="font-size:13px;opacity:.8;margin-top:4px">Round #{round_id} — ticket purchased</div>
+  </div>
+  <div style="border:1px solid #e6ebf1;border-top:none;border-radius:0 0 14px 14px;padding:22px 24px">
+    <p style="font-size:15px;margin:0 0 14px">Hi {html.escape(name)},</p>
+    <p style="font-size:14px;line-height:1.6;margin:0 0 16px;color:#3a4a5a">
+      The official ticket for your pool has been purchased. Here are your round details.
+    </p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tr><td style="padding:6px 0;color:#5e7286">Game</td><td style="padding:6px 0;text-align:right;font-weight:600">{html.escape(game_label)}</td></tr>
+      <tr><td style="padding:6px 0;color:#5e7286">Draw date</td><td style="padding:6px 0;text-align:right;font-weight:600">{html.escape(str(draw_date or 'TBD'))}</td></tr>
+      <tr><td style="padding:6px 0;color:#5e7286">Your shares</td><td style="padding:6px 0;text-align:right;font-weight:600">{shares}</td></tr>
+      <tr><td style="padding:6px 0;color:#5e7286">Your stake</td><td style="padding:6px 0;text-align:right;font-weight:600">${stake_amount:.2f} CAD</td></tr>
+      <tr><td style="padding:6px 0;color:#5e7286">Pool share</td><td style="padding:6px 0;text-align:right;font-weight:600">{pct_line}</td></tr>
+    </table>
+    <div style="background:#f3f6f9;border-radius:10px;padding:14px 16px;margin:18px 0;font-size:14px">
+      <div style="color:#5e7286;font-size:12px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Ticket numbers</div>
+      <div style="font-weight:700;font-size:15px;color:#17212b">{nums_str}</div>
+    </div>
+    <p style="font-size:13px;line-height:1.6;color:#5e7286;margin:0">{ticket_note}</p>
+    <p style="font-size:12px;color:#8596a8;margin:18px 0 0">Good luck! 🍀 — {grp}</p>
+  </div>
+</div>"""
+
+
+async def _email_round_documents(*, round_id, group_name, lottery_type, draw_date,
+                                 closed_at, pool, trustee, participants, ticket_images,
+                                 nums_str):
+    """Email each participant their round agreement PDF + ticket photos (Resend)."""
+    if not email_enabled():
+        return
+    game_label = lottery_label(lottery_type)
+    # Ticket photos are shared across all participants — build the attachments once.
+    img_atts = []
+    for i, img in enumerate(ticket_images[:10], start=1):
+        att = image_attachment(f"round-{round_id}-ticket-{i}.jpg", img)
+        if att:
+            img_atts.append(att)
+    sent = 0
+    for p in participants:
+        email = (p.get("email") or "").strip()
+        if not email:
+            continue
+        name = p.get("name") or "there"
+        shares = p.get("shares") or 1
+        stake = float(p.get("amount") or 0)
+        share_pct = round(stake / pool * 100, 1) if pool else None
+        try:
+            body = build_round_agreement(
+                round_id=round_id, lottery_type=lottery_type, draw_date=draw_date,
+                beneficiary_name=name, shares=shares, stake_amount=stake,
+                pool_amount=pool, share_pct=share_pct, closed_at=closed_at, trustee=trustee,
+            )
+            pdf = build_agreement_pdf(
+                title=f"Round #{round_id} Draw Agreement",
+                subtitle=f"Addendum · {game_label} · Draw {draw_date or 'TBD'}",
+                body=body,
+                highlights=[
+                    ("Beneficiary", name),
+                    ("Shares", str(shares)),
+                    ("Stake", f"${stake:.2f} CAD"),
+                    ("Pool share", f"{share_pct}% of ${pool:.2f}" if share_pct is not None else "—"),
+                ],
+            )
+            attachments = [pdf_attachment(f"round-{round_id}-agreement.pdf", pdf)] + img_atts
+            html_body = _round_email_html(
+                round_id=round_id, name=name, group_name=group_name, game_label=game_label,
+                draw_date=draw_date, nums_str=nums_str, shares=shares, stake_amount=stake,
+                share_pct=share_pct, pool=pool, ticket_count=len(img_atts),
+            )
+            ok = await send_email(
+                email,
+                f"🎟️ {group_name} — Round #{round_id} ticket & agreement",
+                html_body,
+                attachments=attachments,
+            )
+            if ok:
+                sent += 1
+        except Exception as e:
+            log.warning("round email failed for %s: %s", email, e)
+    if sent:
+        log.info("round #%s: emailed agreement+ticket to %s participant(s)", round_id, sent)
+
+
 @app.post("/api/admin/round/upload-ticket")
 async def admin_upload_ticket(request: Request):
     """Finalize ticket upload for a round (sets status to 'uploaded')."""
@@ -2996,6 +3106,38 @@ async def admin_upload_ticket(request: Request):
                                           draw=draw_date_str))
         if msg_parts:
             await _notify(uid, "\n".join(msg_parts))
+
+    # Email the round agreement + ticket photos to participants (Resend).
+    if email_enabled():
+        pool = round_.get("pool") or 0
+        cur = await db.execute(
+            """SELECT p.user_id, p.amount, p.shares, u.full_name, u.username,
+                      COALESCE(NULLIF(u.auth_email,''), NULLIF(u.email,'')) AS email
+               FROM participations p JOIN users u ON u.telegram_id = p.user_id
+               WHERE p.round_id=?""",
+            (round_["id"],),
+        )
+        email_parts = []
+        for r in await cur.fetchall():
+            if not (r["email"] or "").strip():
+                continue
+            email_parts.append({
+                "user_id": r["user_id"], "email": r["email"],
+                "name": r["full_name"] or r["username"] or f"User {r['user_id']}",
+                "shares": r["shares"] or 1, "amount": r["amount"],
+            })
+        if email_parts:
+            saved_tk = parse_round_tickets(round_.get("round_tickets"), lottery_type)
+            ticket_images = [t["image"] for t in saved_tk if t.get("image")]
+            if not ticket_images and round_.get("ticket_image"):
+                ticket_images = [round_["ticket_image"]]
+            trustee = await _trustee_dict_for_user(db, user)
+            _spawn_bg(_email_round_documents(
+                round_id=round_["id"], group_name=group["name"], lottery_type=lottery_type,
+                draw_date=round_.get("draw_date"), closed_at=round_.get("closed_at"),
+                pool=pool, trustee=trustee, participants=email_parts,
+                ticket_images=ticket_images, nums_str=nums_str,
+            ))
 
     await db.close()
     return {"ok": True, "round_id": round_["id"]}

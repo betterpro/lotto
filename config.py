@@ -88,6 +88,13 @@ SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
 
 ADMIN_ETRANSFER_EMAIL: str = os.getenv("ADMIN_ETRANSFER_EMAIL", "")
 
+# Resend transactional email (https://resend.com). When both are set, the round
+# agreement + ticket photos are emailed to participants once a ticket is bought.
+# RESEND_FROM must be a verified sender, e.g. "LottoChee <tickets@yourdomain.com>".
+RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+
+RESEND_FROM: str = os.getenv("RESEND_FROM", "")
+
 # Auto-fetch official winning numbers and notify match results (best-effort WCLC
 # scrape). Set AUTO_RESULTS_ENABLED=0 to disable if the scrape misbehaves.
 AUTO_RESULTS_ENABLED: bool = os.getenv("AUTO_RESULTS_ENABLED", "1") == "1"
