@@ -100,7 +100,7 @@ export default function History() {
         <div className="card" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0 }}>
           {[
             ['Added',  fmtCAD(totalIn),  'var(--money)'],
-            ['Spent',  fmtCAD(totalOut), 'var(--tx-2)'],
+            ['Spent',  fmtCAD(Math.abs(totalOut)), 'var(--tx-2)'],
             ['Won',    fmtCAD(totalWon), 'var(--gold)'],
           ].map(([k, v, c], i) => (
             <div key={k} className="col gap-4" style={i ? { borderLeft: '.5px solid var(--hairline-2)', paddingLeft: 12 } : {}}>
@@ -155,7 +155,7 @@ export default function History() {
                       <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{fmtTime(tx.created_at)}</span>
                     </div>
                     <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: pos ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
-                      {meta.sign}{fmtCAD(tx.amount)}
+                      {meta.sign}{fmtCAD(Math.abs(tx.amount))}
                     </span>
                   </div>
                 )
