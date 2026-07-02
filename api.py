@@ -4065,6 +4065,14 @@ async def admin_group_stripe_connect(request: Request):
         await db.close()
         log.exception("stripe connect error: %s", e)
         msg = getattr(e, "user_message", None) or str(e)
+        if "signed up for Connect" in msg or "sign up for Connect" in msg:
+            raise HTTPException(
+                400,
+                "Card payments aren’t enabled on the platform yet. The platform "
+                "owner needs to turn on Stripe Connect once at "
+                "dashboard.stripe.com/connect (then complete the platform profile). "
+                "Until then, please use e-Transfer.",
+            )
         raise HTTPException(400, f"Stripe Connect error: {msg}")
 
 
