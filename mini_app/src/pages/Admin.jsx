@@ -13,6 +13,7 @@ import {
 } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import CameraCapture from '../components/CameraCapture.jsx'
+import NotifTemplates from '../components/NotifTemplates.jsx'
 import { scanTicketImage } from '../ticketOcr.js'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
@@ -1046,6 +1047,8 @@ function PaymentsTab({ showToast, onGroupChange }) {
   const [minAmt, setMinAmt] = useState('25')
   const [email, setEmail] = useState('')
   const [freeTicketMode, setFreeTicketMode] = useState('next_round')
+  const [rem1, setRem1] = useState('48')
+  const [rem2, setRem2] = useState('24')
   const [busy, setBusy] = useState(false)
   const [stripe, setStripe] = useState(null)   // { connected, charges_enabled, ... }
   const [bcast, setBcast] = useState('')
@@ -1091,6 +1094,8 @@ function PaymentsTab({ showToast, onGroupChange }) {
         setMinAmt(String(g.etransfer_min_amount ?? 25))
         setEmail(g.etransfer_email || '')
         setFreeTicketMode(g.free_ticket_mode || 'next_round')
+        setRem1(String(g.reminder_hours_1 ?? 48))
+        setRem2(String(g.reminder_hours_2 ?? 24))
       })
       .catch(err => showToast(err.message, 'error'))
   }, [showToast])
@@ -1098,14 +1103,20 @@ function PaymentsTab({ showToast, onGroupChange }) {
   async function save() {
     setBusy(true)
     try {
+      const h1 = Math.max(1, Math.min(336, parseInt(rem1, 10) || 48))
+      const h2 = Math.max(1, Math.min(336, parseInt(rem2, 10) || 24))
       const r = await api.admin.group.patch({
         payment_methods: pm,
         etransfer_min_amount: Number(minAmt) || 25,
         etransfer_email: email.trim() || null,
         free_ticket_mode: freeTicketMode,
+        reminder_hours_1: h1,
+        reminder_hours_2: h2,
       })
       setGroup(r.group)
-      showToast('Payment settings saved', 'success')
+      setRem1(String(r.group.reminder_hours_1 ?? h1))
+      setRem2(String(r.group.reminder_hours_2 ?? h2))
+      showToast('Settings saved', 'success')
     } catch (err) { showToast(err.message, 'error') }
     finally { setBusy(false) }
   }
@@ -1298,9 +1309,47 @@ function PaymentsTab({ showToast, onGroupChange }) {
         </FieldLabel>
       </div>
 
+      <div className="card col" style={{ gap: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Closing-soon reminders</div>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+          Members who haven’t joined an open round get a nudge on Telegram before entries close.
+          Set how many hours before the draw each reminder is sent.
+        </p>
+        <div className="row gap-8">
+          <FieldLabel label="First reminder (hours before)">
+            <input className="input mono" type="number" min="1" max="336" step="1"
+              value={rem1} onChange={e => setRem1(e.target.value)} />
+          </FieldLabel>
+          <FieldLabel label="Second reminder (hours before)">
+            <input className="input mono" type="number" min="1" max="336" step="1"
+              value={rem2} onChange={e => setRem2(e.target.value)} />
+          </FieldLabel>
+        </div>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+          Tip: set the first reminder earlier than the second (e.g. 48 and 24). Each member gets each reminder once.
+        </p>
+      </div>
+
       <button className="btn btn-primary btn-block" disabled={busy} onClick={() => save()}>
         {busy ? 'Saving…' : 'Save settings'}
       </button>
+
+      <div className="card col" style={{ gap: 6, margin: '16px 0 8px', padding: 14 }}>
+        <div style={{ fontSize: 15, fontWeight: 700 }}>Telegram messages</div>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+          Customize the automatic messages your group receives — new round, closing reminders,
+          results and more. Leave any as-is to use the platform default. Each is saved on its own.
+        </p>
+      </div>
+      <NotifTemplates
+        load={() => api.admin.notifTemplates()}
+        save={(key, text, reset) => api.admin.saveNotifTemplate(key, text, reset)}
+        test={(key, text) => api.admin.testNotifTemplate(key, text)}
+        intro={<>Customize how your group’s Telegram messages read. Keep the{' '}
+          <span className="mono">{'{placeholders}'}</span> for live values (see “Dynamic data” under each)
+          and use <span className="mono">&lt;b&gt;…&lt;/b&gt;</span> for bold. Reset returns a message to the
+          platform default. “Send test” delivers a sample to your Telegram.</>}
+      />
     </div>
   )
 }

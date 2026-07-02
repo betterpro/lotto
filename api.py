@@ -55,10 +55,11 @@ from lottery_draws import (
     draw_has_occurred,
     fetch_draw_results,
     fetch_estimated_jackpot,
+    hours_until_draw,
     next_draw_date,
     suggest_new_round,
 )
-from notif_templates import NOTIF_TEMPLATES, render_template
+from notif_templates import NOTIF_TEMPLATES, describe_vars, render_template
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -360,20 +361,22 @@ def _open_app_markup() -> InlineKeyboardMarkup | None:
     ]])
 
 
-_NOTIF_OVERRIDES: dict[str, str] = {}
+# Overrides keyed by (group_id, key). group_id 0 = platform default (super-admin);
+# group_id>0 = per-group override (trustee). Lookup precedence: group → platform → code.
+_NOTIF_OVERRIDES: dict[tuple, str] = {}
 
 
 async def _load_notif_overrides(db=None):
-    """Cache super-admin notification-template overrides (call at startup + on edit)."""
+    """Cache notification-template overrides (call at startup + on edit)."""
     own = db is None
     if own:
         db = await get_db()
     try:
-        cur = await db.execute("SELECT key, text FROM notif_templates")
+        cur = await db.execute("SELECT group_id, key, text FROM notif_templates")
         rows = await cur.fetchall()
         _NOTIF_OVERRIDES.clear()
         for r in rows:
-            _NOTIF_OVERRIDES[r["key"]] = r["text"]
+            _NOTIF_OVERRIDES[(int(r["group_id"] or 0), r["key"])] = r["text"]
     except Exception:
         pass
     finally:
@@ -381,9 +384,14 @@ async def _load_notif_overrides(db=None):
             await db.close()
 
 
-def render_notif(key: str, **vars) -> str:
-    """Render a named notification with the admin override (if any) or the default."""
-    tmpl = _NOTIF_OVERRIDES.get(key) or NOTIF_TEMPLATES.get(key, {}).get("default", "")
+def render_notif(key: str, group_id=0, **vars) -> str:
+    """Render a notification: group override → platform override → code default."""
+    gid = int(group_id or 0)
+    tmpl = (
+        _NOTIF_OVERRIDES.get((gid, key))
+        or _NOTIF_OVERRIDES.get((0, key))
+        or NOTIF_TEMPLATES.get(key, {}).get("default", "")
+    )
     return render_template(tmpl, vars)
 
 
@@ -508,7 +516,8 @@ async def _notify_round_contribution(db, round_d: dict, contributor: dict):
     rid = round_d["id"]
     name = contributor.get("full_name") or contributor.get("username") or "A member"
     pool = float(round_d.get("pool") or 0)
-    text = render_notif("contribution", name=html.escape(name), rid=rid, pool=f"{pool:.0f}")
+    text = render_notif("contribution", group_id=round_d.get("group_id"),
+                        name=html.escape(name), rid=rid, pool=f"{pool:.0f}")
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
@@ -548,7 +557,8 @@ async def _notify_round_closed(db, round_id: int):
     draw_str = f" · draw {html.escape(str(draw))}" if draw else ""
     await _notify(
         trustee_id,
-        render_notif("round_closed_trustee", rid=round_id, pool=f"{pool:.0f}",
+        render_notif("round_closed_trustee", group_id=round_d.get("group_id"),
+                     rid=round_id, pool=f"{pool:.0f}",
                      tickets=tickets, ticket_s="" if tickets == 1 else "s", draw=draw_str),
     )
 
@@ -562,7 +572,7 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
     emoji = "⏰" if hours >= 48 else "⏳"
     jackpot = int(round_d.get("jackpot") or 0)
     jp = f" · <b>${jackpot:,}</b> jackpot" if jackpot else ""
-    text = render_notif("round_closing", emoji=emoji, rid=rid, hours=hours, jp=jp)
+    text = render_notif("round_closing", group_id=gid, emoji=emoji, rid=rid, hours=hours, jp=jp)
     cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
@@ -581,23 +591,27 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
 async def _send_round_reminders(db):
     """Send 48h / 24h pre-close reminders once each, tracked by per-round flags."""
     cur = await db.execute(
-        """SELECT id, group_id, draw_date, jackpot, pool,
-                  COALESCE(reminder_48h_sent, 0) AS r48,
-                  COALESCE(reminder_24h_sent, 0) AS r24
-           FROM rounds WHERE status='open' AND draw_date IS NOT NULL"""
+        """SELECT r.id, r.group_id, r.draw_date, r.jackpot, r.pool, r.lottery_type,
+                  COALESCE(r.reminder_48h_sent, 0) AS r1,
+                  COALESCE(r.reminder_24h_sent, 0) AS r2,
+                  COALESCE(g.reminder_hours_1, 48) AS h1,
+                  COALESCE(g.reminder_hours_2, 24) AS h2
+           FROM rounds r LEFT JOIN groups g ON g.id = r.group_id
+           WHERE r.status='open' AND r.draw_date IS NOT NULL"""
     )
     for r in await cur.fetchall():
-        days = _days_until_draw(r["draw_date"])
-        if days is None:
+        rem = hours_until_draw(r.get("lottery_type") or "lotto_max", r["draw_date"])
+        if rem is None or rem < 0:
             continue
-        # Rounds auto-close ~1 day before the draw, so 3 days out ≈ 48h before
-        # close and 2 days out ≈ 24h before close.
-        if days == 3 and not r["r48"]:
-            await _remind_non_contributors(db, dict(r), 48)
+        h1, h2 = int(r["h1"] or 0), int(r["h2"] or 0)
+        # First (earlier) reminder, then the second — each fires once. Hours are
+        # per-group and shown in the message.
+        if h1 > 0 and rem <= h1 and not r["r1"]:
+            await _remind_non_contributors(db, dict(r), h1)
             await db.execute("UPDATE rounds SET reminder_48h_sent=1 WHERE id=?", (r["id"],))
             await db.commit()
-        elif days == 2 and not r["r24"]:
-            await _remind_non_contributors(db, dict(r), 24)
+        elif h2 > 0 and rem <= h2 and not r["r2"]:
+            await _remind_non_contributors(db, dict(r), h2)
             await db.execute("UPDATE rounds SET reminder_24h_sent=1 WHERE id=?", (r["id"],))
             await db.commit()
 
@@ -662,7 +676,7 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         # Balance check
         if u["credit"] < amount:
             await _notify(u["telegram_id"], render_notif(
-                "auto_join_skipped", rid=round_id,
+                "auto_join_skipped", group_id=group_id, rid=round_id,
                 balance=f"{u['credit']:.2f}", needed=f"{amount:.2f}"))
             continue
 
@@ -688,8 +702,8 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         await db.commit()
         bal = u["credit"] - amount
         await _notify(u["telegram_id"], render_notif(
-            "auto_joined", rid=round_id, shares=shares, share_s="" if shares == 1 else "s",
-            amount=f"{amount:.2f}", balance=f"{bal:.2f}"))
+            "auto_joined", group_id=group_id, rid=round_id, shares=shares,
+            share_s="" if shares == 1 else "s", amount=f"{amount:.2f}", balance=f"{bal:.2f}"))
 
 
 # ---------------------------------------------------------------------------
@@ -886,7 +900,8 @@ async def _approve_etransfer_deposit(db, dep: dict, receipt: dict) -> bool:
         (dep["user_id"], "deposit", dep["amount"], f"E-transfer deposit #{dep['id']}"),
     )
     await db.commit()
-    await _notify(dep["user_id"], render_notif("etransfer_received", amount=f"{dep['amount']:.2f}"))
+    await _notify(dep["user_id"], render_notif("etransfer_received",
+                  group_id=dep.get("group_id"), amount=f"{dep['amount']:.2f}"))
     return True
 
 
@@ -1021,7 +1036,8 @@ async def _notify_round_results(db, rd, numbers, bonus, m):
     nums_html = "  ".join(f"<b>{int(n)}</b>" for n in numbers)
     bonus_html = f" · bonus <b>{int(bonus)}</b>" if bonus not in (None, "") else ""
     key = "results_auto_win" if m["any_win"] else "results_auto_nowin"
-    body = render_notif(key, seq=seq, numbers=nums_html, bonus=bonus_html, best=m["best_label"])
+    body = render_notif(key, group_id=rd.get("group_id"), seq=seq,
+                        numbers=nums_html, bonus=bonus_html, best=m["best_label"])
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
@@ -2556,6 +2572,18 @@ async def _admin_patch_group_body(db, gid: int, body: dict):
             "UPDATE groups SET free_ticket_mode=? WHERE id=?", (mode, gid)
         )
 
+    for col, key in (("reminder_hours_1", "reminder_hours_1"), ("reminder_hours_2", "reminder_hours_2")):
+        if key in body:
+            try:
+                hrs = int(body[key])
+            except (TypeError, ValueError):
+                await db.close()
+                raise HTTPException(400, f"Invalid {key}")
+            if not (1 <= hrs <= 336):
+                await db.close()
+                raise HTTPException(400, f"{key} must be between 1 and 336 hours")
+            await db.execute(f"UPDATE groups SET {col}=? WHERE id=?", (hrs, gid))
+
     await db.commit()
     cur = await db.execute("SELECT * FROM groups WHERE id=?", (gid,))
     updated = await cur.fetchone()
@@ -2685,15 +2713,15 @@ async def admin_new_round(request: Request):
         for row in await cur.fetchall():
             shares = row["free_ticket_shares"]
             await _notify(row["user_id"], render_notif(
-                "free_tickets", seq=group_seq, shares=shares,
+                "free_tickets", group_id=gid, seq=group_seq, shares=shares,
                 share_s="" if shares == 1 else "s", game=lottery_label(lottery_type)))
 
     jackpot_line = f"🏆 Jackpot: <b>${jackpot/1_000_000:.0f}M</b>\n" if jackpot else ""
     draw_line = f"📅 Draw: <b>{draw_date}</b>\n" if draw_date else ""
     target_str = f"target {tickets_target} tickets" if tickets_target else "no ticket limit"
     await _notify_all(db,
-        render_notif("new_round", seq=group_seq, jackpot_line=jackpot_line, draw_line=draw_line,
-                     price=f"{price_per_share:.0f}", target=target_str),
+        render_notif("new_round", group_id=gid, seq=group_seq, jackpot_line=jackpot_line,
+                     draw_line=draw_line, price=f"{price_per_share:.0f}", target=target_str),
         setting_col="notif_new_round",
         group_id=gid,
     )
@@ -2961,9 +2989,11 @@ async def admin_upload_ticket(request: Request):
         notif_reminder = s["notif_reminder"] if s else 1
         msg_parts = []
         if notif_ticket:
-            msg_parts.append(render_notif("ticket_purchased", rid=round_["id"], numbers=nums_str))
+            msg_parts.append(render_notif("ticket_purchased", group_id=round_.get("group_id"),
+                                          rid=round_["id"], numbers=nums_str))
         if notif_reminder:
-            msg_parts.append(render_notif("draw_reminder", draw=draw_date_str))
+            msg_parts.append(render_notif("draw_reminder", group_id=round_.get("group_id"),
+                                          draw=draw_date_str))
         if msg_parts:
             await _notify(uid, "\n".join(msg_parts))
 
@@ -3238,10 +3268,10 @@ async def admin_enter_results(request: Request):
             prize_line = f"💵 Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n" if prize > 0 else ""
             ft_line = f"🎟️ Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round\n" if ft > 0 else ""
             credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""
-            msg = render_notif("you_won", rid=round_["id"], prize_line=prize_line,
+            msg = render_notif("you_won", group_id=gid, rid=round_["id"], prize_line=prize_line,
                                ft_line=ft_line, numbers=win_str, credited_line=credited_line)
         else:
-            msg = render_notif("results_no_prize", rid=round_["id"], numbers=win_str,
+            msg = render_notif("results_no_prize", group_id=gid, rid=round_["id"], numbers=win_str,
                                stake=f"{p['amount']:.2f}", pct=share_pct)
         await _notify(p["user_id"], msg)
 
@@ -3806,22 +3836,48 @@ async def platform_delete_round(round_id: int, request: Request):
     return {"ok": True}
 
 
+def _notif_template_list(gid: int) -> list:
+    """Templates for a scope (gid=0 platform, gid>0 group) with the guide + effective text."""
+    out = []
+    for key, t in NOTIF_TEMPLATES.items():
+        default = t["default"]
+        platform_text = _NOTIF_OVERRIDES.get((0, key)) or default
+        if gid:
+            effective = _NOTIF_OVERRIDES.get((gid, key)) or platform_text
+            overridden = (gid, key) in _NOTIF_OVERRIDES
+        else:
+            effective = _NOTIF_OVERRIDES.get((0, key)) or default
+            overridden = (0, key) in _NOTIF_OVERRIDES
+        out.append({
+            "key": key,
+            "label": t["label"],
+            "desc": t.get("desc", ""),
+            "default": default,
+            "inherited": platform_text,
+            "text": effective,
+            "overridden": overridden,
+            "vars": describe_vars(effective or default),
+        })
+    return out
+
+
+async def _set_notif_override(db, gid: int, key: str, text: str) -> bool:
+    reset = text.strip() == "" or text.strip() == NOTIF_TEMPLATES[key]["default"].strip()
+    await db.execute("DELETE FROM notif_templates WHERE group_id=? AND key=?", (gid, key))
+    if not reset:
+        await db.execute(
+            "INSERT INTO notif_templates (group_id, key, text, updated_at) VALUES (?,?,?,datetime('now'))",
+            (gid, key, text),
+        )
+    return reset
+
+
 @app.get("/api/platform/notif-templates")
 async def platform_notif_templates(request: Request):
     admin, db = await _require_platform_admin(request)
     await _load_notif_overrides(db)
     await db.close()
-    out = []
-    for key, t in NOTIF_TEMPLATES.items():
-        out.append({
-            "key": key,
-            "label": t["label"],
-            "desc": t.get("desc", ""),
-            "default": t["default"],
-            "text": _NOTIF_OVERRIDES.get(key, t["default"]),
-            "overridden": key in _NOTIF_OVERRIDES,
-        })
-    return {"templates": out}
+    return {"templates": _notif_template_list(0)}
 
 
 @app.patch("/api/platform/notif-templates/{key}")
@@ -3831,19 +3887,8 @@ async def platform_update_notif_template(key: str, request: Request):
         await db.close()
         raise HTTPException(404, "Unknown template")
     body = await request.json()
-    text = body.get("text")
-    if text is None:
-        await db.close()
-        raise HTTPException(400, "text required")
-    text = str(text)
-    # Empty, equal to default, or an explicit reset → drop the override.
-    reset = bool(body.get("reset")) or text.strip() == "" or text.strip() == NOTIF_TEMPLATES[key]["default"].strip()
-    await db.execute("DELETE FROM notif_templates WHERE key=?", (key,))
-    if not reset:
-        await db.execute(
-            "INSERT INTO notif_templates (key, text, updated_at) VALUES (?,?,datetime('now'))",
-            (key, text),
-        )
+    text = "" if body.get("reset") else str(body.get("text") or "")
+    reset = await _set_notif_override(db, 0, key, text)
     await db.commit()
     await _load_notif_overrides(db)
     await db.close()
@@ -3863,6 +3908,46 @@ async def platform_test_notif_template(key: str, request: Request):
     rendered = render_template(str(text), sample) if text else render_notif(key, **sample)
     await _notify(admin["telegram_id"], rendered)
     return {"ok": True, "sent_to": admin["telegram_id"], "preview": rendered}
+
+
+# --- Trustee (group-admin) notification templates -----------------------------
+@app.get("/api/admin/notif-templates")
+async def admin_notif_templates(request: Request):
+    user, db, group = await _require_group_trustee(request)
+    await _load_notif_overrides(db)
+    await db.close()
+    return {"templates": _notif_template_list(group["id"])}
+
+
+@app.patch("/api/admin/notif-templates/{key}")
+async def admin_update_notif_template(key: str, request: Request):
+    user, db, group = await _require_group_trustee(request)
+    if key not in NOTIF_TEMPLATES:
+        await db.close()
+        raise HTTPException(404, "Unknown template")
+    body = await request.json()
+    text = "" if body.get("reset") else str(body.get("text") or "")
+    reset = await _set_notif_override(db, group["id"], key, text)
+    await db.commit()
+    await _load_notif_overrides(db)
+    await db.close()
+    return {"ok": True, "reset": reset}
+
+
+@app.post("/api/admin/notif-templates/{key}/test")
+async def admin_test_notif_template(key: str, request: Request):
+    """Send a sample of this group's message to the trustee's own Telegram."""
+    user, db, group = await _require_group_trustee(request)
+    gid = group["id"]
+    await db.close()
+    if key not in NOTIF_TEMPLATES:
+        raise HTTPException(404, "Unknown template")
+    body = await request.json()
+    sample = NOTIF_TEMPLATES[key].get("sample", {})
+    text = body.get("text")
+    rendered = render_template(str(text), sample) if text else render_notif(key, group_id=gid, **sample)
+    await _notify(user["telegram_id"], rendered)
+    return {"ok": True, "sent_to": user["telegram_id"], "preview": rendered}
 
 
 @app.patch("/api/platform/users/{telegram_id}")
@@ -3993,7 +4078,8 @@ async def admin_broadcast(request: Request):
         await db.close()
         raise HTTPException(400, "Message can't be empty")
     message = message[:2000]
-    text = render_notif("broadcast", group=html.escape(group["name"]), message=html.escape(message))
+    text = render_notif("broadcast", group_id=group["id"],
+                        group=html.escape(group["name"]), message=html.escape(message))
     cur = await db.execute("SELECT COUNT(*) AS n FROM group_members WHERE group_id=?", (group["id"],))
     n = int((await cur.fetchone())["n"] or 0)
     await _notify_all(db, text, group_id=group["id"])

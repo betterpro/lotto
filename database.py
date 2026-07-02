@@ -213,8 +213,22 @@ _SCHEMA_STATEMENTS = [
     # Auto-results: timestamp when official winning numbers were fetched & matched
     # (so participants are notified once).
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS results_auto_at TEXT",
-    # Editable Telegram notification templates (super-admin overrides per key).
+    # Editable Telegram notification templates. group_id=0 is the platform-wide
+    # default (super-admin); group_id>0 is a per-group override (trustee).
     "CREATE TABLE IF NOT EXISTS notif_templates (key TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at TEXT)",
+    "ALTER TABLE notif_templates ADD COLUMN IF NOT EXISTS group_id BIGINT NOT NULL DEFAULT 0",
+    """DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notif_templates_pkey'
+                   AND array_length(conkey,1)=1) THEN
+          ALTER TABLE notif_templates DROP CONSTRAINT notif_templates_pkey;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notif_templates_pkey') THEN
+          ALTER TABLE notif_templates ADD CONSTRAINT notif_templates_pkey PRIMARY KEY (group_id, key);
+        END IF;
+      END $$;""",
+    # Per-group reminder lead times (hours before the draw). 0 disables a slot.
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS reminder_hours_1 INTEGER NOT NULL DEFAULT 48",
+    "ALTER TABLE groups ADD COLUMN IF NOT EXISTS reminder_hours_2 INTEGER NOT NULL DEFAULT 24",
     # Beneficiary / e-transfer profile (migrations 003–004)
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS street TEXT",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS city TEXT",

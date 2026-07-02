@@ -114,6 +114,8 @@ def group_public(group_row) -> dict | None:
         "stripe_charges_enabled": bool(group_row.get("stripe_charges_enabled")),
         "locked": group_row.get("status") == "locked",
         "platform_sub_status": group_row.get("platform_sub_status") or "none",
+        "reminder_hours_1": int(group_row.get("reminder_hours_1") or 48),
+        "reminder_hours_2": int(group_row.get("reminder_hours_2") or 24),
     }
 
 

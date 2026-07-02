@@ -161,6 +161,53 @@ NOTIF_TEMPLATES: dict[str, dict] = {
 }
 
 
+# Human descriptions for the {placeholders} that appear in templates.
+VAR_HELP: dict[str, str] = {
+    "rid": "round number",
+    "seq": "round number",
+    "pool": "current pool total ($)",
+    "name": "member's name",
+    "amount": "amount ($)",
+    "balance": "member's balance after ($)",
+    "needed": "amount needed ($)",
+    "shares": "number of shares",
+    "share_s": "'s' when plural, else empty",
+    "ticket_s": "'s' when plural, else empty",
+    "tickets": "number of tickets to buy",
+    "price": "price per share ($)",
+    "target": "pool target text",
+    "game": "lottery game name",
+    "numbers": "winning / ticket numbers",
+    "bonus": "bonus number suffix",
+    "best": "best matched tier (e.g. 6/7)",
+    "hours": "hours before the draw",
+    "emoji": "⏰ / ⏳ urgency icon",
+    "jp": "jackpot suffix",
+    "jackpot_line": "jackpot line (auto, may be empty)",
+    "draw_line": "draw-date line (auto, may be empty)",
+    "draw": "draw date",
+    "prize_line": "cash-prize line (auto, may be empty)",
+    "ft_line": "free-tickets line (auto, may be empty)",
+    "credited_line": "credited line (auto, may be empty)",
+    "stake": "member's stake ($)",
+    "pct": "member's share (%)",
+    "group": "group name",
+    "message": "the message the trustee typed",
+}
+
+_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def describe_vars(text: str) -> list[dict]:
+    """List the {placeholders} used in a template, with human descriptions."""
+    seen = []
+    for m in _PLACEHOLDER_RE.finditer(text or ""):
+        name = m.group(1)
+        if name not in [v["name"] for v in seen]:
+            seen.append({"name": name, "help": VAR_HELP.get(name, "")})
+    return seen
+
+
 class _SafeDict(dict):
     def __missing__(self, key):
         return ""

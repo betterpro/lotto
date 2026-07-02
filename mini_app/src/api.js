@@ -209,6 +209,9 @@ export const api = {
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
     broadcast:    (message)       => req('POST', '/api/admin/broadcast', { message }),
+    notifTemplates:    () => req('GET', '/api/admin/notif-templates'),
+    saveNotifTemplate: (key, text, reset) => req('PATCH', `/api/admin/notif-templates/${key}`, { text, reset }),
+    testNotifTemplate: (key, text) => req('POST', `/api/admin/notif-templates/${key}/test`, { text }),
     group: {
       get:   () => req('GET', '/api/admin/group'),
       patch: (body) => req('PATCH', '/api/admin/group', body),

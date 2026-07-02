@@ -140,6 +140,20 @@ def _draw_date_strings(d: date) -> list[str]:
     ]
 
 
+def hours_until_draw(lottery_type: str, draw_date, *, from_dt: datetime | None = None) -> float | None:
+    """Hours from now until the draw's cutoff (Pacific). Negative if passed."""
+    try:
+        d = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
+    except Exception:
+        return None
+    if not d:
+        return None
+    sched = DRAW_SCHEDULE.get(lottery_type) or {"hour": 19, "minute": 30}
+    now = (from_dt or datetime.now(PT)).astimezone(PT)
+    cutoff = datetime.combine(d, time(sched["hour"], sched["minute"]), PT)
+    return (cutoff - now).total_seconds() / 3600.0
+
+
 def draw_has_occurred(
     lottery_type: str, draw_date, *, buffer_minutes: int = 45, from_dt: datetime | None = None
 ) -> bool:
