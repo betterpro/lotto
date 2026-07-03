@@ -1520,6 +1520,33 @@ def _beneficiary_agreement_kwargs(user: dict) -> dict:
     }
 
 
+async def _round_participant_count(db, round_id: int) -> int | None:
+    """Number of paid beneficiaries recorded for a round (for the draw agreement)."""
+    try:
+        cur = await db.execute(
+            "SELECT COUNT(*) AS n FROM participations WHERE round_id=?", (round_id,)
+        )
+        row = await cur.fetchone()
+        return int(row["n"]) if row else None
+    except Exception:
+        return None
+
+
+def _round_ticket_numbers_str(rd: dict) -> str | None:
+    """Plain-text ticket numbers for the round agreement, once the ticket is bought."""
+    raw = rd.get("ticket_numbers")
+    if not raw:
+        return None
+    try:
+        rows = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+    if not rows:
+        return None
+    msg = format_ticket_numbers_message(rows, rd.get("lottery_type"))
+    return re.sub(r"<[^>]+>", "", msg or "").strip() or None
+
+
 def _beneficiary_update_parts(body: dict, user: dict) -> tuple[list[str], list]:
     """Build SET clauses only for fields present in the request body."""
     sets: list[str] = []
@@ -1684,6 +1711,8 @@ async def api_agreement_round(request: Request, round_id: int):
     pool = rd.get("pool") or 0
     share_pct = round(part["amount"] / pool * 100, 1) if pool else None
     trustee = await _trustee_dict_for_user(db, user)
+    pcount = await _round_participant_count(db, round_id)
+    tnums = _round_ticket_numbers_str(rd)
     body = build_round_agreement(
         round_id=round_id,
         lottery_type=rd.get("lottery_type"),
@@ -1695,6 +1724,8 @@ async def api_agreement_round(request: Request, round_id: int):
         share_pct=share_pct,
         closed_at=rd.get("closed_at"),
         trustee=trustee,
+        participants_count=pcount,
+        ticket_numbers=tnums,
     )
     await db.close()
     return {
@@ -1731,6 +1762,8 @@ async def api_agreement_round_download(request: Request, round_id: int):
     share_pct = round(part["amount"] / pool * 100, 1) if pool else None
     beneficiary_name = user.get("full_name") or user.get("username") or f"User {user['telegram_id']}"
     trustee = await _trustee_dict_for_user(db, user)
+    pcount = await _round_participant_count(db, round_id)
+    tnums = _round_ticket_numbers_str(rd)
     body = build_round_agreement(
         round_id=round_id,
         lottery_type=rd.get("lottery_type"),
@@ -1742,6 +1775,8 @@ async def api_agreement_round_download(request: Request, round_id: int):
         share_pct=share_pct,
         closed_at=rd.get("closed_at"),
         trustee=trustee,
+        participants_count=pcount,
+        ticket_numbers=tnums,
     )
     await db.close()
     pct_line = f"{share_pct}%" if share_pct is not None else "—"
@@ -2979,11 +3014,12 @@ def _round_email_html(*, round_id, name, group_name, game_label, draw_date, nums
 
 async def _email_round_documents(*, round_id, group_name, lottery_type, draw_date,
                                  closed_at, pool, trustee, participants, ticket_images,
-                                 nums_str):
+                                 nums_str, participants_count=None):
     """Email each participant their round agreement PDF + ticket photos (Resend)."""
     if not email_enabled():
         return
     game_label = lottery_label(lottery_type)
+    plain_nums = re.sub(r"<[^>]+>", "", nums_str or "").strip() or None
     # Ticket photos are shared across all participants — build the attachments once.
     img_atts = []
     for i, img in enumerate(ticket_images[:10], start=1):
@@ -3004,6 +3040,7 @@ async def _email_round_documents(*, round_id, group_name, lottery_type, draw_dat
                 round_id=round_id, lottery_type=lottery_type, draw_date=draw_date,
                 beneficiary_name=name, shares=shares, stake_amount=stake,
                 pool_amount=pool, share_pct=share_pct, closed_at=closed_at, trustee=trustee,
+                participants_count=participants_count, ticket_numbers=plain_nums,
             )
             pdf = build_agreement_pdf(
                 title=f"Round #{round_id} Draw Agreement",
@@ -3137,6 +3174,7 @@ async def admin_upload_ticket(request: Request):
                 draw_date=round_.get("draw_date"), closed_at=round_.get("closed_at"),
                 pool=pool, trustee=trustee, participants=email_parts,
                 ticket_images=ticket_images, nums_str=nums_str,
+                participants_count=len(participant_ids),
             ))
 
     await db.close()

@@ -218,6 +218,58 @@ as follows:
     terms contained herein; (b) has been given the opportunity to obtain independent
     legal advice; (c) confirms that all information provided is true and accurate.
 
+GROUP-PLAY RULES & SAFEGUARDS
+These rules govern how the group plays each draw and protect every Beneficiary. They
+apply to all rounds under this agreement, alongside each Round Draw Agreement amendment.
+
+  A. No pay, no share. A Beneficiary is included in a draw only if full payment is
+     received and recorded by the posted cut-off time before tickets are purchased.
+     LottoChee locks the paid participant list at the cut-off and preserves that final
+     list as the record for the draw. No payment by the cut-off means no ownership
+     share for that draw.
+
+  B. Ticket proof after purchase. After the Group Trustee buys the ticket(s), LottoChee
+     records and shows the ticket image/copy, ticket control number, draw date, total
+     cost, the paid participant list, and each Beneficiary's share for that round.
+     Beneficiaries can check the tickets themselves.
+
+  C. Original ticket custody. The Group Trustee holds each pooled ticket as property
+     of the group, marked "In Trust" / "Group Ticket", stored securely and kept
+     separate from personal tickets, and photographed/scanned immediately. Only the
+     original ticket may be used to claim a prize.
+
+  D. Prize-claim plan. The Group Trustee coordinates prize claims with the applicable
+     lottery corporation. Valid government-issued photo ID is required. Group claims of
+     $10,000 CAD or more require a Group Prize Agreement completed by every member
+     entitled to a share.
+
+  E. Payout in writing. Winnings are paid to the Group Trustee as trustee only, never
+     personally, using a clearly traceable account, with a written payout confirmation
+     to each Beneficiary. Distribution is by the recorded pool shares for the round.
+
+  F. Audit trail. LottoChee retains join/leave history, payment confirmations, the
+     cut-off timestamp, ticket-purchase timestamp, ticket images, the final per-draw
+     participant list, results, payout confirmations, and admin actions. These records
+     — not chat history — are the group's evidence and can be exported per draw.
+
+  G. Privacy & consent. LottoChee collects only the information needed to run the pool
+     (name, contact, and payment details) and uses it to administer the group, record
+     participation and payments, and process prize claims. Sensitive ID and payment
+     data are kept out of ordinary chat. You may ask what is held about you and request
+     deletion where retention is not legally required.
+
+  H. Legal boundary. LottoChee is a coordination and record-keeping tool, not a lottery
+     operator. Tickets are bought only through lawful provincial channels; the platform
+     sells no chances to the public and runs no lottery scheme. All participants must
+     meet the age and eligibility rules for their province.
+
+IMPORTANT NOTES
+This agreement is practical information and record-keeping, not legal advice. Lottery
+rules can change; for a large win, check the current provincial lottery corporation
+requirements before making any claim, and consider independent legal and tax advice.
+In Canada, lottery winnings are generally not taxable as income, though income later
+earned from investing winnings can be taxable.
+
 PRIVACY STATEMENT
 Your personal information is collected in accordance with the Freedom of Information
 and Protection of Privacy Act, British Columbia, and will be used by BCLC to administer
@@ -239,6 +291,11 @@ Declaration: {decl}
 """
 
 
+def round_ticket_control(round_id: int) -> str:
+    """Stable internal control reference LottoChee assigns to a round's ticket."""
+    return f"LC-R{int(round_id):05d}"
+
+
 def build_round_agreement(
     *,
     round_id: int,
@@ -251,29 +308,82 @@ def build_round_agreement(
     share_pct: float | None,
     closed_at: str | None = None,
     trustee: dict | None = None,
+    participants_count: int | None = None,
+    ticket_numbers: str | None = None,
+    ticket_control: str | None = None,
 ) -> str:
+    """Per-round draw agreement (amendment) + draw-by-draw proof of ownership.
+
+    Mirrors the BCLC LOTTO MAX group-play safeguards: it records the paid
+    participant list locked at the cut-off, the "no pay, no share" rule, ticket
+    proof and custody, and the prize-claim / payout terms for this specific draw.
+    """
     t = trustee or DEFAULT_TRUSTEE
     pct_line = f"{share_pct}%" if share_pct is not None else "-"
-    closed_line = f"Entries closed: {closed_at}\n" if closed_at else ""
+    control = ticket_control or round_ticket_control(round_id)
+    closed_line = (
+        f"  Entries closed (cut-off): {closed_at}\n" if closed_at
+        else "  Entries closed (cut-off): at 1 day before the draw\n"
+    )
+    paid_line = (
+        f"  Paid beneficiaries:  {participants_count}\n" if participants_count is not None else ""
+    )
+    ticket_block = (
+        f"TICKET PROOF\n"
+        f"  Ticket control no.:  {control}\n"
+        f"  Group ticket status: Held \"In Trust\" for the group by the Group Trustee\n"
+        + (f"  Ticket numbers:      {ticket_numbers}\n" if ticket_numbers else "")
+        + "  A copy of the purchased ticket is provided to beneficiaries. Only the\n"
+          "  original ticket, held by the Group Trustee, may be used to claim a prize.\n\n"
+    )
     return f"""ROUND DRAW AGREEMENT (AMENDMENT)
 Round #{round_id}
 
 This amendment supplements the Group Prize Agreement between you and Group Trustee
 {t["name"]}. In case of conflict on this round only, this amendment controls for
-Round #{round_id}.
+Round #{round_id}. It also serves as the draw-by-draw record of who paid, which
+ticket was bought, and the share each beneficiary owns for this draw.
 
 ROUND DETAILS
   Game:      {lottery_label(lottery_type)}
   Draw date: {draw_date or "TBD"}
-{closed_line}
+{closed_line}  Ticket control no.: {control}
+
 YOUR PARTICIPATION
   Beneficiary: {beneficiary_name}
   Shares:      {shares}
   Stake:       ${stake_amount:.2f} CAD
   Pool share:  {pct_line} of round pool (${pool_amount:.2f} CAD total)
 
+PAID PARTICIPANT LIST (LOCKED AT CUT-OFF)
+{paid_line}  The final paid participant list and share allocation recorded at the cut-off
+  determine ownership of the ticket(s) purchased for this draw. The list is locked
+  at the cut-off and preserved as the record for Round #{round_id}.
+
+{ticket_block}NO PAY, NO SHARE
+  A participant is included in this draw only if full payment was received and
+  recorded before the posted cut-off time. Late payment, partial payment, verbal
+  promises, or past participation do not create a share in this draw unless the
+  written Group Prize Agreement says otherwise.
+
+PRIZE CLAIM & PAYOUT
+  Any prize is paid to the Group Trustee ({t["name"]}) as trustee only, and never
+  in the Trustee's personal capacity. The Trustee distributes winnings to
+  beneficiaries strictly by the pool shares recorded above, using a traceable
+  account, with a written payout confirmation to each beneficiary. Group claims of
+  $10,000 CAD or more require a Group Prize Agreement completed by every member
+  entitled to a share, with valid government-issued photo ID.
+
+IMPORTANT NOTES
+  This document is practical information and record-keeping, not legal advice.
+  Lottery rules can change; for a large win the Trustee and beneficiaries should
+  check the current provincial lottery corporation requirements and consider
+  independent legal and tax advice before any claim or distribution. In Canada,
+  lottery winnings are generally not taxable as income, though income later earned
+  from investing winnings can be taxable.
+
 By participating in this round you confirm you have read the Group Prize Agreement
 and accept this round-specific share for the draw listed above.
 
-- Round #{round_id} - Trustee: {t["name"]}
+- Round #{round_id} - Ticket {control} - Trustee: {t["name"]}
 """
