@@ -40,13 +40,16 @@ from agreements import (
 from lottery_types import (
     LOTTERY_PREFERENCE_PRICES,
     build_scan_prompt,
+    count_tickets,
     format_ticket_numbers_message,
+    group_rows_into_tickets,
     lottery_share_price,
     match_lines,
     merge_round_ticket_rows,
     normalize_ticket_rows,
     parse_round_tickets,
     parse_ticket_numbers,
+    rows_per_ticket,
     supports_auto_results,
     valid_lottery_type,
     validate_ticket_rows,
@@ -1872,8 +1875,13 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["pool_target"] = ((rd.get("tickets_target") or 0) * (rd.get("price_per_share") or 5)) or None
     rd["tickets_required"] = await _round_tickets_required(db, rd)
     saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
-    rd["tickets_uploaded"] = len(saved)
+    all_rows = merge_round_ticket_rows(saved)
+    lt = rd.get("lottery_type")
+    rd["tickets_uploaded"] = count_tickets(all_rows, lt)
+    rd["rows_per_ticket"] = rows_per_ticket(lt)
     rd["round_tickets"] = saved
+    rd["tickets_breakdown"] = _ticket_breakdown_for_round(rd, all_rows)
+    rd.pop("ticket_results", None)
     ticket_images = [t["image"] for t in saved if t.get("image")]
     if not ticket_images and rd.get("ticket_image"):
         ticket_images = [rd["ticket_image"]]
@@ -2028,8 +2036,13 @@ async def api_rounds(request: Request):
             ticket_images = [rd["ticket_image"]]
         rd["ticket_images"] = ticket_images
         rd["has_ticket_image"] = bool(ticket_images)
+        rd["rows_per_ticket"] = rows_per_ticket(rd.get("lottery_type"))
+        rd["tickets_breakdown"] = _ticket_breakdown_for_round(
+            rd, merge_round_ticket_rows(saved)
+        )
         rd.pop("ticket_image", None)
         rd.pop("round_tickets", None)
+        rd.pop("ticket_results", None)
         rounds.append(rd)
     await db.close()
     return {"rounds": rounds}
@@ -2952,12 +2965,14 @@ async def admin_save_round_ticket(request: Request):
 
     required = await _round_tickets_required(db, round_)
     await db.close()
+    all_rows = merge_round_ticket_rows(tickets)
     return {
         "ok": True,
         "round_id": round_["id"],
         "ticket_index": ticket_index,
-        "tickets_uploaded": len([t for t in tickets if t.get("rows")]),
+        "tickets_uploaded": count_tickets(all_rows, lottery_type),
         "tickets_required": required,
+        "rows_per_ticket": rows_per_ticket(lottery_type),
         "rows": rows,
     }
 
@@ -3100,15 +3115,15 @@ async def admin_upload_ticket(request: Request):
         rows = normalize_ticket_rows(numbers, lottery_type)
     else:
         saved = parse_round_tickets(round_.get("round_tickets"), lottery_type)
-        complete = [t for t in saved if t.get("rows")]
-        if len(complete) < required:
+        rows = merge_round_ticket_rows(saved)
+        uploaded = count_tickets(rows, lottery_type)
+        if uploaded < required:
             await db.close()
             raise HTTPException(
                 400,
-                f"Scan {required - len(complete)} more ticket(s) — "
-                f"{len(complete)} of {required} uploaded",
+                f"Scan {required - uploaded} more ticket(s) — "
+                f"{uploaded} of {required} uploaded",
             )
-        rows = merge_round_ticket_rows(saved)
 
     if not validate_ticket_rows(rows, lottery_type):
         await db.close()
@@ -3329,17 +3344,83 @@ async def round_ticket_image(request: Request, round_id: int):
     return Response(content=img_bytes, media_type="image/jpeg")
 
 
+def _build_ticket_breakdown(lines, lottery_type, winning_main, bonus, ticket_inputs=None):
+    """Group the pool's lines into physical tickets with per-line match + per-ticket
+    prize/free info. `ticket_inputs` is an optional list aligned to the tickets:
+    [{"prize": float, "free": int}, ...]."""
+    matched = match_lines(lottery_type, winning_main, bonus, lines)
+    line_infos = matched["lines"]
+    groups = group_rows_into_tickets(line_infos, lottery_type)
+    inputs = ticket_inputs or []
+    out = []
+    for i, grp in enumerate(groups):
+        inp = inputs[i] if i < len(inputs) else {}
+        try:
+            prize = round(float(inp.get("prize") or 0), 2)
+        except (TypeError, ValueError):
+            prize = 0.0
+        try:
+            free = int(inp.get("free") or 0)
+        except (TypeError, ValueError):
+            free = 0
+        best = max((li["main_matches"] for li in grp), default=0)
+        best_bonus = any(li["bonus_matched"] for li in grp)
+        any_line_win = any(li["win"] for li in grp)
+        # Free tickets count as a win, per group rules.
+        won = any_line_win or prize > 0 or free > 0
+        out.append({
+            "lines": grp,
+            "best_main": best,
+            "best_bonus": best_bonus,
+            "best_label": f"{best}/{matched['main_count']}" + (" + bonus" if best_bonus else ""),
+            "line_win": any_line_win,
+            "won": won,
+            "prize": prize,
+            "free": free,
+        })
+    return out
+
+
+def _ticket_breakdown_for_round(rd: dict, all_rows=None):
+    """Per-ticket lines + win/prize breakdown for display. Uses the stored
+    `ticket_results` once a round is drawn, else derives lines (no win marks)."""
+    stored = rd.get("ticket_results")
+    if stored:
+        try:
+            return json.loads(stored) if isinstance(stored, str) else stored
+        except (ValueError, TypeError):
+            pass
+    lt = rd.get("lottery_type")
+    lines = parse_ticket_numbers(rd.get("ticket_numbers")) or (all_rows or [])
+    if not lines:
+        return None
+    wn = []
+    try:
+        wn = json.loads(rd["winning_numbers"]) if rd.get("winning_numbers") else []
+    except (ValueError, TypeError):
+        wn = []
+    return _build_ticket_breakdown(lines, lt, wn, rd.get("bonus_number"))
+
+
 @app.post("/api/admin/round/results")
 async def admin_enter_results(request: Request):
-    """Trustee enters winning numbers, cash prize, and/or free tickets."""
+    """Trustee enters winning numbers and a prize per ticket (summed to total)."""
     user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     body = await request.json()
     round_id = body.get("round_id")
     winning_numbers = body.get("winning_numbers", [])
     bonus_number = body.get("bonus_number")
-    total_prize = float(body.get("total_prize", 0))
-    free_tickets = int(body.get("free_tickets") or 0)
+    # New per-ticket model: `tickets` = [{prize, free}, ...] summed to the total.
+    # Falls back to whole-round total_prize / free_tickets for older clients.
+    ticket_inputs = body.get("tickets")
+    if isinstance(ticket_inputs, list) and ticket_inputs:
+        total_prize = round(sum(float(t.get("prize") or 0) for t in ticket_inputs), 2)
+        free_tickets = sum(int(t.get("free") or 0) for t in ticket_inputs)
+    else:
+        ticket_inputs = None
+        total_prize = float(body.get("total_prize", 0))
+        free_tickets = int(body.get("free_tickets") or 0)
 
     if round_id:
         cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
@@ -3423,10 +3504,16 @@ async def admin_enter_results(request: Request):
                 (p["user_id"], "win", prize, f"Prize Round #{round_['id']}", gid),
             )
 
+    # Per-ticket match + prize breakdown (for participant "see winning tickets" view).
+    ticket_lines = parse_ticket_numbers(round_.get("ticket_numbers"))
+    ticket_breakdown = _build_ticket_breakdown(
+        ticket_lines, lottery_type, winning_numbers, bonus_number, ticket_inputs
+    )
     await db.execute(
         """UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?,
-           drawn_at=datetime('now'), free_tickets_won=? WHERE id=?""",
-        (json.dumps(winning_numbers), bonus_number, free_tickets, round_["id"]),
+           drawn_at=datetime('now'), free_tickets_won=?, ticket_results=? WHERE id=?""",
+        (json.dumps(winning_numbers), bonus_number, free_tickets,
+         json.dumps(ticket_breakdown), round_["id"]),
     )
     await db.commit()
 

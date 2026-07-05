@@ -3,7 +3,101 @@ import { api } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
 import { AgreementLink } from '../components/AgreementSheet.jsx'
+import { Ball } from '../components/Ball.jsx'
 import { jackpotDisplay } from '../lottery.js'
+
+function parseWinning(round) {
+  let main = []
+  try { main = JSON.parse(round?.winning_numbers || '[]') } catch { main = [] }
+  const bonus = round?.bonus_number != null ? Number(round.bonus_number) : null
+  return { mainSet: new Set(main.map(Number)), main, bonus }
+}
+
+function TicketNumbersModal({ round, onClose }) {
+  const tickets = round.tickets_breakdown || []
+  const { mainSet, main, bonus } = parseWinning(round)
+  const hasResults = main.length > 0
+  const fmt = n => '$' + Number(n || 0).toFixed(2)
+
+  return (
+    <div className="sheet-overlay" onClick={onClose}
+      style={{ alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: 440, maxHeight: '90vh', overflowY: 'auto',
+          borderRadius: 16, background: 'var(--surface)' }}>
+        <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1,
+          borderBottom: '.5px solid var(--hairline)' }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>
+            Ticket numbers · Round #{round.group_seq ?? round.id}
+          </span>
+          <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 15 }}>✕</button>
+        </div>
+
+        <div className="col" style={{ gap: 12, padding: 16 }}>
+          {hasResults && (
+            <div className="card" style={{ padding: 12, background: 'var(--bg-3)' }}>
+              <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, textTransform: 'uppercase',
+                letterSpacing: '.3px', marginBottom: 8 }}>Winning numbers</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {main.map((n, i) => <Ball key={i} n={n} match size="md" />)}
+                {bonus != null && (<>
+                  <span style={{ color: 'var(--tx-3)', fontSize: 17, fontWeight: 700 }}>+</span>
+                  <Ball n={bonus} bonus size="md" />
+                </>)}
+              </div>
+            </div>
+          )}
+
+          {tickets.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--tx-2)', fontSize: 14, padding: '24px 0' }}>
+              Ticket numbers aren’t available yet.
+            </div>
+          ) : tickets.map((t, ti) => (
+            <div key={ti} className="card" style={{ padding: 12,
+              border: `.5px solid ${t.won ? 'rgba(245,199,59,.5)' : 'var(--hairline)'}` }}>
+              <div className="row between" style={{ alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>Ticket {ti + 1}</span>
+                <div className="row gap-8" style={{ alignItems: 'center' }}>
+                  {hasResults && (
+                    <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>best {t.best_label}</span>
+                  )}
+                  {t.won
+                    ? <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 8px' }}>WON</span>
+                    : hasResults ? <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>No win</span> : null}
+                </div>
+              </div>
+              <div className="col" style={{ gap: 8 }}>
+                {(t.lines || []).map((ln, li) => (
+                  <div key={li} style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {(ln.numbers || []).map((n, ni) => (
+                      <Ball key={ni} n={n}
+                        match={mainSet.has(Number(n))}
+                        bonus={bonus != null && Number(n) === bonus && !mainSet.has(Number(n))}
+                        size="sm" />
+                    ))}
+                    {ln.win && (
+                      <span style={{ fontSize: 11, color: 'var(--money)', fontWeight: 700, marginLeft: 2 }}>✓ win</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {(t.prize > 0 || t.free > 0) && (
+                <div className="row gap-8" style={{ marginTop: 10, paddingTop: 8,
+                  borderTop: '.5px solid var(--hairline)', fontSize: 13 }}>
+                  {t.prize > 0 && <span style={{ color: 'var(--money)', fontWeight: 700 }}>{fmt(t.prize)} prize</span>}
+                  {t.free > 0 && <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 8px' }}>
+                    🎁 {t.free} free ticket{t.free === 1 ? '' : 's'}</span>}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function TicketPhotoModal({ round, onClose }) {
   // Render the stored ticket image(s) directly. round_tickets[].image are public
@@ -86,6 +180,8 @@ function playerCount(round) {
 
 function RoundCard({ round }) {
   const [showPhoto, setShowPhoto] = useState(false)
+  const [showNumbers, setShowNumbers] = useState(false)
+  const hasNumbers = (round.tickets_breakdown || []).length > 0
   const ds = round.display_status || round.status
   const isRally    = ['RALLY','OPEN','live','open'].includes(ds)
   const isLocked   = ds === 'LOCKED'
@@ -177,21 +273,36 @@ function RoundCard({ round }) {
         </div>
       )}
 
-      {round.has_ticket_image && (
+      {(round.has_ticket_image || hasNumbers) && (
         <>
           <div style={{ height: '.5px', background: 'var(--hairline)', margin: '10px 0 8px' }} />
-          <button onClick={() => setShowPhoto(true)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              display: 'flex', alignItems: 'center', gap: 6,
-              color: 'var(--tg)', fontSize: 13, fontWeight: 600,
-            }}>
-            📎 View ticket photo
-          </button>
+          <div className="row gap-16" style={{ flexWrap: 'wrap' }}>
+            {hasNumbers && (
+              <button onClick={() => setShowNumbers(true)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  color: 'var(--tg)', fontSize: 13, fontWeight: 600,
+                }}>
+                🎱 View numbers{round.winning_numbers ? ' & results' : ''}
+              </button>
+            )}
+            {round.has_ticket_image && (
+              <button onClick={() => setShowPhoto(true)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  color: 'var(--tg)', fontSize: 13, fontWeight: 600,
+                }}>
+                📎 View ticket photo
+              </button>
+            )}
+          </div>
         </>
       )}
 
       {showPhoto && <TicketPhotoModal round={round} onClose={() => setShowPhoto(false)} />}
+      {showNumbers && <TicketNumbersModal round={round} onClose={() => setShowNumbers(false)} />}
     </div>
   )
 }

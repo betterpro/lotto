@@ -9,18 +9,22 @@ LOTTERY_TYPES: dict[str, dict] = {
 }
 
 # Ticket number rows per game (keep in sync with mini_app/src/lottery.js)
+# rows_per_ticket: how many printed lines make up one physical ticket / play —
+# Lotto Max prints 3 lines per play, 6/49 1 line, Daily Grand 1 selection (main+grand).
 TICKET_LAYOUTS: dict[str, dict] = {
     "lotto_max": {
         "label": "Lotto Max",
         "repeat_row": {"label": "Line", "count": 7, "min": 1, "max": 52},
         "min_rows": 1,
-        "max_rows": 10,
+        "max_rows": 30,
+        "rows_per_ticket": 3,
     },
     "649": {
         "label": "Lotto 6/49",
         "repeat_row": {"label": "Classic", "count": 6, "min": 1, "max": 49},
         "min_rows": 1,
-        "max_rows": 10,
+        "max_rows": 30,
+        "rows_per_ticket": 1,
     },
     "daily_grand": {
         "label": "Daily Grand",
@@ -28,8 +32,37 @@ TICKET_LAYOUTS: dict[str, dict] = {
             {"label": "Main numbers", "count": 5, "min": 1, "max": 49},
             {"label": "Grand number", "count": 1, "min": 1, "max": 7},
         ],
+        "rows_per_ticket": 2,
     },
 }
+
+
+def rows_per_ticket(lottery_type: str | None) -> int:
+    """Printed lines that make up one physical ticket for this game."""
+    layout = ticket_layout(lottery_type)
+    rpt = layout.get("rows_per_ticket")
+    if rpt:
+        return int(rpt)
+    if not is_variable_row_layout(layout):
+        return max(1, len(layout.get("rows", [])))
+    return 1
+
+
+def count_tickets(rows: list, lottery_type: str | None) -> int:
+    """Number of whole physical tickets represented by these lines (ceil)."""
+    rpt = rows_per_ticket(lottery_type)
+    n = len(rows or [])
+    if rpt <= 0:
+        return n
+    return (n + rpt - 1) // rpt
+
+
+def group_rows_into_tickets(rows: list, lottery_type: str | None) -> list[list]:
+    """Split a flat list of lines into per-ticket chunks (rows_per_ticket each)."""
+    rpt = rows_per_ticket(lottery_type)
+    if rpt <= 1:
+        return [[r] for r in (rows or [])]
+    return [list(rows[i:i + rpt]) for i in range(0, len(rows or []), rpt)]
 
 # Auto-participate preference prices (Profile settings)
 LOTTERY_PREFERENCE_PRICES = {

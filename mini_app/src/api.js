@@ -197,9 +197,12 @@ export const api = {
       req('POST', '/api/admin/round/ticket', { round_id, ticket_index, rows, image_b64, draw_date }),
     uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket',
       numbers != null ? { round_id, numbers } : { round_id }),
-    results:      (round_id, winning_numbers, bonus_number, total_prize, free_tickets) =>
+    results:      (round_id, winning_numbers, bonus_number, opts = {}) =>
                                      req('POST', '/api/admin/round/results', {
-                                       round_id, winning_numbers, bonus_number, total_prize, free_tickets,
+                                       round_id, winning_numbers, bonus_number,
+                                       total_prize: opts.total_prize,
+                                       free_tickets: opts.free_tickets,
+                                       tickets: opts.tickets,
                                      }),
     round:        ()              => req('GET',  '/api/admin/round'),
     rounds:       ()              => req('GET',  '/api/admin/rounds'),
