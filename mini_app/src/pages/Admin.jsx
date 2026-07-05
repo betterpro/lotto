@@ -1949,6 +1949,22 @@ export default function Admin({ user }) {
                   <TrophyIcon width={16} height={16} />
                   Enter results
                 </button>
+                {st === 'open' && (
+                  <button className="btn btn-block"
+                    style={{ background: 'rgba(78,208,122,.1)', color: 'var(--money)',
+                             border: '.5px solid rgba(78,208,122,.25)' }}
+                    disabled={busy.resync}
+                    onClick={() => {
+                      if (!window.confirm('Re-apply free tickets from the last draw to this round, shared proportionally by each member’s stake?')) return
+                      roundAction('resync',
+                        () => api.admin.resyncFreeTickets(round.id),
+                        (r) => r.free_value_total > 0
+                          ? `Applied $${Number(r.free_value_total).toFixed(2)} free stake across the pool.`
+                          : 'No pending free tickets to apply.')
+                    }}>
+                    {busy.resync ? 'Applying…' : '🎁 Re-sync free tickets'}
+                  </button>
+                )}
               </>
             )}
           </div>

@@ -187,6 +187,7 @@ export const api = {
     setJackpot:   (round_id, opts) => req('POST', '/api/admin/round/jackpot',
       opts?.fetch ? { round_id, fetch: true } : { round_id, jackpot: opts.jackpot }),
     closeRound:   (round_id)      => req('POST', '/api/admin/round/close', { round_id }),
+    resyncFreeTickets: (round_id) => req('POST', '/api/admin/round/resync-free-tickets', { round_id }),
     deleteRound:  (round_id)      => req('POST', '/api/admin/round/delete', { round_id }),
     draw:         ()              => req('POST', '/api/admin/round/draw'),  // legacy
     scanTicket:   (round_id, image_b64, opts = {}) => req('POST', '/api/admin/round/scan-ticket', {

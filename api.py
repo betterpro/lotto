@@ -2786,6 +2786,80 @@ async def admin_new_round(request: Request):
     return {"ok": True, "round_id": round_id, "round_no": group_seq}
 
 
+@app.post("/api/admin/round/resync-free-tickets")
+async def admin_resync_free_tickets(request: Request):
+    """Reverse an already-applied free-ticket distribution on a round and
+    re-apply it proportionally by share. For rounds opened before the
+    proportional-value model, so every participant gets their exact %."""
+    user, db, group = await _require_group_trustee(request)
+    gid = group["id"]
+    body = await request.json()
+    target_id = body.get("round_id")
+    cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (target_id, gid))
+    target = await cur.fetchone()
+    if not target:
+        await db.close()
+        raise HTTPException(400, "Round not found")
+    target = dict(target)
+    lottery_type = target.get("lottery_type") or "lotto_max"
+    price = float(target.get("price_per_share") or 5)
+
+    # 1) Reverse any existing free stake on the target round.
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND free_ticket_shares > 0", (target_id,)
+    )
+    freed = [dict(p) for p in await cur.fetchall()]
+    reversed_total = 0.0
+    for p in freed:
+        fshares = int(p.get("free_ticket_shares") or 0)
+        fval = float(p.get("free_ticket_value") or 0) or round(fshares * price, 2)
+        new_shares = (p["shares"] or 0) - fshares
+        new_amount = round((p["amount"] or 0) - fval, 2)
+        reversed_total = round(reversed_total + fval, 2)
+        if new_shares <= 0 and new_amount <= 0.005:
+            await db.execute(
+                "DELETE FROM participations WHERE round_id=? AND user_id=?", (target_id, p["user_id"])
+            )
+        else:
+            await db.execute(
+                """UPDATE participations SET shares=?, amount=?, free_ticket_shares=0, free_ticket_value=0
+                   WHERE round_id=? AND user_id=?""",
+                (max(0, new_shares), max(0.0, new_amount), target_id, p["user_id"]),
+            )
+    if reversed_total > 0:
+        cur = await db.execute("SELECT pool FROM rounds WHERE id=?", (target_id,))
+        cur_pool = float((await cur.fetchone())["pool"] or 0)
+        await db.execute(
+            "UPDATE rounds SET pool=? WHERE id=?", (max(0.0, round(cur_pool - reversed_total, 2)), target_id)
+        )
+
+    # 2) Re-arm the source draw's free tickets (the most recent drawn round of
+    #    this game with free tickets, before the target).
+    cur = await db.execute(
+        """SELECT id FROM rounds WHERE group_id=? AND lottery_type=? AND status='drawn'
+             AND free_tickets_won > 0 AND id < ? ORDER BY id DESC LIMIT 1""",
+        (gid, lottery_type, target_id),
+    )
+    source = await cur.fetchone()
+    if not source:
+        await db.close()
+        raise HTTPException(400, "No prior drawn round with free tickets to apply")
+    await db.execute("UPDATE rounds SET free_tickets_consumed=0 WHERE id=?", (source["id"],))
+    await db.commit()
+
+    # 3) Re-apply with the proportional-value model.
+    applied = await apply_pending_free_tickets(
+        db, round_id=target_id, group_id=gid, lottery_type=lottery_type, price_per_share=price
+    )
+    await db.commit()
+    cur = await db.execute(
+        "SELECT COALESCE(SUM(free_ticket_value),0) AS v FROM participations WHERE round_id=?", (target_id,)
+    )
+    total_val = float((await cur.fetchone())["v"] or 0)
+    await db.close()
+    return {"ok": True, "applied_tickets": applied, "free_value_total": round(total_val, 2)}
+
+
 @app.post("/api/admin/round/delete")
 async def admin_delete_round(request: Request):
     """Delete a round that nobody has joined yet (no participations)."""
