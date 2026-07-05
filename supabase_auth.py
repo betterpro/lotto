@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -11,11 +12,49 @@ from database import create_web_user, get_user, get_user_by_auth_email, get_user
 
 log = logging.getLogger(__name__)
 
+# Verifying a Supabase access token means a network round trip to Supabase's
+# auth server (/auth/v1/user). The same short-lived access token is reused
+# across every request in a browser session, so cache successful verifications
+# in-process for a short window to avoid paying that latency on each API call.
+_TOKEN_TTL_SECONDS = 120
+_TOKEN_CACHE_MAX = 2048
+_token_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _cache_get(token: str) -> dict | None:
+    hit = _token_cache.get(token)
+    if not hit:
+        return None
+    expires_at, user = hit
+    if expires_at <= time.monotonic():
+        _token_cache.pop(token, None)
+        return None
+    return user
+
+
+def _cache_put(token: str, user: dict) -> None:
+    now = time.monotonic()
+    if len(_token_cache) >= _TOKEN_CACHE_MAX:
+        # Drop expired entries first; if still full, clear (bounded, simple).
+        for k, (exp, _) in list(_token_cache.items()):
+            if exp <= now:
+                _token_cache.pop(k, None)
+        if len(_token_cache) >= _TOKEN_CACHE_MAX:
+            _token_cache.clear()
+    _token_cache[token] = (now + _TOKEN_TTL_SECONDS, user)
+
 
 async def verify_supabase_access_token(token: str) -> dict | None:
-    """Validate a Supabase access token and return the auth user payload."""
+    """Validate a Supabase access token and return the auth user payload.
+
+    Successful results are cached in-process for a short TTL to avoid a network
+    round trip to Supabase on every authenticated request.
+    """
     if not token or not config.SUPABASE_URL or not config.SUPABASE_SERVICE_KEY:
         return None
+    cached = _cache_get(token)
+    if cached is not None:
+        return cached
     url = f"{config.SUPABASE_URL.rstrip('/')}/auth/v1/user"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -33,7 +72,10 @@ async def verify_supabase_access_token(token: str) -> dict | None:
         return None
     data = r.json()
     user = data.get("user") if isinstance(data, dict) else None
-    return user if isinstance(user, dict) and user.get("id") else None
+    if isinstance(user, dict) and user.get("id"):
+        _cache_put(token, user)
+        return user
+    return None
 
 
 def _provider_from_supabase_user(su: dict) -> str:

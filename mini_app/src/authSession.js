@@ -1,11 +1,15 @@
 import { initSupabaseClient } from './supabase.js'
 import { setAccessToken } from './api.js'
+import { isTelegram } from './routes.js'
 
 let ready = null
 
 export function initAuthSession() {
   if (!ready) {
     ready = (async () => {
+      // Telegram authenticates with initData headers — Supabase isn't involved,
+      // so skip loading/initializing it entirely (saves network + JS parse).
+      if (isTelegram()) return null
       const supabase = await initSupabaseClient()
       if (!supabase) return null
       const { data: { session } } = await supabase.auth.getSession()
