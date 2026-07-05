@@ -62,6 +62,7 @@ from lottery_draws import (
     next_draw_date,
     suggest_new_round,
 )
+from lottery_prizes import calculate_line_prizes, supports_prize_calc
 from notif_templates import NOTIF_TEMPLATES, describe_vars, render_template
 from free_tickets import (
     apply_pending_free_tickets,
@@ -3400,6 +3401,93 @@ def _ticket_breakdown_for_round(rd: dict, all_rows=None):
     except (ValueError, TypeError):
         wn = []
     return _build_ticket_breakdown(lines, lt, wn, rd.get("bonus_number"))
+
+
+@app.post("/api/admin/round/auto-results")
+async def admin_auto_results(request: Request):
+    """Fetch official winning numbers and auto-calculate each purchased ticket's
+    prize from the game's prize structure, for the trustee to review before
+    accepting. Fixed tiers get exact amounts; pari-mutuel tiers are flagged
+    (variable) for the trustee to confirm the published amount."""
+    user, db, group = await _require_group_trustee(request)
+    gid = group["id"]
+    body = await request.json()
+    round_id = body.get("round_id")
+    if round_id:
+        cur = await db.execute("SELECT * FROM rounds WHERE id=? AND group_id=?", (round_id, gid))
+    else:
+        cur = await db.execute(
+            "SELECT * FROM rounds WHERE group_id=? AND status IN ('uploaded','closed') ORDER BY id DESC LIMIT 1",
+            (gid,),
+        )
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(400, "No round found")
+    lottery_type = round_.get("lottery_type") or "lotto_max"
+    draw_date = round_.get("draw_date")
+
+    # Resolve the pool's ticket lines (finalized numbers or scanned rows).
+    lines = parse_ticket_numbers(round_.get("ticket_numbers"))
+    if not lines:
+        lines = merge_round_ticket_rows(parse_round_tickets(round_.get("round_tickets"), lottery_type))
+    await db.close()
+
+    if not lines:
+        raise HTTPException(400, "No ticket numbers on this round yet — scan the ticket first")
+    if not supports_prize_calc(lottery_type):
+        raise HTTPException(400, "Auto-calculation isn't available for this game — enter results manually")
+
+    # Winning numbers: use what's already recorded, else fetch from the official site.
+    winning = []
+    bonus = round_.get("bonus_number")
+    try:
+        winning = json.loads(round_["winning_numbers"]) if round_.get("winning_numbers") else []
+    except (ValueError, TypeError):
+        winning = []
+    if not winning:
+        result = await fetch_draw_results(lottery_type, draw_date)
+        if not result or not result.get("numbers"):
+            raise HTTPException(
+                400,
+                "Official results aren’t published yet (or couldn’t be read). "
+                "Try again after the draw, or enter the numbers manually.",
+            )
+        winning = result["numbers"]
+        bonus = result.get("bonus")
+
+    matched = match_lines(lottery_type, winning, bonus, lines)
+    line_prizes = calculate_line_prizes(lottery_type, matched["lines"])
+    groups = group_rows_into_tickets(line_prizes, lottery_type)
+
+    tickets = []
+    total_cash = 0.0
+    total_free = 0
+    any_variable = False
+    for grp in groups:
+        cash = round(sum(li["amount"] for li in grp if not li["variable"]), 2)
+        free = sum(1 for li in grp if li["free"])
+        has_variable = any(li["variable"] and li["win"] for li in grp)
+        any_variable = any_variable or has_variable
+        total_cash = round(total_cash + cash, 2)
+        total_free += free
+        tickets.append({
+            "lines": grp,
+            "cash": cash,
+            "free": free,
+            "has_variable": has_variable,
+            "won": cash > 0 or free > 0 or has_variable,
+        })
+
+    return {
+        "winning_numbers": winning,
+        "bonus_number": bonus,
+        "draw_date": draw_date,
+        "tickets": tickets,
+        "total_cash": total_cash,
+        "total_free": total_free,
+        "has_variable": any_variable,
+    }
 
 
 @app.post("/api/admin/round/results")

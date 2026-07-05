@@ -756,6 +756,37 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     () => ticketGroups.map(() => ({ outcome: 'none', prize: '', free: '1' })),
   )
   const [busy,       setBusy]       = useState(false)
+  const [autoBusy,   setAutoBusy]   = useState(false)
+  const [autoTickets, setAutoTickets] = useState(null)  // per-ticket detected line tiers
+  const [autoInfo,   setAutoInfo]   = useState(null)     // {draw_date, has_variable, ...}
+
+  async function runAutoCalc() {
+    setAutoBusy(true)
+    try {
+      const d = await api.admin.autoResults(round.id)
+      const wn = (d.winning_numbers || []).map(Number)
+      setMainNums(wn)
+      if (d.bonus_number != null) setBonus(String(d.bonus_number))
+      const per = (d.tickets || []).map(t => {
+        if (t.cash > 0) return { outcome: 'cash', prize: String(t.cash), free: String(t.free || 1) }
+        if (t.free > 0) return { outcome: 'free', prize: '', free: String(t.free) }
+        if (t.has_variable) return { outcome: 'cash', prize: '', free: '1' }  // enter amount
+        return { outcome: 'none', prize: '', free: '1' }
+      })
+      if (per.length) setPerTicket(per)
+      setAutoTickets(d.tickets || [])
+      setAutoInfo({ draw_date: d.draw_date, has_variable: d.has_variable,
+                    total_cash: d.total_cash, total_free: d.total_free })
+      showToast(
+        d.has_variable
+          ? 'Auto-calculated — enter the amounts marked “varies”, then review'
+          : 'Auto-calculated — review and accept',
+        d.has_variable ? 'info' : 'success',
+      )
+    } catch (err) {
+      showToast(err.message, 'error')
+    } finally { setAutoBusy(false) }
+  }
 
   function setTicketField(i, key, v) {
     setPerTicket(prev => prev.map((t, j) => j === i ? { ...t, [key]: v } : t))
@@ -851,11 +882,36 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
-          <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 12, lineHeight: 1.5 }}>
             {hasTickets
-              ? 'Tap numbers from the ticket to set the 7 winning numbers and bonus, then tap each ticket’s result below — no win, free ticket, or a cash amount. The total is summed and shared out to participants by their pool stake.'
+              ? 'Auto-calculate from the official results, or set the winning numbers and each ticket’s result yourself. Review before you accept — the total is shared out to participants by their pool stake.'
               : 'Enter the 7 winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.'}
           </p>
+
+          {hasTickets && (
+            <button type="button" className="btn btn-block"
+              disabled={autoBusy}
+              onClick={runAutoCalc}
+              style={{ marginBottom: 14, gap: 8, background: 'rgba(46,166,255,.14)',
+                color: 'var(--tg)', border: '.5px solid rgba(46,166,255,.3)', fontWeight: 700 }}>
+              {autoBusy ? 'Fetching official results…' : '🔮 Auto-calculate from official results'}
+            </button>
+          )}
+
+          {autoInfo && (
+            <div style={{ fontSize: 13, borderRadius: 10, padding: '10px 12px', marginBottom: 14,
+              lineHeight: 1.5, background: 'rgba(78,208,122,.1)', color: 'var(--money)',
+              border: '.5px solid rgba(78,208,122,.3)' }}>
+              ✅ Calculated from the official {autoInfo.draw_date || 'draw'} results — each ticket below is
+              pre-filled. Please review, adjust if needed, then accept.
+              {autoInfo.has_variable && (
+                <div style={{ color: 'var(--warn)', marginTop: 6 }}>
+                  ⚠ Some tickets hit a top tier whose amount <b>varies per draw</b> — enter that amount
+                  from the official prize breakdown before accepting.
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
                         textTransform: 'uppercase', marginBottom: 8 }}>
@@ -967,15 +1023,29 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                         )}
                       </div>
                       <div className="col" style={{ gap: 6, marginBottom: 10 }}>
-                        {grp.map((row, ri) => (
-                          <div key={ri} style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                            {row.map((n, ni) => {
-                              const v = Number(n)
-                              const cls = mainSet.has(v) ? 'match' : (bonusN === v ? 'bonus' : 'white')
-                              return <span key={ni} className={`ball sm ${cls}`}>{n}</span>
-                            })}
-                          </div>
-                        ))}
+                        {grp.map((row, ri) => {
+                          const li = autoTickets?.[ti]?.lines?.[ri]
+                          const tierText = li?.win
+                            ? (li.variable ? `${li.tier} · varies`
+                               : li.free ? `${li.tier} · free play`
+                               : `${li.tier} · $${Number(li.amount).toFixed(2)}`)
+                            : (li ? 'no win' : null)
+                          return (
+                            <div key={ri} style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                              {row.map((n, ni) => {
+                                const v = Number(n)
+                                const cls = mainSet.has(v) ? 'match' : (bonusN === v ? 'bonus' : 'white')
+                                return <span key={ni} className={`ball sm ${cls}`}>{n}</span>
+                              })}
+                              {tierText && (
+                                <span style={{ fontSize: 11, fontWeight: 700, marginLeft: 4,
+                                  color: li.win ? (li.variable ? 'var(--warn)' : 'var(--money)') : 'var(--tx-3)' }}>
+                                  {tierText}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
