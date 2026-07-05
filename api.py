@@ -3523,6 +3523,9 @@ async def admin_enter_results(request: Request):
     if bonus_number:
         win_str += f"  +<b>{bonus_number}</b> (bonus)"
     game_label = lottery_label(lottery_type)
+    # The round is a win if it took any cash OR any free ticket — a free ticket
+    # counts as a win. If the total result is nothing, everyone gets "no win".
+    round_won = total_prize > 0 or free_tickets > 0
     for p in parts:
         setting = await db.execute(
             "SELECT notif_results FROM user_settings WHERE user_id=?", (p["user_id"],)
@@ -3533,9 +3536,16 @@ async def admin_enter_results(request: Request):
         prize = prize_by_user.get(p["user_id"], 0)
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
         ft = free_ticket_allocation.get(p["user_id"], 0)
-        if prize > 0 or ft > 0:
+        if round_won:
             prize_line = f"💵 Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n" if prize > 0 else ""
-            ft_line = f"🎟️ Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round\n" if ft > 0 else ""
+            if ft > 0:
+                ft_line = f"🎟️ Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round\n"
+            elif prize <= 0 and free_tickets > 0:
+                # Pool won free tickets but this member didn't draw one personally.
+                s_ = "s" if free_tickets != 1 else ""
+                ft_line = f"🎟️ Your pool won <b>{free_tickets}</b> free ticket{s_} this round!\n"
+            else:
+                ft_line = ""
             credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""
             msg = render_notif("you_won", group_id=gid, rid=round_["id"], prize_line=prize_line,
                                ft_line=ft_line, numbers=win_str, credited_line=credited_line)
