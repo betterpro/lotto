@@ -248,10 +248,17 @@ _NUM_KEYS = ("numbers", "winningNumbers", "winning_numbers", "mainNumbers",
              "main_numbers", "results", "balls", "numbersDrawn")
 _BONUS_KEYS = ("bonus", "bonusNumber", "bonus_number", "bonusBall", "bonus_ball")
 
-# Cache the actor's dataset for a short window — a run returns many draws and
-# actor runs cost time/credits, so reuse them across lookups.
+# Apify actor game codes per our lottery types.
+_APIFY_GAME_CODES = {
+    "649": "Lotto649",
+    "lotto_max": "LottoMax",
+    "daily_grand": "DailyGrand",
+}
+
+# Cache the actor's dataset per game for a short window — actor runs cost
+# time/credits, so reuse recent draws across lookups.
 _APIFY_CACHE_TTL = 900  # 15 min
-_apify_cache: dict = {"at": 0.0, "items": None}
+_apify_cache: dict = {}  # lottery_type -> {"at": float, "items": list|None}
 
 
 def _to_iso_date(val) -> str | None:
@@ -310,9 +317,11 @@ def _extract_numbers(val, max_n: int) -> list[int]:
 def _match_apify_item(item, lottery_type, draw_iso, main_count, max_n) -> dict | None:
     if not isinstance(item, dict):
         return None
-    game_text = " ".join(str(item.get(k, "")) for k in _GAME_KEYS).lower()
+    game_text = " ".join(str(item.get(k, "")) for k in _GAME_KEYS).lower().strip()
     aliases = _GAME_ALIASES.get(lottery_type, [])
-    if aliases and not any(a in game_text for a in aliases):
+    # Only reject on game mismatch when the item actually names a game — the
+    # actor input already filters by game, and some actors omit a game field.
+    if game_text and aliases and not any(a in game_text for a in aliases):
         return None
     if _to_iso_date(_first(item, _DATE_KEYS)) != draw_iso:
         return None
@@ -335,19 +344,35 @@ def _match_apify_item(item, lottery_type, draw_iso, main_count, max_n) -> dict |
     return {"numbers": main, "bonus": bonus, "draw_date": draw_iso}
 
 
-async def _apify_draw_items() -> list | None:
-    """Run the configured Apify lottery actor and return its dataset items."""
+def _apify_input_for(lottery_type: str) -> dict:
+    """Build the actor input for a game, e.g.
+    {"country": "CA", "game": "Lotto649", "limit": 5, "timeoutSecs": 30}."""
+    inp = {"country": "CA", "limit": 5, "timeoutSecs": 30}
+    # Optional base overrides from env (country / limit / timeoutSecs, etc.).
+    if config.APIFY_LOTTERY_INPUT.strip():
+        try:
+            override = json.loads(config.APIFY_LOTTERY_INPUT)
+            if isinstance(override, dict):
+                inp.update({k: v for k, v in override.items() if k != "game"})
+        except (ValueError, TypeError):
+            pass
+    game = _APIFY_GAME_CODES.get(lottery_type)
+    if game:
+        inp["game"] = game
+    return inp
+
+
+async def _apify_draw_items(lottery_type: str) -> list | None:
+    """Run the Apify lottery actor for a game and return its dataset items."""
     token = config.APIFY_TOKEN
     if not token:
         return None
     now = _time.monotonic()
-    if _apify_cache["items"] is not None and (now - _apify_cache["at"]) < _APIFY_CACHE_TTL:
-        return _apify_cache["items"]
+    hit = _apify_cache.get(lottery_type)
+    if hit and hit["items"] is not None and (now - hit["at"]) < _APIFY_CACHE_TTL:
+        return hit["items"]
     actor = (config.APIFY_LOTTERY_ACTOR or "eternal_ngultrum~lottery-draws").replace("/", "~")
-    try:
-        inp = json.loads(config.APIFY_LOTTERY_INPUT) if config.APIFY_LOTTERY_INPUT.strip() else {}
-    except (ValueError, TypeError):
-        inp = {}
+    inp = _apify_input_for(lottery_type)
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items?token={token}"
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -357,13 +382,12 @@ async def _apify_draw_items() -> list | None:
     except Exception:
         return None
     items = data if isinstance(data, list) else None
-    _apify_cache["items"] = items
-    _apify_cache["at"] = now
+    _apify_cache[lottery_type] = {"at": now, "items": items}
     return items
 
 
 async def fetch_draw_results_apify(lottery_type: str, draw_iso: str, main_count: int, max_n: int) -> dict | None:
-    items = await _apify_draw_items()
+    items = await _apify_draw_items(lottery_type)
     if not items:
         return None
     for item in items:
