@@ -18,6 +18,9 @@ function TicketNumbersModal({ round, onClose }) {
   const { mainSet, main, bonus } = parseWinning(round)
   const hasResults = main.length > 0
   const fmt = n => '$' + Number(n || 0).toFixed(2)
+  const totalPrize = tickets.reduce((a, t) => a + (Number(t.prize) || 0), 0)
+  const totalFree  = tickets.reduce((a, t) => a + (Number(t.free) || 0), 0)
+  const winningTickets = tickets.filter(t => t.won).length
 
   return (
     <div className="sheet-overlay" onClick={onClose}
@@ -47,6 +50,35 @@ function TicketNumbersModal({ round, onClose }) {
                   <Ball n={bonus} bonus size="md" />
                 </>)}
               </div>
+            </div>
+          )}
+
+          {hasResults && (totalPrize > 0 || totalFree > 0) && (
+            <div className="card" style={{ padding: 12, border: '.5px solid rgba(245,199,59,.4)',
+              background: 'rgba(245,199,59,.08)' }}>
+              <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, textTransform: 'uppercase',
+                letterSpacing: '.3px', marginBottom: 6 }}>Round result</div>
+              <div className="row between" style={{ alignItems: 'center' }}>
+                <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
+                  {winningTickets} winning ticket{winningTickets === 1 ? '' : 's'}
+                </span>
+                <div className="row gap-8" style={{ alignItems: 'center' }}>
+                  {totalPrize > 0 && (
+                    <span style={{ fontSize: 17, fontWeight: 800, color: 'var(--money)' }}>{fmt(totalPrize)}</span>
+                  )}
+                  {totalFree > 0 && (
+                    <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 8px' }}>
+                      🎁 {totalFree} free</span>
+                  )}
+                </div>
+              </div>
+              {round.my_prize > 0 && (
+                <div className="row between" style={{ marginTop: 8, paddingTop: 8,
+                  borderTop: '.5px solid rgba(245,199,59,.3)', alignItems: 'center' }}>
+                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Your share</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--money)' }}>{fmt(round.my_prize)}</span>
+                </div>
+              )}
             </div>
           )}
 

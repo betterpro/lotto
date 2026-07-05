@@ -3443,7 +3443,9 @@ async def admin_enter_results(request: Request):
     if total_prize < 0 or free_tickets < 0:
         await db.close()
         raise HTTPException(400, "Prize amounts cannot be negative")
-    if total_prize <= 0 and free_tickets <= 0:
+    # A per-ticket submission may record a fully losing round (every ticket
+    # "No win"); the legacy whole-round form still needs a cash/free prize.
+    if ticket_inputs is None and total_prize <= 0 and free_tickets <= 0:
         await db.close()
         raise HTTPException(400, "Enter a cash prize and/or free tickets won")
 

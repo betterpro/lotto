@@ -738,12 +738,21 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const [pickBonus,  setPickBonus]  = useState(false)
   const [totalPrize, setTotalPrize] = useState('')
   const [freeTickets, setFreeTickets] = useState('')
-  // Per-ticket prize/free inputs (one entry per physical ticket).
-  const [perTicket, setPerTicket] = useState(() => ticketGroups.map(() => ({ prize: '', free: '' })))
+  // Per-ticket outcome: 'none' (no win), 'free' (free ticket(s)), or 'cash' ($).
+  const [perTicket, setPerTicket] = useState(
+    () => ticketGroups.map(() => ({ outcome: 'none', prize: '', free: '1' })),
+  )
   const [busy,       setBusy]       = useState(false)
 
   function setTicketField(i, key, v) {
     setPerTicket(prev => prev.map((t, j) => j === i ? { ...t, [key]: v } : t))
+  }
+  function setTicketOutcome(i, outcome) {
+    setPerTicket(prev => prev.map((t, j) => j === i ? { ...t, outcome } : t))
+  }
+  function bumpFree(i, delta) {
+    setPerTicket(prev => prev.map((t, j) =>
+      j === i ? { ...t, free: String(Math.max(1, (Number(t.free) || 1) + delta)) } : t))
   }
 
   function setNum(i, v) {
@@ -788,9 +797,13 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const mainSet = new Set(mainNums.map(Number))
   const bonusN = bonus ? Number(bonus) : null
 
-  // Per-ticket totals (Lotto Max shows one card per 3-line ticket).
-  const perTicketTotal = perTicket.reduce((a, t) => a + (Number(t.prize) || 0), 0)
-  const perTicketFree  = perTicket.reduce((a, t) => a + (Number(t.free) || 0), 0)
+  // Each ticket contributes its cash amount (outcome 'cash') or free tickets
+  // (outcome 'free'); 'none' contributes nothing. Totals roll up the round result.
+  const ticketCash = t => (t.outcome === 'cash' ? (Number(t.prize) || 0) : 0)
+  const ticketFree = t => (t.outcome === 'free' ? Math.max(1, Number(t.free) || 1) : 0)
+  const perTicketTotal = perTicket.reduce((a, t) => a + ticketCash(t), 0)
+  const perTicketFree  = perTicket.reduce((a, t) => a + ticketFree(t), 0)
+  const winningTicketCount = perTicket.filter(t => t.outcome !== 'none').length
   const cashPrize = hasTickets ? perTicketTotal : (totalPrize === '' ? 0 : Number(totalPrize))
   const freeTicketCount = hasTickets ? perTicketFree : (freeTickets === '' ? 0 : Number(freeTickets))
   const numbersReady = hasTickets
@@ -798,13 +811,15 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     : nums.every(n => n && Number(n) >= 1)
   const valid = numbersReady && bonus && Number(bonus) >= 1 &&
     cashPrize >= 0 && freeTicketCount >= 0 &&
-    (cashPrize > 0 || freeTicketCount > 0)
+    // Per-ticket flow can finalize a losing round (all "No win"); the legacy
+    // whole-round entry still requires a cash or free-ticket prize.
+    (hasTickets || cashPrize > 0 || freeTicketCount > 0)
 
   async function submit() {
     setBusy(true)
     try {
       const opts = hasTickets
-        ? { tickets: perTicket.map(t => ({ prize: Number(t.prize) || 0, free: Number(t.free) || 0 })) }
+        ? { tickets: perTicket.map(t => ({ prize: ticketCash(t), free: ticketFree(t) })) }
         : { total_prize: cashPrize, free_tickets: freeTicketCount }
       await api.admin.results(round.id, winningNumbers, Number(bonus), opts)
       showToast('Results entered — prizes distributed!', 'success')
@@ -825,7 +840,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
         <div className="body">
           <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 16, lineHeight: 1.5 }}>
             {hasTickets
-              ? 'Tap numbers from the ticket to set the 7 winning numbers and bonus, then enter the prize each ticket won below. The total is summed and shared out to participants by their pool stake.'
+              ? 'Tap numbers from the ticket to set the 7 winning numbers and bonus, then tap each ticket’s result below — no win, free ticket, or a cash amount. The total is summed and shared out to participants by their pool stake.'
               : 'Enter the 7 winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.'}
           </p>
 
@@ -910,22 +925,33 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                 Prize per ticket
               </div>
               <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5 }}>
-                Set the cash prize each ticket won — the total is added up automatically. A free
-                ticket counts as a win. Set the winning numbers above to see which lines matched.
+                For each ticket, tap its result — <b>No win</b>, <b>Free ticket</b>, or a cash
+                <b> Amount</b>. Set the winning numbers above to see which lines matched. The round
+                total adds up automatically.
               </p>
 
               <div className="col" style={{ gap: 10, marginBottom: 14 }}>
                 {ticketGroups.map((grp, ti) => {
-                  const wonLine = numbersReady && grp.some(row =>
-                    row.filter(n => mainSet.has(Number(n))).length >= (round?.lottery_type === '649' ? 2 : 3))
-                  const t = perTicket[ti] || { prize: '', free: '' }
-                  const won = wonLine || Number(t.prize) > 0 || Number(t.free) > 0
+                  const t = perTicket[ti] || { outcome: 'none', prize: '', free: '1' }
+                  const best = numbersReady
+                    ? Math.max(0, ...grp.map(row => row.filter(n => mainSet.has(Number(n))).length))
+                    : null
+                  const won = t.outcome !== 'none'
+                  const OPTS = [
+                    { v: 'none', label: 'No win' },
+                    { v: 'free', label: '🎁 Free' },
+                    { v: 'cash', label: '💵 Amount' },
+                  ]
                   return (
                     <div key={ti} className="card" style={{ padding: 10,
                       border: `.5px solid ${won ? 'rgba(245,199,59,.5)' : 'var(--hairline)'}` }}>
                       <div className="row between" style={{ alignItems: 'center', marginBottom: 8 }}>
                         <span style={{ fontSize: 13, fontWeight: 700 }}>Ticket {ti + 1}</span>
-                        {won && <span className="chip chip-gold" style={{ fontSize: 11, padding: '2px 8px' }}>WIN</span>}
+                        {numbersReady && (
+                          <span style={{ fontSize: 12, color: best > 0 ? 'var(--money)' : 'var(--tx-3)', fontWeight: 600 }}>
+                            best {best}/{WINNING_MAIN_COUNT}
+                          </span>
+                        )}
                       </div>
                       <div className="col" style={{ gap: 6, marginBottom: 10 }}>
                         {grp.map((row, ri) => (
@@ -938,28 +964,62 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                           </div>
                         ))}
                       </div>
-                      <div className="row gap-8">
-                        <FieldLabel label="Cash prize" flex>
-                          <input value={t.prize} onChange={e => setTicketField(ti, 'prize', e.target.value)}
-                            placeholder="0.00" type="number" inputMode="decimal" min="0"
-                            className="input mono" />
-                        </FieldLabel>
-                        <FieldLabel label="Free tickets" flex>
-                          <input value={t.free} onChange={e => setTicketField(ti, 'free', e.target.value.replace(/\D/g, ''))}
-                            placeholder="0" type="number" inputMode="numeric" min="0"
-                            className="input mono" />
-                        </FieldLabel>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                        {OPTS.map(o => (
+                          <button key={o.v} type="button" onClick={() => setTicketOutcome(ti, o.v)}
+                            style={{
+                              padding: '9px 4px', borderRadius: 9, cursor: 'pointer',
+                              fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                              border: `.5px solid ${t.outcome === o.v
+                                ? (o.v === 'none' ? 'var(--hairline-2)' : 'var(--gold)') : 'var(--hairline-2)'}`,
+                              background: t.outcome === o.v
+                                ? (o.v === 'none' ? 'var(--bg-3)' : 'rgba(245,199,59,.14)') : 'var(--bg-3)',
+                              color: t.outcome === o.v
+                                ? (o.v === 'none' ? 'var(--tx-1)' : 'var(--gold)') : 'var(--tx-3)',
+                            }}>
+                            {o.label}
+                          </button>
+                        ))}
                       </div>
+
+                      {t.outcome === 'cash' && (
+                        <div className="row gap-8" style={{ marginTop: 10, alignItems: 'center' }}>
+                          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--tx-2)' }}>$</span>
+                          <input value={t.prize} onChange={e => setTicketField(ti, 'prize', e.target.value)}
+                            placeholder="0.00" type="number" inputMode="decimal" min="0" autoFocus
+                            className="input mono" style={{ flex: 1 }} />
+                          <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>CAD</span>
+                        </div>
+                      )}
+                      {t.outcome === 'free' && (
+                        <div className="row between" style={{ marginTop: 10, alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Free tickets won</span>
+                          <div className="row gap-8" style={{ alignItems: 'center' }}>
+                            <button type="button" onClick={() => bumpFree(ti, -1)}
+                              className="btn" style={{ width: 34, height: 34, padding: 0, background: 'var(--surface-2)' }}>−</button>
+                            <span className="mono" style={{ fontSize: 16, fontWeight: 700, minWidth: 20, textAlign: 'center' }}>
+                              {Math.max(1, Number(t.free) || 1)}
+                            </span>
+                            <button type="button" onClick={() => bumpFree(ti, 1)}
+                              className="btn" style={{ width: 34, height: 34, padding: 0, background: 'var(--surface-2)' }}>+</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
               </div>
 
-              <div className="card" style={{ marginBottom: 16 }}>
-                <SummaryRow k="Total cash prize"  v={fmtCAD(perTicketTotal)} mono />
+              <div className="card" style={{ marginBottom: 16,
+                border: (perTicketTotal > 0 || perTicketFree > 0) ? '.5px solid rgba(245,199,59,.4)' : undefined }}>
+                <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.3px',
+                  textTransform: 'uppercase', marginBottom: 4 }}>Round result</div>
+                <SummaryRow k="Winning tickets"    v={`${winningTicketCount} of ${ticketGroups.length}`} mono />
+                <SummaryRow k="Total cash prize"   v={fmtCAD(perTicketTotal)} mono />
                 <SummaryRow k="Total free tickets" v={perTicketFree} mono />
-                <SummaryRow k="Pool total"        v={fmtCAD(round?.pool)} mono />
-                <SummaryRow k="Participants"      v={round?.participants?.length ?? 0} mono />
+                <SummaryRow k="Pool total"         v={fmtCAD(round?.pool)} mono />
+                <SummaryRow k="Participants"       v={round?.participants?.length ?? 0} mono />
               </div>
             </>
           ) : (
