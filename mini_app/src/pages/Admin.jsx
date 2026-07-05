@@ -727,8 +727,21 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
 const WINNING_MAIN_COUNT = 7
 
 // ── Enter Results Sheet ───────────────────────────────────────────────────
+function resultTicketRows(round) {
+  // Prefer the finalized ticket_numbers; fall back to the scanned tickets'
+  // rows (round_tickets) so results still show the fetched numbers even if the
+  // trustee hasn't run the final "Save & notify" upload step yet.
+  const fromNumbers = parseTicketNumbers(round?.ticket_numbers)
+  if (fromNumbers.length) return fromNumbers
+  const saved = Array.isArray(round?.round_tickets) ? round.round_tickets : []
+  return saved
+    .flatMap(t => (Array.isArray(t?.rows) ? t.rows : []))
+    .filter(r => Array.isArray(r) && r.length)
+    .map(r => r.map(String))
+}
+
 function ResultsSheet({ round, onClose, onResults, showToast }) {
-  const ticketRows = parseTicketNumbers(round?.ticket_numbers)
+  const ticketRows = resultTicketRows(round)
   const hasTickets = ticketRows.length > 0
   const ticketGroups = groupRowsIntoTickets(ticketRows, round?.lottery_type)
 
@@ -883,7 +896,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                 Ticket numbers
               </div>
               <TicketNumbersView
-                ticketNumbers={round.ticket_numbers}
+                ticketNumbers={ticketRows}
                 lotteryType={round.lottery_type}
                 selectable
                 selectedMain={mainNums}

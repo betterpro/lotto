@@ -3507,15 +3507,23 @@ async def admin_enter_results(request: Request):
             )
 
     # Per-ticket match + prize breakdown (for participant "see winning tickets" view).
+    # Prefer finalized ticket_numbers; fall back to the scanned tickets' rows so
+    # results work even if the trustee didn't run the final upload step.
     ticket_lines = parse_ticket_numbers(round_.get("ticket_numbers"))
+    if not ticket_lines:
+        ticket_lines = merge_round_ticket_rows(
+            parse_round_tickets(round_.get("round_tickets"), lottery_type)
+        )
     ticket_breakdown = _build_ticket_breakdown(
         ticket_lines, lottery_type, winning_numbers, bonus_number, ticket_inputs
     )
+    # Persist resolved numbers if they weren't finalized, so later views have them.
+    ticket_numbers_json = json.dumps(ticket_lines) if ticket_lines else round_.get("ticket_numbers")
     await db.execute(
         """UPDATE rounds SET status='drawn', winning_numbers=?, bonus_number=?,
-           drawn_at=datetime('now'), free_tickets_won=?, ticket_results=? WHERE id=?""",
+           drawn_at=datetime('now'), free_tickets_won=?, ticket_results=?, ticket_numbers=? WHERE id=?""",
         (json.dumps(winning_numbers), bonus_number, free_tickets,
-         json.dumps(ticket_breakdown), round_["id"]),
+         json.dumps(ticket_breakdown), ticket_numbers_json, round_["id"]),
     )
     await db.commit()
 
