@@ -518,7 +518,7 @@ async def _notify_all(db, text: str, setting_col: str | None = None, group_id: i
 
 async def _notify_round_contribution(db, round_d: dict, contributor: dict):
     """Tell the round's other participants that a member added to the pool."""
-    rid = round_d["id"]
+    rid = round_d.get("group_seq") or round_d["id"]
     name = contributor.get("full_name") or contributor.get("username") or "A member"
     pool = float(round_d.get("pool") or 0)
     text = render_notif("contribution", group_id=round_d.get("group_id"),
@@ -563,14 +563,14 @@ async def _notify_round_closed(db, round_id: int):
     await _notify(
         trustee_id,
         render_notif("round_closed_trustee", group_id=round_d.get("group_id"),
-                     rid=round_id, pool=f"{pool:.0f}",
+                     rid=round_d.get("group_seq") or round_id, pool=f"{pool:.0f}",
                      tickets=tickets, ticket_s="" if tickets == 1 else "s", draw=draw_str),
     )
 
 
 async def _remind_non_contributors(db, round_d: dict, hours: int):
     """Nudge group members who haven't joined this round yet, before entries close."""
-    rid = round_d["id"]
+    rid = round_d.get("group_seq") or round_d["id"]
     gid = round_d.get("group_id")
     if gid is None:
         return
@@ -654,9 +654,10 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
             WHERE s.auto_participate = 1
         """)
     # Determine the round's lottery type for filtering
-    round_cur = await db.execute("SELECT lottery_type FROM rounds WHERE id=?", (round_id,))
+    round_cur = await db.execute("SELECT lottery_type, group_seq FROM rounds WHERE id=?", (round_id,))
     round_row = await round_cur.fetchone()
     round_lottery_type = (round_row["lottery_type"] if round_row else None) or "lotto_max"
+    rseq = (round_row["group_seq"] if round_row else None) or round_id
 
     for u in await cur.fetchall():
         # Skip if user's lottery preference doesn't include this round's type
@@ -681,7 +682,7 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         # Balance check
         if u["credit"] < amount:
             await _notify(u["telegram_id"], render_notif(
-                "auto_join_skipped", group_id=group_id, rid=round_id,
+                "auto_join_skipped", group_id=group_id, rid=rseq,
                 balance=f"{u['credit']:.2f}", needed=f"{amount:.2f}"))
             continue
 
@@ -702,12 +703,12 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
                          (amount, u["telegram_id"]))
         await db.execute(
             "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-            (u["telegram_id"], "participate", -amount, f"Auto-join Round #{round_id}")
+            (u["telegram_id"], "participate", -amount, f"Auto-join Round #{rseq}")
         )
         await db.commit()
         bal = u["credit"] - amount
         await _notify(u["telegram_id"], render_notif(
-            "auto_joined", group_id=group_id, rid=round_id, shares=shares,
+            "auto_joined", group_id=group_id, rid=rseq, shares=shares,
             share_s="" if shares == 1 else "s", amount=f"{amount:.2f}", balance=f"{bal:.2f}"))
 
 
@@ -3153,7 +3154,7 @@ async def admin_upload_ticket(request: Request):
         msg_parts = []
         if notif_ticket:
             msg_parts.append(render_notif("ticket_purchased", group_id=round_.get("group_id"),
-                                          rid=round_["id"], numbers=nums_str))
+                                          rid=round_.get("group_seq") or round_["id"], numbers=nums_str))
         if notif_reminder:
             msg_parts.append(render_notif("draw_reminder", group_id=round_.get("group_id"),
                                           draw=draw_date_str))
@@ -3524,6 +3525,7 @@ async def admin_enter_results(request: Request):
     cur = await db.execute("SELECT * FROM participations WHERE round_id=?", (round_["id"],))
     parts = [dict(p) for p in await cur.fetchall()]
     pool = round_["pool"] or sum(p["amount"] for p in parts)
+    rseq = round_.get("group_seq") or round_["id"]  # per-group display number (#14)
 
     if not winning_numbers:
         await db.close()
@@ -3565,7 +3567,7 @@ async def admin_enter_results(request: Request):
                 trustee_id,
                 "free_ticket",
                 -free_ticket_cash_total,
-                f"Free tickets Round #{round_['id']}",
+                f"Free tickets Round #{rseq}",
                 gid,
             ),
         )
@@ -3591,7 +3593,7 @@ async def admin_enter_results(request: Request):
             )
             await db.execute(
                 "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
-                (p["user_id"], "win", prize, f"Prize Round #{round_['id']}", gid),
+                (p["user_id"], "win", prize, f"Prize Round #{rseq}", gid),
             )
 
     # Per-ticket match + prize breakdown (for participant "see winning tickets" view).
@@ -3632,21 +3634,24 @@ async def admin_enter_results(request: Request):
         prize = prize_by_user.get(p["user_id"], 0)
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
         ft = free_ticket_allocation.get(p["user_id"], 0)
+        pool_s = "s" if free_tickets != 1 else ""
         if round_won:
             prize_line = f"💵 Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n" if prize > 0 else ""
             if ft > 0:
-                ft_line = f"🎟️ Free tickets: <b>{ft}</b> — auto-applied in the next {game_label} round\n"
+                # Show the pool total too when this member's share is only part of it.
+                pool_note = f" (pool won <b>{free_tickets}</b>)" if free_tickets > ft else ""
+                ft_line = (f"🎟️ Free tickets: <b>{ft}</b>{pool_note} — auto-applied in the "
+                           f"next {game_label} round\n")
             elif prize <= 0 and free_tickets > 0:
                 # Pool won free tickets but this member didn't draw one personally.
-                s_ = "s" if free_tickets != 1 else ""
-                ft_line = f"🎟️ Your pool won <b>{free_tickets}</b> free ticket{s_} this round!\n"
+                ft_line = f"🎟️ Your pool won <b>{free_tickets}</b> free ticket{pool_s} this round!\n"
             else:
                 ft_line = ""
             credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""
-            msg = render_notif("you_won", group_id=gid, rid=round_["id"], prize_line=prize_line,
+            msg = render_notif("you_won", group_id=gid, rid=rseq, prize_line=prize_line,
                                ft_line=ft_line, numbers=win_str, credited_line=credited_line)
         else:
-            msg = render_notif("results_no_prize", group_id=gid, rid=round_["id"], numbers=win_str,
+            msg = render_notif("results_no_prize", group_id=gid, rid=rseq, numbers=win_str,
                                stake=f"{p['amount']:.2f}", pct=share_pct)
         await _notify(p["user_id"], msg)
 
