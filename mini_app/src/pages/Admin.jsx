@@ -724,8 +724,6 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   )
 }
 
-const WINNING_MAIN_COUNT = 7
-
 // ── Enter Results Sheet ───────────────────────────────────────────────────
 function resultTicketRows(round) {
   // Prefer the finalized ticket_numbers; fall back to the scanned tickets'
@@ -744,9 +742,12 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const ticketRows = resultTicketRows(round)
   const hasTickets = ticketRows.length > 0
   const ticketGroups = groupRowsIntoTickets(ticketRows, round?.lottery_type)
+  // Winning main-number count varies by game: Lotto Max 7, 6/49 6, Daily Grand 5.
+  const rLayout = ticketLayout(round?.lottery_type)
+  const mainCount = isVariableRowLayout(rLayout) ? rLayout.repeatRow.count : (rLayout.rows[0]?.count ?? 7)
 
   const [mainNums,   setMainNums]   = useState([])
-  const [nums,       setNums]       = useState(() => Array(WINNING_MAIN_COUNT).fill(''))
+  const [nums,       setNums]       = useState(() => Array(mainCount).fill(''))
   const [bonus,      setBonus]      = useState('')
   const [pickBonus,  setPickBonus]  = useState(false)
   const [totalPrize, setTotalPrize] = useState('')
@@ -803,7 +804,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     const c = [...nums]
     c[i] = v.replace(/\D/g, '').slice(0, 2)
     setNums(c)
-    if (v.length >= 2 && i < WINNING_MAIN_COUNT - 1) {
+    if (v.length >= 2 && i < mainCount - 1) {
       document.getElementById(`wn${i + 1}`)?.focus()
     }
   }
@@ -827,7 +828,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
       setBonus('')
       return
     }
-    if (mainNums.length < WINNING_MAIN_COUNT) {
+    if (mainNums.length < mainCount) {
       setMainNums(prev => [...prev, v])
     }
   }
@@ -851,7 +852,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const cashPrize = hasTickets ? perTicketTotal : (totalPrize === '' ? 0 : Number(totalPrize))
   const freeTicketCount = hasTickets ? perTicketFree : (freeTickets === '' ? 0 : Number(freeTickets))
   const numbersReady = hasTickets
-    ? mainNums.length === WINNING_MAIN_COUNT
+    ? mainNums.length === mainCount
     : nums.every(n => n && Number(n) >= 1)
   const valid = numbersReady && bonus && Number(bonus) >= 1 &&
     cashPrize >= 0 && freeTicketCount >= 0 &&
@@ -885,7 +886,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
           <p style={{ fontSize: 14, color: 'var(--tx-2)', marginBottom: 12, lineHeight: 1.5 }}>
             {hasTickets
               ? 'Auto-calculate from the official results, or set the winning numbers and each ticket’s result yourself. Review before you accept — the total is shared out to participants by their pool stake.'
-              : 'Enter the 7 winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.'}
+              : `Enter the ${mainCount} winning numbers and bonus. Prize allocation is computed automatically and distributed to participants proportionally.`}
           </p>
 
           {hasTickets && (
@@ -921,7 +922,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
           {hasTickets ? (
             <>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
-                {Array.from({ length: WINNING_MAIN_COUNT }, (_, i) => {
+                {Array.from({ length: mainCount }, (_, i) => {
                   const n = mainNums[i]
                   return n != null ? (
                     <button key={i} type="button" onClick={() => pickFromTicket(n)}
@@ -963,7 +964,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
             </>
           ) : (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${WINNING_MAIN_COUNT}, 1fr)`, gap: 6, marginBottom: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${mainCount}, 1fr)`, gap: 6, marginBottom: 12 }}>
                 {nums.map((v, i) => (
                   <input key={i} id={`wn${i}`} value={v} placeholder="—" maxLength={2}
                     inputMode="numeric"
@@ -1018,7 +1019,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
                         <span style={{ fontSize: 13, fontWeight: 700 }}>Ticket {ti + 1}</span>
                         {numbersReady && (
                           <span style={{ fontSize: 12, color: best > 0 ? 'var(--money)' : 'var(--tx-3)', fontWeight: 600 }}>
-                            best {best}/{WINNING_MAIN_COUNT}
+                            best {best}/{mainCount}
                           </span>
                         )}
                       </div>
