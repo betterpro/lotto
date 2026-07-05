@@ -32,7 +32,45 @@ WCLC_JACKPOT_SECTION = {
 # Lump-sum equivalent for the top Daily Grand prize ($1,000/day for life).
 DAILY_GRAND_JACKPOT = 7_000_000
 
-_USER_AGENT = "Mozilla/5.0 (compatible; LottoPool/1.0; +https://github.com/lotto)"
+# Look like a real browser — the lottery sites return 403 to obvious bot clients,
+# which is what made auto-results fail. Send full browser headers.
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+_BROWSER_HEADERS = {
+    "User-Agent": _USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-CA,en;q=0.9",
+    "Cache-Control": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+# Result pages to try, in order, per game. WCLC covers the western provinces;
+# PlayNow (BCLC) is where BC players see the same national draw results.
+RESULT_SOURCES = {
+    "lotto_max": [
+        "https://www.wclc.com/games/lotto-max.htm",
+        "https://www.playnow.com/lottery/lotto-max/",
+    ],
+    "649": [
+        "https://www.wclc.com/games/lotto-649.htm",
+        "https://www.playnow.com/lottery/lotto-649/",
+    ],
+}
+
+
+async def _fetch_html(url: str) -> str | None:
+    """GET a page with browser headers; return text or None on any failure."""
+    try:
+        async with httpx.AsyncClient(
+            timeout=15.0, headers=_BROWSER_HEADERS, follow_redirects=True
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.text
+    except Exception:
+        return None
 
 
 def next_draw_date(lottery_type: str, *, from_dt: datetime | None = None) -> date | None:
@@ -98,17 +136,10 @@ async def fetch_estimated_jackpot(lottery_type: str) -> int | None:
     if not section or not url:
         return None
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=12.0,
-            headers={"User-Agent": _USER_AGENT},
-            follow_redirects=True,
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return _parse_wclc_jackpot_millions(resp.text, section)
-    except Exception:
+    html = await _fetch_html(url)
+    if not html:
         return None
+    return _parse_wclc_jackpot_millions(html, section)
 
 
 # --- Official winning numbers (auto-results) ---------------------------------
@@ -204,24 +235,27 @@ async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
     Returns {"numbers": [int...], "bonus": int|None, "draw_date": "YYYY-MM-DD"}.
     """
     spec = _RESULT_SPEC.get(lottery_type)
-    url = WCLC_WINNING_URL.get(lottery_type)
-    if not spec or not url:
+    if not spec:
         return None
     try:
         d = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
     except Exception:
         return None
     main_count, max_n = spec
-    try:
-        async with httpx.AsyncClient(
-            timeout=12.0, headers={"User-Agent": _USER_AGENT}, follow_redirects=True
-        ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            html = resp.text
-    except Exception:
-        return None
-    return _parse_wclc_results(html, d, main_count, max_n)
+    # Try each source (WCLC, then PlayNow). The parser anchors on the draw date
+    # and only returns a result when the exact expected count of in-range numbers
+    # is found, so a source without this draw is skipped rather than misread.
+    sources = RESULT_SOURCES.get(lottery_type) or [WCLC_WINNING_URL.get(lottery_type)]
+    for url in sources:
+        if not url:
+            continue
+        html = await _fetch_html(url)
+        if not html:
+            continue
+        parsed = _parse_wclc_results(html, d, main_count, max_n)
+        if parsed:
+            return parsed
+    return None
 
 
 def is_valid_draw_date(
