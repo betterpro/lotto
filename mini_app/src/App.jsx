@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 're
 import { api } from './api.js'
 import BottomNav       from './components/BottomNav.jsx'
 import { LOGO_SRC, HOME_LOGO_SRC } from './brand.js'
+import { APP_VERSION } from './version.js'
 import { initAuthSession } from './authSession.js'
 import {
   INVITE_SLUG_KEY,
@@ -44,6 +45,7 @@ function TGHeader({ page }) {
         <span>Play together,</span>
         <span>dream bigger</span>
       </div>
+      <span className="tg-header-version">v{APP_VERSION}</span>
     </header>
   )
 }

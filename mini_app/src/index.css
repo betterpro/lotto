@@ -136,6 +136,11 @@ html, body {
 .tg-header-tagline span {
   font-size: 14px; font-weight: 700; line-height: 1.25; color: var(--tx-1);
 }
+.tg-header-version {
+  margin-left: auto; align-self: flex-start; margin-top: 4px;
+  font-family: var(--mono); font-size: 9px; line-height: 1;
+  color: var(--tx-3); letter-spacing: .3px; opacity: .7;
+}
 
 /* ── Home ────────────────────────────────────────────────────────────────── */
 .home-trustee {
