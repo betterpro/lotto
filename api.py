@@ -1873,8 +1873,10 @@ async def _build_round_detail(db, round_, user_id: int) -> dict:
     rd["my_shares"] = (my.get("shares") if my else None) or (round(my["amount"] / (rd.get("price_per_share") or 5)) if my else None)
     rd["my_prize"]  = my["prize"]  if my else None
     rd["my_free_tickets"] = (my.get("free_tickets_awarded") or 0) if my else None
+    rd["my_free_value"] = round(my.get("free_ticket_value") or 0, 2) if my else None
     rd["my_pct"]    = my["pct"]    if my else None
     rd["my_won"]    = my["won"]    if my else None
+    rd["free_stake_total"] = round(sum(p.get("free_ticket_value") or 0 for p in parts), 2)
     rd["pool_target"] = ((rd.get("tickets_target") or 0) * (rd.get("price_per_share") or 5)) or None
     rd["tickets_required"] = await _round_tickets_required(db, rd)
     saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
@@ -2010,7 +2012,9 @@ async def api_rounds(request: Request):
     cur = await db.execute("""
         SELECT r.*,
           p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
-          (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count
+          p.free_ticket_value as my_free_value,
+          (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count,
+          (SELECT COALESCE(SUM(free_ticket_value),0) FROM participations WHERE round_id=r.id) as free_stake_total
         FROM rounds r
         LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
         WHERE r.group_id = ?

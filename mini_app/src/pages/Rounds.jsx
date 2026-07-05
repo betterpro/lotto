@@ -260,6 +260,11 @@ function RoundCard({ round }) {
                 ? `${fmtDollarInt(round.my_stake)} / ${fmtDollarInt(round.pool)}`
                 : '—'}
             </span>
+            {round.my_free_value > 0 && (
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--money)' }}>
+                🎁 ${Number(round.my_free_value).toFixed(2)} free
+              </span>
+            )}
           </div>
           <div className="col gap-4">
             <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>

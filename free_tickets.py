@@ -114,18 +114,19 @@ async def apply_pending_free_tickets(
             new_shares = (existing["shares"] or 0) + cnt
             new_free = (existing.get("free_ticket_shares") or 0) + cnt
             new_amount = round((existing["amount"] or 0) + value, 2)
+            new_value = round((existing.get("free_ticket_value") or 0) + value, 2)
             await db.execute(
                 """UPDATE participations
-                   SET shares = ?, free_ticket_shares = ?, amount = ?
+                   SET shares = ?, free_ticket_shares = ?, amount = ?, free_ticket_value = ?
                    WHERE round_id = ? AND user_id = ?""",
-                (new_shares, new_free, new_amount, round_id, user_id),
+                (new_shares, new_free, new_amount, new_value, round_id, user_id),
             )
         else:
             await db.execute(
                 """INSERT INTO participations
-                   (round_id, user_id, amount, shares, free_ticket_shares)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (round_id, user_id, round(value, 2), cnt, cnt),
+                   (round_id, user_id, amount, shares, free_ticket_shares, free_ticket_value)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (round_id, user_id, round(value, 2), cnt, cnt, round(value, 2)),
             )
         applied_value += value
 

@@ -159,6 +159,7 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE rounds ADD COLUMN IF NOT EXISTS ticket_results TEXT",
     "ALTER TABLE participations ADD COLUMN IF NOT EXISTS free_ticket_shares INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE participations ADD COLUMN IF NOT EXISTS free_tickets_awarded INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE participations ADD COLUMN IF NOT EXISTS free_ticket_value FLOAT8 NOT NULL DEFAULT 0",
     "UPDATE groups SET free_ticket_mode = 'next_round' WHERE free_ticket_mode IS NULL",
     "UPDATE rounds SET free_tickets_won = 0 WHERE free_tickets_won IS NULL",
     "UPDATE rounds SET free_tickets_consumed = 0 WHERE free_tickets_consumed IS NULL",
