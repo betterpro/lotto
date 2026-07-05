@@ -67,6 +67,7 @@ from notif_templates import NOTIF_TEMPLATES, describe_vars, render_template
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
+    distribute_value_shares,
     free_ticket_cash_value,
     normalize_free_ticket_mode,
 )
@@ -3542,7 +3543,10 @@ async def admin_enter_results(request: Request):
     mode = normalize_free_ticket_mode(group.get("free_ticket_mode"))
     lottery_type = round_.get("lottery_type") or "lotto_max"
     free_ticket_allocation: dict[int, int] = {}
+    free_value_by_user: dict[int, float] = {}
     free_ticket_cash_total = 0.0
+    # Total dollar value of the free tickets won (e.g. 4 × $3 = $12 for 6/49).
+    free_value_total = free_ticket_cash_value(lottery_type, free_tickets) if free_tickets > 0 else 0.0
 
     if free_tickets > 0 and mode == "cash_credit":
         free_ticket_cash_total = free_ticket_cash_value(lottery_type, free_tickets)
@@ -3572,7 +3576,10 @@ async def admin_enter_results(request: Request):
             ),
         )
     elif free_tickets > 0:
+        # Next-round mode: every participant gets their proportional share of the
+        # free-ticket value, auto-applied as free stake when the next round opens.
         free_ticket_allocation = distribute_integer_shares(free_tickets, parts, pool)
+        free_value_by_user = distribute_value_shares(free_value_total, parts, pool)
 
     prize_by_user: dict[int, float] = {}
     for p in parts:
@@ -3633,18 +3640,15 @@ async def admin_enter_results(request: Request):
             continue
         prize = prize_by_user.get(p["user_id"], 0)
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
-        ft = free_ticket_allocation.get(p["user_id"], 0)
+        fv = free_value_by_user.get(p["user_id"], 0)  # next-round free stake ($), proportional
         pool_s = "s" if free_tickets != 1 else ""
         if round_won:
             prize_line = f"💵 Cash prize: <b>${prize:.2f}</b> (your {share_pct}% share)\n" if prize > 0 else ""
-            if ft > 0:
-                # Show the pool total too when this member's share is only part of it.
-                pool_note = f" (pool won <b>{free_tickets}</b>)" if free_tickets > ft else ""
-                ft_line = (f"🎟️ Free tickets: <b>{ft}</b>{pool_note} — auto-applied in the "
+            if fv > 0:
+                # Next-round mode: proportional free stake auto-applied next round.
+                ft_line = (f"🎟️ Free stake: <b>${fv:.2f}</b> — your {share_pct}% of {free_tickets} free "
+                           f"ticket{pool_s} (pool <b>${free_value_total:.2f}</b>), auto-applied to the "
                            f"next {game_label} round\n")
-            elif prize <= 0 and free_tickets > 0:
-                # Pool won free tickets but this member didn't draw one personally.
-                ft_line = f"🎟️ Your pool won <b>{free_tickets}</b> free ticket{pool_s} this round!\n"
             else:
                 ft_line = ""
             credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""

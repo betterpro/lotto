@@ -30,6 +30,18 @@ def distribute_integer_shares(total: int, parts: list[dict], pool: float) -> dic
     return out
 
 
+def distribute_value_shares(total_value: float, parts: list[dict], pool: float) -> dict[int, float]:
+    """Split a dollar *total_value* across participations proportionally by stake.
+
+    Unlike distribute_integer_shares (whole units to the biggest holders), this
+    gives every participant their exact percentage — a 10% holder gets 10% of
+    the value — so free-ticket winnings track each member's pool share.
+    """
+    if total_value <= 0 or not parts or pool <= 0:
+        return {}
+    return {p["user_id"]: round((p["amount"] / pool) * total_value, 2) for p in parts}
+
+
 def free_ticket_cash_value(lottery_type: str | None, free_tickets: int) -> float:
     if free_tickets <= 0:
         return 0.0
@@ -78,22 +90,30 @@ async def apply_pending_free_tickets(
     if not parts or pool <= 0:
         return 0
 
-    allocation = distribute_integer_shares(remaining, parts, pool)
-    applied = 0
+    # Value is shared by every participant in proportion to their stake (a 10%
+    # holder gets 10% of the free-ticket value). The whole-ticket count is still
+    # distributed as integers so the trustee buys the right number of tickets.
+    src_type = source.get("lottery_type") or lottery_type
+    total_value = free_ticket_cash_value(src_type, remaining)
+    value_alloc = distribute_value_shares(total_value, parts, pool)
+    count_alloc = distribute_integer_shares(remaining, parts, pool)
 
-    for user_id, shares in allocation.items():
-        if shares <= 0:
+    applied_value = 0.0
+    for p in parts:
+        user_id = p["user_id"]
+        value = value_alloc.get(user_id, 0.0)
+        cnt = count_alloc.get(user_id, 0)
+        if value <= 0 and cnt <= 0:
             continue
-        imputed_amount = round(shares * price_per_share, 2)
         cur = await db.execute(
             "SELECT * FROM participations WHERE round_id = ? AND user_id = ?",
             (round_id, user_id),
         )
         existing = await cur.fetchone()
         if existing:
-            new_shares = (existing["shares"] or 0) + shares
-            new_free = (existing.get("free_ticket_shares") or 0) + shares
-            new_amount = (existing["amount"] or 0) + imputed_amount
+            new_shares = (existing["shares"] or 0) + cnt
+            new_free = (existing.get("free_ticket_shares") or 0) + cnt
+            new_amount = round((existing["amount"] or 0) + value, 2)
             await db.execute(
                 """UPDATE participations
                    SET shares = ?, free_ticket_shares = ?, amount = ?
@@ -105,19 +125,18 @@ async def apply_pending_free_tickets(
                 """INSERT INTO participations
                    (round_id, user_id, amount, shares, free_ticket_shares)
                    VALUES (?, ?, ?, ?, ?)""",
-                (round_id, user_id, imputed_amount, shares, shares),
+                (round_id, user_id, round(value, 2), cnt, cnt),
             )
-        applied += shares
+        applied_value += value
 
-    if applied > 0:
-        imputed_pool = round(applied * price_per_share, 2)
+    if applied_value > 0:
         await db.execute(
             "UPDATE rounds SET pool = pool + ? WHERE id = ?",
-            (imputed_pool, round_id),
+            (round(applied_value, 2), round_id),
         )
-        await db.execute(
-            "UPDATE rounds SET free_tickets_consumed = free_tickets_consumed + ? WHERE id = ?",
-            (applied, source["id"]),
-        )
-
-    return applied
+    # All pending free tickets are distributed in one pass.
+    await db.execute(
+        "UPDATE rounds SET free_tickets_consumed = free_tickets_won WHERE id = ?",
+        (source["id"],),
+    )
+    return remaining
