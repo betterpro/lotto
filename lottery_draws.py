@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import re
+import time as _time
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
 
+import config
 from lottery_types import valid_lottery_type
 
 PT = ZoneInfo("America/Vancouver")
@@ -229,10 +232,152 @@ def _parse_wclc_results(html: str, draw: date, main_count: int, max_n: int) -> d
     return {"numbers": main, "bonus": bonus, "draw_date": draw.isoformat()}
 
 
+# --- Apify actor results source (preferred when configured) ------------------
+# The lottery sites block server requests (403); an Apify actor runs a real
+# browser and returns structured draws. Configure APIFY_TOKEN (+ optional actor
+# and input JSON). Field names vary between actors, so parsing is flexible.
+
+_GAME_ALIASES = {
+    "lotto_max": ["lotto max", "lottomax", "lotto-max", "maxmillions", "max millions"],
+    "649": ["6/49", "649", "6-49", "lotto 6/49", "lotto649", "lotto 649"],
+    "daily_grand": ["daily grand", "dailygrand", "daily-grand", "grand"],
+}
+_GAME_KEYS = ("game", "lottery", "name", "title", "drawName", "product", "gameName", "type")
+_DATE_KEYS = ("draw_date", "drawDate", "date", "drawdate", "draw_date_iso", "drawTime")
+_NUM_KEYS = ("numbers", "winningNumbers", "winning_numbers", "mainNumbers",
+             "main_numbers", "results", "balls", "numbersDrawn")
+_BONUS_KEYS = ("bonus", "bonusNumber", "bonus_number", "bonusBall", "bonus_ball")
+
+# Cache the actor's dataset for a short window — a run returns many draws and
+# actor runs cost time/credits, so reuse them across lookups.
+_APIFY_CACHE_TTL = 900  # 15 min
+_apify_cache: dict = {"at": 0.0, "items": None}
+
+
+def _to_iso_date(val) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):  # epoch seconds or ms
+        try:
+            secs = val / 1000 if val > 1e12 else val
+            return datetime.utcfromtimestamp(secs).date().isoformat()
+        except Exception:
+            return None
+    s = str(val).strip()
+    m = re.search(r"(20\d{2})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            return None
+    for mon_i, mon in enumerate(_MONTHS, start=1):
+        for token in (mon, mon[:3]):
+            m = re.search(rf"{token}\.?\s+(\d{{1,2}}),?\s+(20\d{{2}})", s, re.IGNORECASE)
+            if m:
+                try:
+                    return date(int(m.group(2)), mon_i, int(m.group(1))).isoformat()
+                except ValueError:
+                    return None
+    return None
+
+
+def _first(item: dict, keys) -> object:
+    for k in keys:
+        if k in item and item[k] not in (None, "", []):
+            return item[k]
+    return None
+
+
+def _extract_numbers(val, max_n: int) -> list[int]:
+    raw = val
+    if isinstance(raw, (int, float)):
+        raw = [raw]
+    elif isinstance(raw, str):
+        raw = re.findall(r"\d{1,2}", raw)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for n in raw:
+        try:
+            v = int(n)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= v <= max_n:
+            out.append(v)
+    return out
+
+
+def _match_apify_item(item, lottery_type, draw_iso, main_count, max_n) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    game_text = " ".join(str(item.get(k, "")) for k in _GAME_KEYS).lower()
+    aliases = _GAME_ALIASES.get(lottery_type, [])
+    if aliases and not any(a in game_text for a in aliases):
+        return None
+    if _to_iso_date(_first(item, _DATE_KEYS)) != draw_iso:
+        return None
+    nums = _extract_numbers(_first(item, _NUM_KEYS), max_n)
+    main = []
+    for n in nums:
+        if n not in main:
+            main.append(n)
+        if len(main) == main_count:
+            break
+    if len(main) != main_count:
+        return None
+    bonus_val = _first(item, _BONUS_KEYS)
+    bonus = None
+    if bonus_val is not None:
+        b = _extract_numbers(bonus_val, max_n)
+        bonus = b[0] if b else None
+    if bonus is None:
+        bonus = next((n for n in nums if n not in main), None)
+    return {"numbers": main, "bonus": bonus, "draw_date": draw_iso}
+
+
+async def _apify_draw_items() -> list | None:
+    """Run the configured Apify lottery actor and return its dataset items."""
+    token = config.APIFY_TOKEN
+    if not token:
+        return None
+    now = _time.monotonic()
+    if _apify_cache["items"] is not None and (now - _apify_cache["at"]) < _APIFY_CACHE_TTL:
+        return _apify_cache["items"]
+    actor = (config.APIFY_LOTTERY_ACTOR or "eternal_ngultrum~lottery-draws").replace("/", "~")
+    try:
+        inp = json.loads(config.APIFY_LOTTERY_INPUT) if config.APIFY_LOTTERY_INPUT.strip() else {}
+    except (ValueError, TypeError):
+        inp = {}
+    url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items?token={token}"
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(url, json=inp)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return None
+    items = data if isinstance(data, list) else None
+    _apify_cache["items"] = items
+    _apify_cache["at"] = now
+    return items
+
+
+async def fetch_draw_results_apify(lottery_type: str, draw_iso: str, main_count: int, max_n: int) -> dict | None:
+    items = await _apify_draw_items()
+    if not items:
+        return None
+    for item in items:
+        parsed = _match_apify_item(item, lottery_type, draw_iso, main_count, max_n)
+        if parsed:
+            return parsed
+    return None
+
+
 async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
     """Fetch official winning numbers for a past draw, or None if unavailable.
 
     Returns {"numbers": [int...], "bonus": int|None, "draw_date": "YYYY-MM-DD"}.
+    Prefers the Apify actor (when configured), then falls back to WCLC / PlayNow.
     """
     spec = _RESULT_SPEC.get(lottery_type)
     if not spec:
@@ -242,7 +387,13 @@ async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
     except Exception:
         return None
     main_count, max_n = spec
-    # Try each source (WCLC, then PlayNow). The parser anchors on the draw date
+
+    # 1) Apify actor (structured, bypasses the sites' bot blocking).
+    apify = await fetch_draw_results_apify(lottery_type, d.isoformat(), main_count, max_n)
+    if apify:
+        return apify
+
+    # 2) Direct scrape of WCLC, then PlayNow. The parser anchors on the draw date
     # and only returns a result when the exact expected count of in-range numbers
     # is found, so a source without this draw is skipped rather than misread.
     sources = RESULT_SOURCES.get(lottery_type) or [WCLC_WINNING_URL.get(lottery_type)]

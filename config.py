@@ -95,6 +95,15 @@ RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
 
 RESEND_FROM: str = os.getenv("RESEND_FROM", "")
 
+# Apify actor for official lottery draw results (preferred results source when set).
+# APIFY_LOTTERY_INPUT is the JSON input the actor expects (from its input schema);
+# leave blank to run the actor with no input.
+APIFY_TOKEN: str = os.getenv("APIFY_TOKEN", "")
+
+APIFY_LOTTERY_ACTOR: str = os.getenv("APIFY_LOTTERY_ACTOR", "eternal_ngultrum~lottery-draws")
+
+APIFY_LOTTERY_INPUT: str = os.getenv("APIFY_LOTTERY_INPUT", "")
+
 # Auto-fetch official winning numbers and notify match results (best-effort WCLC
 # scrape). Set AUTO_RESULTS_ENABLED=0 to disable if the scrape misbehaves.
 AUTO_RESULTS_ENABLED: bool = os.getenv("AUTO_RESULTS_ENABLED", "1") == "1"

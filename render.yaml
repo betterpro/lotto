@@ -37,6 +37,12 @@ services:
         sync: false
       - key: RESEND_FROM
         sync: false
+      - key: APIFY_TOKEN
+        sync: false
+      - key: APIFY_LOTTERY_ACTOR
+        sync: false
+      - key: APIFY_LOTTERY_INPUT
+        sync: false
       - key: IMAP_HOST
         sync: false
       - key: IMAP_USER
