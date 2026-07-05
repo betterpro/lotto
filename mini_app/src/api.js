@@ -166,6 +166,7 @@ export const api = {
   rounds: {
     list: ()     => req('GET',  '/api/rounds'),
     open: ()     => req('GET',  '/api/rounds/open'),
+    participants: (round_id) => req('GET', `/api/rounds/${round_id}/participants`),
   },
   participate:  (amount, round_id) => req('POST', '/api/participate', { amount, round_id }),
   transactions: ()             => req('GET',  '/api/transactions'),

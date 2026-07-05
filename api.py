@@ -2055,6 +2055,48 @@ async def api_rounds(request: Request):
     return {"rounds": rounds}
 
 
+@app.get("/api/rounds/{round_id}/participants")
+async def api_round_participants(request: Request, round_id: int):
+    """Anonymized pool breakdown for a round — each participant's stake, free
+    stake and pool share (%), with the current user shown as 'You'. Names are
+    withheld for privacy."""
+    user, db = await _auth(request)
+    cur = await db.execute("SELECT group_id, group_seq, id FROM rounds WHERE id=?", (round_id,))
+    r = await cur.fetchone()
+    if not r:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    gid = r["group_id"]
+    if not await user_in_group(db, user["telegram_id"], gid):
+        await db.close()
+        raise HTTPException(403, "Join this group to view the pool")
+    cur = await db.execute(
+        """SELECT user_id, amount, COALESCE(free_ticket_value,0) AS free_value
+           FROM participations WHERE round_id=? ORDER BY amount DESC, user_id ASC""",
+        (round_id,),
+    )
+    rows = [dict(p) for p in await cur.fetchall()]
+    await db.close()
+    pool = round(sum(float(p["amount"] or 0) for p in rows), 2)
+    out = []
+    for i, p in enumerate(rows, start=1):
+        is_me = p["user_id"] == user["telegram_id"]
+        amt = round(float(p["amount"] or 0), 2)
+        out.append({
+            "label": "You" if is_me else f"Member {i}",
+            "amount": amt,
+            "free_value": round(float(p["free_value"] or 0), 2),
+            "pct": round(amt / pool * 100, 1) if pool else 0,
+            "is_me": is_me,
+        })
+    return {
+        "round_seq": r["group_seq"] or r["id"],
+        "participants": out,
+        "count": len(out),
+        "pool": pool,
+    }
+
+
 # ---------------------------------------------------------------------------
 # /api/participate
 # ---------------------------------------------------------------------------

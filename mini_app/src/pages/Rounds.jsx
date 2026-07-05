@@ -188,6 +188,70 @@ function fmtDollarInt(n) {
   return '$' + Math.round(Number(n || 0)).toLocaleString('en-CA')
 }
 
+// Show cents when the amount isn't a whole dollar (so $4.50 doesn't read as $5).
+function fmtMoney(n) {
+  const v = Number(n || 0)
+  return Number.isInteger(v) ? '$' + v.toLocaleString('en-CA') : fmtCAD(v)
+}
+
+function ParticipantsModal({ round, onClose }) {
+  const [data, setData] = useState(null)
+  const [err, setErr] = useState(null)
+  useEffect(() => {
+    api.rounds.participants(round.id).then(setData).catch(e => setErr(e.message || 'Could not load'))
+  }, [round.id])
+
+  return (
+    <div className="sheet-overlay" onClick={onClose}
+      style={{ alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: 440, maxHeight: '90vh', overflowY: 'auto',
+          borderRadius: 16, background: 'var(--surface)' }}>
+        <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between',
+          alignItems: 'center', position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 1,
+          borderBottom: '.5px solid var(--hairline)' }}>
+          <span style={{ fontWeight: 700, fontSize: 16 }}>
+            Pool breakdown · Round #{round.group_seq ?? round.id}
+          </span>
+          <button onClick={onClose} style={{ background: 'var(--bg-3)', border: 'none', borderRadius: '50%',
+            width: 28, height: 28, cursor: 'pointer', color: 'var(--tx-2)', fontSize: 15 }}>✕</button>
+        </div>
+
+        {err ? (
+          <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--tx-2)', fontSize: 14 }}>{err}</div>
+        ) : !data ? (
+          <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
+        ) : (
+          <div className="col" style={{ gap: 0, padding: '8px 16px 16px' }}>
+            <div className="row between" style={{ padding: '10px 0', borderBottom: '.5px solid var(--hairline)' }}>
+              <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>{data.count} participant{data.count === 1 ? '' : 's'}</span>
+              <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>Total pool <b style={{ color: 'var(--tx-1)' }}>{fmtMoney(data.pool)}</b></span>
+            </div>
+            {(data.participants || []).map((p, i) => (
+              <div key={i} className="row between" style={{ alignItems: 'center', padding: '11px 0',
+                borderBottom: '.5px solid var(--hairline)' }}>
+                <div className="col" style={{ gap: 2 }}>
+                  <span style={{ fontSize: 14, fontWeight: p.is_me ? 700 : 500,
+                    color: p.is_me ? 'var(--tg)' : 'var(--tx-1)' }}>{p.label}</span>
+                  {p.free_value > 0 && (
+                    <span style={{ fontSize: 11.5, color: 'var(--money)', fontWeight: 600 }}>
+                      🎁 {fmtCAD(p.free_value)} free
+                    </span>
+                  )}
+                </div>
+                <div className="col" style={{ alignItems: 'flex-end', gap: 2 }}>
+                  <span className="mono" style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(p.amount)}</span>
+                  <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{p.pct}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function fmtBig(n) {
   if (!n) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(0) + 'M'
@@ -213,6 +277,7 @@ function playerCount(round) {
 function RoundCard({ round }) {
   const [showPhoto, setShowPhoto] = useState(false)
   const [showNumbers, setShowNumbers] = useState(false)
+  const [showPool, setShowPool] = useState(false)
   const hasNumbers = (round.tickets_breakdown || []).length > 0
   const ds = round.display_status || round.status
   const isRally    = ['RALLY','OPEN','live','open'].includes(ds)
@@ -256,23 +321,20 @@ function RoundCard({ round }) {
           <div className="col gap-4">
             <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR STAKE</span>
             <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
-              {round.my_stake
-                ? `${fmtDollarInt(round.my_stake)} / ${fmtDollarInt(round.pool)}`
-                : '—'}
+              {round.my_stake ? fmtMoney(round.my_stake) : '—'}
             </span>
             {round.my_free_value > 0 && (
               <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--money)' }}>
-                🎁 ${Number(round.my_free_value).toFixed(2)} free
+                🎁 {fmtCAD(round.my_free_value)} free
               </span>
             )}
           </div>
           <div className="col gap-4">
-            <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARES</span>
+            <span style={{ fontSize: 12, color: 'var(--tx-3)', letterSpacing: '.3px' }}>YOUR SHARE</span>
             <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
-              {round.my_shares != null
-                ? `${round.my_shares}/${playerCount(round)}`
-                : '—'}
+              {round.my_pct != null ? `${round.my_pct}%` : '—'}
             </span>
+            <span style={{ fontSize: 11.5, color: 'var(--tx-3)' }}>of {fmtMoney(round.pool)}</span>
           </div>
         </div>
 
@@ -281,7 +343,7 @@ function RoundCard({ round }) {
             {isWon ? (
               <>
                 <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: 'var(--money)' }}>
-                  +{fmtDollarInt(round.my_prize)}
+                  +{fmtMoney(round.my_prize)}
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--money)' }}>Won</span>
               </>
@@ -310,10 +372,20 @@ function RoundCard({ round }) {
         </div>
       )}
 
-      {(round.has_ticket_image || hasNumbers) && (
+      {(round.has_ticket_image || hasNumbers || playerCount(round) > 0) && (
         <>
           <div style={{ height: '.5px', background: 'var(--hairline)', margin: '10px 0 8px' }} />
           <div className="row gap-16" style={{ flexWrap: 'wrap' }}>
+            {playerCount(round) > 0 && (
+              <button onClick={() => setShowPool(true)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  color: 'var(--tg)', fontSize: 13, fontWeight: 600,
+                }}>
+                👥 Pool breakdown ({playerCount(round)})
+              </button>
+            )}
             {hasNumbers && (
               <button onClick={() => setShowNumbers(true)}
                 style={{
@@ -340,6 +412,7 @@ function RoundCard({ round }) {
 
       {showPhoto && <TicketPhotoModal round={round} onClose={() => setShowPhoto(false)} />}
       {showNumbers && <TicketNumbersModal round={round} onClose={() => setShowNumbers(false)} />}
+      {showPool && <ParticipantsModal round={round} onClose={() => setShowPool(false)} />}
     </div>
   )
 }
