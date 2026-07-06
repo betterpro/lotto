@@ -202,6 +202,22 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_account_id TEXT",
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS stripe_charges_enabled INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS group_id BIGINT",
+    "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS round_id BIGINT",
+    # One-time backfill: rewrite round numbers in activity notes to the per-group
+    # sequence (#14) instead of the global row id (#16). Guarded by round_id IS NULL
+    # (new rows set round_id, so they're never touched) and wrapped so a failure
+    # can't break startup. Only notes mentioning a round are considered.
+    """DO $$ BEGIN
+        UPDATE transactions t
+           SET note = regexp_replace(t.note, '#[0-9]+', '#' || r.group_seq),
+               round_id = r.id
+          FROM rounds r
+         WHERE t.round_id IS NULL
+           AND t.note ~* 'round #[0-9]+'
+           AND r.id = CAST((regexp_match(t.note, '#([0-9]+)'))[1] AS BIGINT)
+           AND (t.group_id = r.group_id OR t.group_id IS NULL)
+           AND r.group_seq IS NOT NULL;
+      EXCEPTION WHEN OTHERS THEN NULL; END $$;""",
     # Platform-billed group subscription ($6.99/mo, collected on the platform's
     # own Stripe account). When the trustee cancels, the group status becomes
     # 'locked'. status='locked' is a system lock (distinct from admin 'suspended').

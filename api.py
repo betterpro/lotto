@@ -703,8 +703,8 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?",
                          (amount, u["telegram_id"]))
         await db.execute(
-            "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-            (u["telegram_id"], "participate", -amount, f"Auto-join Round #{rseq}")
+            "INSERT INTO transactions (user_id, type, amount, note, round_id) VALUES (?,?,?,?,?)",
+            (u["telegram_id"], "participate", -amount, f"Auto-join Round #{rseq}", round_id)
         )
         await db.commit()
         bal = u["credit"] - amount
@@ -2159,8 +2159,9 @@ async def api_participate(request: Request):
     await db.execute("UPDATE rounds SET pool=pool+? WHERE id=?", (amount, round_["id"]))
     await db.execute("UPDATE users SET credit=credit-? WHERE telegram_id=?", (amount, user["telegram_id"]))
     await db.execute(
-        "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
-        (user["telegram_id"], "participate", -amount, f"Round #{round_['id']}", gid),
+        "INSERT INTO transactions (user_id, type, amount, note, group_id, round_id) VALUES (?,?,?,?,?,?)",
+        (user["telegram_id"], "participate", -amount,
+         f"Round #{round_.get('group_seq') or round_['id']}", gid, round_["id"]),
     )
     await db.commit()
     cur = await db.execute("SELECT pool FROM rounds WHERE id=?", (round_["id"],))
@@ -2886,11 +2887,10 @@ async def admin_resync_free_tickets(request: Request):
     if not source:
         await db.close()
         raise HTTPException(400, "No prior drawn round with free tickets to apply")
-    # Clear any prior free-ticket activity for this draw so re-syncing doesn't duplicate it.
-    src_seq = source["group_seq"] or source["id"]
+    # Clear any prior free-ticket activity applied to this round so re-syncing
+    # doesn't duplicate it (free_win rows carry the round they were applied to).
     await db.execute(
-        "DELETE FROM transactions WHERE type='free_win' AND group_id=? AND note=?",
-        (gid, f"Free tickets — Round #{src_seq}"),
+        "DELETE FROM transactions WHERE type='free_win' AND round_id=?", (target_id,)
     )
     await db.execute("UPDATE rounds SET free_tickets_consumed=0 WHERE id=?", (source["id"],))
     await db.commit()
@@ -3692,13 +3692,14 @@ async def admin_enter_results(request: Request):
             (free_ticket_cash_total, trustee_id),
         )
         await db.execute(
-            "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+            "INSERT INTO transactions (user_id, type, amount, note, group_id, round_id) VALUES (?,?,?,?,?,?)",
             (
                 trustee_id,
                 "free_ticket",
                 -free_ticket_cash_total,
                 f"Free tickets Round #{rseq}",
                 gid,
+                round_["id"],
             ),
         )
     elif free_tickets > 0:
@@ -3725,8 +3726,8 @@ async def admin_enter_results(request: Request):
                 "UPDATE users SET credit=credit+? WHERE telegram_id=?", (prize, p["user_id"])
             )
             await db.execute(
-                "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
-                (p["user_id"], "win", prize, f"Prize Round #{rseq}", gid),
+                "INSERT INTO transactions (user_id, type, amount, note, group_id, round_id) VALUES (?,?,?,?,?,?)",
+                (p["user_id"], "win", prize, f"Prize Round #{rseq}", gid, round_["id"]),
             )
 
     # Per-ticket match + prize breakdown (for participant "see winning tickets" view).
@@ -3834,8 +3835,8 @@ async def admin_draw(request: Request):
     )
     await db.execute("UPDATE users SET credit=credit+? WHERE telegram_id=?", (pool_val, winner_id))
     await db.execute(
-        "INSERT INTO transactions (user_id, type, amount, note) VALUES (?,?,?,?)",
-        (winner_id, "win", pool_val, f"Won round #{round_['id']}"),
+        "INSERT INTO transactions (user_id, type, amount, note, round_id) VALUES (?,?,?,?,?)",
+        (winner_id, "win", pool_val, f"Won round #{round_.get('group_seq') or round_['id']}", round_["id"]),
     )
     await db.commit()
     await db.close()

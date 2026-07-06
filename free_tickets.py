@@ -109,8 +109,8 @@ async def apply_pending_free_tickets(
         # Activity log: free stake realized for this member (not cash — no balance change).
         if value > 0:
             await db.execute(
-                "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
-                (user_id, "free_win", round(value, 2), f"Free tickets — Round #{src_seq}", group_id),
+                "INSERT INTO transactions (user_id, type, amount, note, group_id, round_id) VALUES (?,?,?,?,?,?)",
+                (user_id, "free_win", round(value, 2), f"Free tickets — Round #{src_seq}", group_id, round_id),
             )
         cur = await db.execute(
             "SELECT * FROM participations WHERE round_id = ? AND user_id = ?",
