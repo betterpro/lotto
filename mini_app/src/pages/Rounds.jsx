@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../api.js'
 import { TicketIcon, TrophyIcon } from '../components/Icon.jsx'
 import { StatusPill } from '../components/StatusPill.jsx'
-import { AgreementLink } from '../components/AgreementSheet.jsx'
+import { AgreementLink, downloadGroupPlayForm } from '../components/AgreementSheet.jsx'
 import { Ball } from '../components/Ball.jsx'
 import { jackpotDisplay } from '../lottery.js'
 
@@ -404,6 +404,16 @@ function RoundCard({ round }) {
                   color: 'var(--tg)', fontSize: 13, fontWeight: 600,
                 }}>
                 📎 View ticket photo
+              </button>
+            )}
+            {(round.my_shares > 0 || round.my_stake) && (
+              <button onClick={() => downloadGroupPlayForm(round.id)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  color: 'var(--tg)', fontSize: 13, fontWeight: 600,
+                }}>
+                📄 Group play form
               </button>
             )}
           </div>

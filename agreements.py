@@ -291,6 +291,27 @@ Declaration: {decl}
 """
 
 
+def build_group_play_body(*, round_id: int, trustee_name: str) -> str:
+    return f"""GROUP PLAY TERMS
+This form records the paid members of the pool for Round #{round_id} and each
+member's share, for reference alongside the Group Prize Agreement with Group
+Trustee {trustee_name}.
+
+  - No pay, no share: a member is included only if full payment was recorded by
+    the cut-off before tickets were purchased. The list above is the paid
+    membership for this round.
+  - The Group Trustee holds the pooled ticket(s) "In Trust" for all members; only
+    the original ticket may claim a prize. Winnings are paid to the Trustee as
+    trustee and distributed to members strictly by the pool shares shown.
+  - Group claims of $10,000 CAD or more require a Group Prize Agreement completed
+    by every member entitled to a share, with valid government-issued photo ID.
+
+This document is practical information and record-keeping, not legal advice.
+
+- LottoChee - Round #{round_id} - Trustee: {trustee_name}
+"""
+
+
 def round_ticket_control(round_id: int) -> str:
     """Stable internal control reference LottoChee assigns to a round's ticket."""
     return f"LC-R{int(round_id):05d}"

@@ -195,6 +195,25 @@ async function downloadAgreementPdf(kind, roundId) {
   document.body.removeChild(a)
 }
 
+export async function downloadGroupPlayForm(roundId) {
+  const base = import.meta.env.VITE_API_BASE ?? ''
+  let url = base + `/api/agreement/round/${roundId}/group-form/download`
+  try {
+    const { token } = await api.agreement.downloadToken()
+    if (token) url += `?t=${encodeURIComponent(token)}`
+  } catch { /* fall back to cookie auth on web */ }
+  const tg = window.Telegram?.WebApp
+  if (tg?.initData && typeof tg.openLink === 'function') { tg.openLink(url); return }
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `lotto-chee-round-${roundId}-group-play.pdf`
+  a.rel = 'noopener'
+  a.target = '_blank'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
 export function AgreementSheet({ kind, roundId, title, onClose }) {
   const [doc, setDoc] = useState(null)
   const [err, setErr] = useState(null)

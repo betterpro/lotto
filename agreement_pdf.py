@@ -176,6 +176,129 @@ def _draw_body(
             pdf.multi_cell(_CONTENT_W, 5, _pdf_text(stripped))
 
 
+def _draw_kv(pdf: FPDF, title: str, rows: list[tuple[str, str]]) -> None:
+    if pdf.get_y() > 250:
+        pdf.add_page()
+        _paint_page_bg(pdf)
+    pdf.set_x(_MARGIN)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*THEME["tx"])
+    pdf.multi_cell(_CONTENT_W, 6, _pdf_text(title))
+    pdf.ln(1)
+    for label, value in rows:
+        pdf.set_x(_MARGIN)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*THEME["tx3"])
+        pdf.cell(40, 5, _pdf_text(label))
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*THEME["tx2"])
+        pdf.multi_cell(_CONTENT_W - 40, 5, _pdf_text(value or "-"))
+    pdf.ln(4)
+
+
+def _draw_participants_table(pdf: FPDF, participants: list[dict], pool: float) -> None:
+    cols = [("Member", 46), ("City", 42), ("Prov.", 20), ("Share", 24), ("Amount", 42)]
+    pdf.set_x(_MARGIN)
+    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_text_color(*THEME["tx3"])
+    pdf.set_fill_color(*THEME["bg2"])
+    for name, w in cols:
+        pdf.cell(w, 7, _pdf_text(name), fill=True)
+    pdf.ln(7)
+    pdf.set_draw_color(*THEME["hairline"])
+    pdf.set_line_width(0.2)
+    for p in participants:
+        if pdf.get_y() > 262:
+            pdf.add_page()
+            _paint_page_bg(pdf)
+        pdf.set_x(_MARGIN)
+        me = p.get("is_me")
+        pdf.set_font("Helvetica", "B" if me else "", 9)
+        pdf.set_text_color(*(THEME["accent"] if me else THEME["tx"]))
+        vals = [
+            str(p.get("member") or "-"),
+            str(p.get("city") or "-"),
+            str(p.get("province") or "-"),
+            f'{p.get("pct", 0)}%',
+            f'${float(p.get("amount") or 0):.2f}',
+        ]
+        for (name, w), v in zip(cols, vals):
+            pdf.cell(w, 7, _pdf_text(v))
+        pdf.ln(7)
+        y = pdf.get_y()
+        pdf.line(_MARGIN, y, 210 - _MARGIN, y)
+    # Total row
+    pdf.set_x(_MARGIN)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*THEME["money"])
+    pdf.cell(cols[0][1] + cols[1][1] + cols[2][1], 8, "TOTAL POOL")
+    pdf.cell(cols[3][1], 8, "100%")
+    pdf.cell(cols[4][1], 8, f"${float(pool or 0):.2f}")
+    pdf.ln(10)
+
+
+def build_group_play_pdf(
+    *,
+    title: str,
+    subtitle: str,
+    round_rows: list[tuple[str, str]],
+    trustee: dict,
+    you: dict,
+    participants: list[dict],
+    pool: float,
+    body: str | None = None,
+) -> bytes:
+    """Group play agreement form: round details, trustee + downloader personal
+    details, and an anonymized participant table (others show only LottoChee id,
+    city, province, share and amount)."""
+    pdf = _AgreementPDF(format="A4")
+    pdf.set_auto_page_break(auto=True, margin=22)
+    pdf.set_margins(_MARGIN, _MARGIN, _MARGIN)
+    pdf.add_page()
+    _paint_page_bg(pdf)
+    _draw_header(pdf, title, subtitle)
+    _draw_highlights(pdf, round_rows, box_title="ROUND DETAILS")
+
+    _draw_kv(pdf, "GROUP TRUSTEE", [
+        ("Name", trustee.get("name")),
+        ("Address", trustee.get("address")),
+        ("Phone", trustee.get("phone")),
+        ("Email", trustee.get("email")),
+    ])
+    _draw_kv(pdf, "YOUR DETAILS", [
+        ("Name", you.get("name")),
+        ("Address", you.get("address")),
+        ("Phone", you.get("phone")),
+        ("Email", you.get("email")),
+        ("Your shares", you.get("shares")),
+        ("Your stake", you.get("amount")),
+        ("Pool share", you.get("pct")),
+    ])
+
+    if pdf.get_y() > 235:
+        pdf.add_page()
+        _paint_page_bg(pdf)
+    pdf.set_x(_MARGIN)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_text_color(*THEME["tx"])
+    pdf.multi_cell(_CONTENT_W, 6, "GROUP MEMBERS")
+    pdf.set_x(_MARGIN)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(*THEME["tx3"])
+    pdf.multi_cell(_CONTENT_W, 4, _pdf_text(
+        "Other members are shown by their LottoChee id only; names and contact "
+        "details are withheld for privacy."))
+    pdf.ln(2)
+    _draw_participants_table(pdf, participants, pool)
+
+    if body:
+        _draw_body(pdf, body)
+
+    buf = BytesIO()
+    pdf.output(buf)
+    return buf.getvalue()
+
+
 def build_agreement_pdf(
     *,
     title: str,

@@ -32,10 +32,12 @@ from telegram.ext import Application
 
 import config
 from agreements import (
+    build_group_play_body,
     build_master_agreement,
     build_round_agreement,
     build_trustee_from_user,
     lottery_label,
+    round_ticket_control,
 )
 from lottery_types import (
     LOTTERY_PREFERENCE_PRICES,
@@ -96,7 +98,7 @@ from group_context import (
     trustee_public,
     user_in_group,
 )
-from agreement_pdf import build_agreement_pdf
+from agreement_pdf import build_agreement_pdf, build_group_play_pdf
 from emailer import email_enabled, image_attachment, pdf_attachment, send_email
 from bot import build_application
 from database import (
@@ -1802,6 +1804,103 @@ async def api_agreement_round_download(request: Request, round_id: int):
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="lotto-chee-round-{round_id}-agreement.pdf"'
+        },
+    )
+
+
+def _person_address(row) -> str:
+    parts = [row.get("street")] if row.get("street") else []
+    line2 = ", ".join(x for x in (row.get("city"), row.get("province"), row.get("postal_code")) if x)
+    if line2:
+        parts.append(line2)
+    return " · ".join(parts) if parts else "-"
+
+
+@app.get("/api/agreement/round/{round_id}/group-form/download")
+async def api_group_play_form_download(request: Request, round_id: int):
+    """Group Play Agreement form (PDF) for a round: round details, the trustee's
+    and the downloader's own personal details, and an anonymized member table
+    (others show only their LottoChee id, city, province, share and amount)."""
+    user, db = await _auth_with_query_token(request)
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    rd = dict(round_)
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
+        (round_id, user["telegram_id"]),
+    )
+    my_part = await cur.fetchone()
+    if not my_part:
+        await db.close()
+        raise HTTPException(403, "Join this round to access the group play form")
+    cur = await db.execute(
+        """SELECT p.user_id, p.amount, p.shares, u.city, u.province
+           FROM participations p JOIN users u ON u.telegram_id = p.user_id
+           WHERE p.round_id=? ORDER BY p.amount DESC, p.user_id ASC""",
+        (round_id,),
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    trustee = await _trustee_dict_for_user(db, user)
+    await db.close()
+
+    pool = round(sum(float(r["amount"] or 0) for r in rows), 2)
+    seq = rd.get("group_seq") or round_id
+    participants = []
+    for r in rows:
+        is_me = r["user_id"] == user["telegram_id"]
+        amt = round(float(r["amount"] or 0), 2)
+        participants.append({
+            "member": "You" if is_me else f"LC-{r['user_id']}",
+            "city": r.get("city") or "-",
+            "province": r.get("province") or "-",
+            "pct": round(amt / pool * 100, 1) if pool else 0,
+            "amount": amt,
+            "is_me": is_me,
+        })
+
+    my_amt = round(float(my_part["amount"] or 0), 2)
+    my_pct = round(my_amt / pool * 100, 1) if pool else 0
+    you = {
+        "name": user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        "address": _person_address(user),
+        "phone": user.get("phone") or "-",
+        "email": user.get("auth_email") or user.get("email") or "-",
+        "shares": str(my_part.get("shares") or 1),
+        "amount": f"${my_amt:.2f} CAD",
+        "pct": f"{my_pct}% of ${pool:.2f}",
+    }
+    trustee_out = {
+        "name": trustee.get("name"),
+        "address": " · ".join(x for x in (trustee.get("street"),
+                    ", ".join(y for y in (trustee.get("city"), trustee.get("province")) if y)) if x) or "-",
+        "phone": trustee.get("phone") or "-",
+        "email": trustee.get("email") or "-",
+    }
+    round_rows = [
+        ("Game", lottery_label(rd.get("lottery_type"))),
+        ("Draw date", str(rd.get("draw_date") or "TBD")),
+        ("Round pool", f"${pool:.2f} CAD"),
+        ("Members", str(len(rows))),
+        ("Ticket control", round_ticket_control(round_id)),
+    ]
+    pdf_bytes = build_group_play_pdf(
+        title=f"Group Play Agreement · Round #{seq}",
+        subtitle=f"{lottery_label(rd.get('lottery_type'))} · Draw {rd.get('draw_date') or 'TBD'}",
+        round_rows=round_rows,
+        trustee=trustee_out,
+        you=you,
+        participants=participants,
+        pool=pool,
+        body=build_group_play_body(round_id=seq, trustee_name=trustee_out["name"]),
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="lotto-chee-round-{seq}-group-play.pdf"'
         },
     )
 
