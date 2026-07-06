@@ -322,14 +322,14 @@ function RoundAdminRow({ r, onChanged }) {
     catch (e) { showToast(e.message, 'error') } finally { setBusy(false) }
   }
   async function del() {
-    if (!confirm(`Delete round #${r.id}? Only rounds with no participants can be deleted.`)) return
+    if (!confirm(`Delete round #${r.group_seq ?? r.id}? Only rounds with no participants can be deleted.`)) return
     try { await api.platform.deleteRound(r.id); showToast('Round deleted', 'success'); onChanged?.() }
     catch (e) { showToast(e.message, 'error') }
   }
   return (
     <div className="card col gap-8" style={{ padding: 12 }}>
       <div className="row between">
-        <span style={{ fontWeight: 600 }}>Round #{r.id} · {r.group_name}</span>
+        <span style={{ fontWeight: 600 }}>Round #{r.group_seq ?? r.id} · {r.group_name}</span>
         <StatusChip status={r.status} />
       </div>
       <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>

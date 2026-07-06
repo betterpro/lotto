@@ -1131,7 +1131,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
               </p>
 
               <div className="card" style={{ marginBottom: 16 }}>
-                <SummaryRow k="Round"        v={`#${round?.id}`} mono />
+                <SummaryRow k="Round"        v={`#${round?.group_seq ?? round?.id}`} mono />
                 <SummaryRow k="Pool total"   v={fmtCAD(round?.pool)} mono />
                 <SummaryRow k="Participants" v={round?.participants?.length ?? 0} mono />
               </div>

@@ -68,7 +68,7 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
       <div className="sheet" onClick={e => e.stopPropagation()}>
         <div className="handle" />
         <div className="sheet-head">
-          <span className="sheet-title">Add shares · Round #{round.id}</span>
+          <span className="sheet-title">Add shares · Round #{round.group_seq ?? round.id}</span>
           <button className="sheet-close" onClick={onClose}>✕</button>
         </div>
         <div className="body">
@@ -117,7 +117,7 @@ function JoinSheet({ open, onClose, round, user, onJoined, showToast }) {
                 </p>
                 <p style={{ margin: 0, fontSize: 14, color: 'var(--tx-2)', lineHeight: 1.5 }}>
                   You need at least {fmtCAD(cost)} for {shares} share{shares !== 1 ? 's' : ''} ({fmtCAD(shortfall)} short).
-                  Close this screen, tap your balance on Home to top up, then come back and join again.
+                  Close this screen, tap <b>Add credit</b> on Home to top up, then come back and join again.
                   Paying does not join you until you confirm here.
                 </p>
               </div>
@@ -565,10 +565,43 @@ export default function Home({ user, onUserUpdate }) {
         />
       )}
 
+      {/* Wallet — add credit */}
+      <div className="stack" style={{ marginTop: 10 }}>
+        <div className="card" style={{
+          background: 'linear-gradient(135deg, rgba(78,208,122,.12), rgba(46,166,255,.08))',
+          border: '.5px solid var(--hairline-2)',
+        }}>
+          <div className="row between" style={{ alignItems: 'center' }}>
+            <div className="row gap-12" style={{ alignItems: 'center', minWidth: 0 }}>
+              <div style={{
+                width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+                background: 'rgba(78,208,122,.16)', color: 'var(--money)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <WalletIcon width={22} height={22} />
+              </div>
+              <div className="col gap-2" style={{ minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
+                  Your balance
+                </span>
+                <span className="mono" style={{ fontSize: 24, fontWeight: 800, color: 'var(--money)', lineHeight: 1.1 }}>
+                  {fmtCAD(user.credit ?? 0)}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>Use it to join rounds</span>
+              </div>
+            </div>
+            <button type="button" className="btn btn-primary" style={{ flexShrink: 0, gap: 6, whiteSpace: 'nowrap' }}
+              onClick={() => navigate('/topup')}>
+              <PlusIcon width={16} height={16} /> Add credit
+            </button>
+          </div>
+        </div>
+      </div>
+
       {/* Your stake */}
       {round?.my_stake != null && (
         <>
-          <div className="section"><div className="label">Your stake in Round #{round.id}</div></div>
+          <div className="section"><div className="label">Your stake in Round #{round.group_seq ?? round.id}</div></div>
           <div className="stack">
             <div className="card">
               <div className="row between">
@@ -626,7 +659,7 @@ export default function Home({ user, onUserUpdate }) {
             <div className="card">
               <div className="row between" style={{ marginBottom: 8 }}>
                 <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>
-                  Round #{lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
+                  Round #{lastDrawn.group_seq ?? lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
                 </span>
                 <span className={`status-pill ${lastDrawn.display_status === 'WON' ? 'won' : 'revealed'}`}>
                   {lastDrawn.display_status === 'WON' ? 'Won' : 'Drawn'}
