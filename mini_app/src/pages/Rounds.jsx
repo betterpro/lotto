@@ -413,7 +413,7 @@ function RoundCard({ round }) {
                 📎 View ticket photo
               </button>
             )}
-            {(round.my_shares > 0 || round.my_stake) && (
+            {(round.my_shares > 0 || round.my_stake) && round.agreement_available && (
               <button onClick={() => downloadGroupPlayForm(round.id)}
                 style={{
                   background: 'none', border: 'none', cursor: 'pointer', padding: 0,

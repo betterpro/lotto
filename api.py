@@ -1816,41 +1816,14 @@ def _person_address(row) -> str:
     return " · ".join(parts) if parts else "-"
 
 
-@app.get("/api/agreement/round/{round_id}/group-form/download")
-async def api_group_play_form_download(request: Request, round_id: int):
-    """Group Play Agreement form (PDF) for a round: round details, the trustee's
-    and the downloader's own personal details, and an anonymized member table
-    (others show only their LottoChee id, city, province, share and amount)."""
-    user, db = await _auth_with_query_token(request)
-    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
-    round_ = await cur.fetchone()
-    if not round_:
-        await db.close()
-        raise HTTPException(404, "Round not found")
-    rd = dict(round_)
-    cur = await db.execute(
-        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
-        (round_id, user["telegram_id"]),
-    )
-    my_part = await cur.fetchone()
-    if not my_part:
-        await db.close()
-        raise HTTPException(403, "Join this round to access the group play form")
-    cur = await db.execute(
-        """SELECT p.user_id, p.amount, p.shares, u.city, u.province
-           FROM participations p JOIN users u ON u.telegram_id = p.user_id
-           WHERE p.round_id=? ORDER BY p.amount DESC, p.user_id ASC""",
-        (round_id,),
-    )
-    rows = [dict(r) for r in await cur.fetchall()]
-    trustee = await _trustee_dict_for_user(db, user)
-    await db.close()
-
-    pool = round(sum(float(r["amount"] or 0) for r in rows), 2)
-    seq = rd.get("group_seq") or round_id
+def _group_play_pdf_bytes(*, rd: dict, recipient: dict, all_parts: list, trustee: dict, pool: float) -> bytes:
+    """Build a personalized Group Play Agreement PDF: round header, the trustee's
+    and the recipient's own full details, and an anonymized member table (others
+    show only LottoChee id, city, province, share and amount)."""
+    seq = rd.get("group_seq") or rd["id"]
     participants = []
-    for r in rows:
-        is_me = r["user_id"] == user["telegram_id"]
+    for r in all_parts:
+        is_me = r["user_id"] == recipient["user_id"]
         amt = round(float(r["amount"] or 0), 2)
         participants.append({
             "member": "You" if is_me else f"LC-{r['user_id']}",
@@ -1860,15 +1833,14 @@ async def api_group_play_form_download(request: Request, round_id: int):
             "amount": amt,
             "is_me": is_me,
         })
-
-    my_amt = round(float(my_part["amount"] or 0), 2)
+    my_amt = round(float(recipient.get("amount") or 0), 2)
     my_pct = round(my_amt / pool * 100, 1) if pool else 0
     you = {
-        "name": user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
-        "address": _person_address(user),
-        "phone": user.get("phone") or "-",
-        "email": user.get("auth_email") or user.get("email") or "-",
-        "shares": str(my_part.get("shares") or 1),
+        "name": recipient.get("name"),
+        "address": _person_address(recipient),
+        "phone": recipient.get("phone") or "-",
+        "email": recipient.get("email") or "-",
+        "shares": str(recipient.get("shares") or 1),
         "amount": f"${my_amt:.2f} CAD",
         "pct": f"{my_pct}% of ${pool:.2f}",
     }
@@ -1883,10 +1855,10 @@ async def api_group_play_form_download(request: Request, round_id: int):
         ("Game", lottery_label(rd.get("lottery_type"))),
         ("Draw date", str(rd.get("draw_date") or "TBD")),
         ("Round pool", f"${pool:.2f} CAD"),
-        ("Members", str(len(rows))),
-        ("Ticket control", round_ticket_control(round_id)),
+        ("Members", str(len(all_parts))),
+        ("Ticket control", round_ticket_control(rd["id"])),
     ]
-    pdf_bytes = build_group_play_pdf(
+    return build_group_play_pdf(
         title=f"Group Play Agreement · Round #{seq}",
         subtitle=f"{lottery_label(rd.get('lottery_type'))} · Draw {rd.get('draw_date') or 'TBD'}",
         round_rows=round_rows,
@@ -1896,6 +1868,60 @@ async def api_group_play_form_download(request: Request, round_id: int):
         pool=pool,
         body=build_group_play_body(round_id=seq, trustee_name=trustee_out["name"]),
     )
+
+
+async def _fetch_group_play_context(db, round_id: int):
+    """(all_parts, pool) for a round's members with city/province for the form."""
+    cur = await db.execute(
+        """SELECT p.user_id, p.amount, p.shares, u.city, u.province
+           FROM participations p JOIN users u ON u.telegram_id = p.user_id
+           WHERE p.round_id=? ORDER BY p.amount DESC, p.user_id ASC""",
+        (round_id,),
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    pool = round(sum(float(r["amount"] or 0) for r in rows), 2)
+    return rows, pool
+
+
+@app.get("/api/agreement/round/{round_id}/group-form/download")
+async def api_group_play_form_download(request: Request, round_id: int):
+    """Group Play Agreement form (PDF). Only available once entries have closed,
+    so the paid membership and shares are final (no more shares for sale)."""
+    user, db = await _auth_with_query_token(request)
+    await _auto_close_round_if_due(db, round_id)
+    cur = await db.execute("SELECT * FROM rounds WHERE id=?", (round_id,))
+    round_ = await cur.fetchone()
+    if not round_:
+        await db.close()
+        raise HTTPException(404, "Round not found")
+    rd = dict(round_)
+    if not agreement_available(rd["status"], rd.get("draw_date")):
+        await db.close()
+        raise HTTPException(403, "Group play form is available once entries close (the share list is final then)")
+    cur = await db.execute(
+        "SELECT * FROM participations WHERE round_id=? AND user_id=?",
+        (round_id, user["telegram_id"]),
+    )
+    my_part = await cur.fetchone()
+    if not my_part:
+        await db.close()
+        raise HTTPException(403, "Join this round to access the group play form")
+    all_parts, pool = await _fetch_group_play_context(db, round_id)
+    trustee = await _trustee_dict_for_user(db, user)
+    await db.close()
+
+    seq = rd.get("group_seq") or round_id
+    recipient = {
+        "user_id": user["telegram_id"],
+        "name": user.get("full_name") or user.get("username") or f"User {user['telegram_id']}",
+        "street": user.get("street"), "city": user.get("city"),
+        "province": user.get("province"), "postal_code": user.get("postal_code"),
+        "phone": user.get("phone"),
+        "email": user.get("auth_email") or user.get("email"),
+        "shares": my_part.get("shares") or 1, "amount": my_part["amount"],
+    }
+    pdf_bytes = _group_play_pdf_bytes(rd=rd, recipient=recipient, all_parts=all_parts,
+                                      trustee=trustee, pool=pool)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -3230,10 +3256,10 @@ def _round_email_html(*, round_id, name, group_name, game_label, draw_date, nums
     grp = html.escape(group_name)
     pct_line = f"{share_pct}% of ${pool:.2f}" if share_pct is not None else "—"
     ticket_note = (
-        f"Your {ticket_count} ticket photo{'s' if ticket_count != 1 else ''} "
-        "and your signed round agreement are attached to this email."
+        f"Your {ticket_count} ticket photo{'s' if ticket_count != 1 else ''}, "
+        "your round agreement and the group play form are attached to this email."
         if ticket_count else
-        "Your signed round agreement is attached to this email."
+        "Your round agreement and the group play form are attached to this email."
     )
     return f"""\
 <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#17212b">
@@ -3265,12 +3291,15 @@ def _round_email_html(*, round_id, name, group_name, game_label, draw_date, nums
 
 async def _email_round_documents(*, round_id, group_name, lottery_type, draw_date,
                                  closed_at, pool, trustee, participants, ticket_images,
-                                 nums_str, participants_count=None):
-    """Email each participant their round agreement PDF + ticket photos (Resend)."""
+                                 nums_str, participants_count=None, group_seq=None, all_parts=None):
+    """Email each participant their round agreement + personalized group play form
+    + ticket photos (Resend)."""
     if not email_enabled():
         return
     game_label = lottery_label(lottery_type)
     plain_nums = re.sub(r"<[^>]+>", "", nums_str or "").strip() or None
+    seq = group_seq or round_id
+    gp_rd = {"id": round_id, "group_seq": seq, "lottery_type": lottery_type, "draw_date": draw_date}
     # Ticket photos are shared across all participants — build the attachments once.
     img_atts = []
     for i, img in enumerate(ticket_images[:10], start=1):
@@ -3304,7 +3333,16 @@ async def _email_round_documents(*, round_id, group_name, lottery_type, draw_dat
                     ("Pool share", f"{share_pct}% of ${pool:.2f}" if share_pct is not None else "—"),
                 ],
             )
-            attachments = [pdf_attachment(f"round-{round_id}-agreement.pdf", pdf)] + img_atts
+            attachments = [pdf_attachment(f"round-{seq}-agreement.pdf", pdf)]
+            # Personalized group play form (member list + this member's own details).
+            if all_parts:
+                try:
+                    gp_pdf = _group_play_pdf_bytes(rd=gp_rd, recipient=p, all_parts=all_parts,
+                                                   trustee=trustee, pool=pool)
+                    attachments.append(pdf_attachment(f"round-{seq}-group-play.pdf", gp_pdf))
+                except Exception as e:
+                    log.warning("group play pdf failed for %s: %s", email, e)
+            attachments += img_atts
             html_body = _round_email_html(
                 round_id=round_id, name=name, group_name=group_name, game_label=game_label,
                 draw_date=draw_date, nums_str=nums_str, shares=shares, stake_amount=stake,
@@ -3395,24 +3433,34 @@ async def admin_upload_ticket(request: Request):
         if msg_parts:
             await _notify(uid, "\n".join(msg_parts))
 
-    # Email the round agreement + ticket photos to participants (Resend).
+    # Email the round agreement, group play form + ticket photos to participants.
     if email_enabled():
         pool = round_.get("pool") or 0
         cur = await db.execute(
             """SELECT p.user_id, p.amount, p.shares, u.full_name, u.username,
+                      u.city, u.province, u.street, u.postal_code, u.phone,
                       COALESCE(NULLIF(u.auth_email,''), NULLIF(u.email,'')) AS email
                FROM participations p JOIN users u ON u.telegram_id = p.user_id
-               WHERE p.round_id=?""",
+               WHERE p.round_id=? ORDER BY p.amount DESC, p.user_id ASC""",
             (round_["id"],),
         )
+        all_parts = []
         email_parts = []
         for r in await cur.fetchall():
-            if not (r["email"] or "").strip():
+            rr = dict(r)
+            all_parts.append({
+                "user_id": rr["user_id"], "amount": rr["amount"],
+                "city": rr.get("city"), "province": rr.get("province"),
+            })
+            if not (rr["email"] or "").strip():
                 continue
             email_parts.append({
-                "user_id": r["user_id"], "email": r["email"],
-                "name": r["full_name"] or r["username"] or f"User {r['user_id']}",
-                "shares": r["shares"] or 1, "amount": r["amount"],
+                "user_id": rr["user_id"], "email": rr["email"],
+                "name": rr["full_name"] or rr["username"] or f"User {rr['user_id']}",
+                "shares": rr["shares"] or 1, "amount": rr["amount"],
+                "street": rr.get("street"), "city": rr.get("city"),
+                "province": rr.get("province"), "postal_code": rr.get("postal_code"),
+                "phone": rr.get("phone"),
             })
         if email_parts:
             saved_tk = parse_round_tickets(round_.get("round_tickets"), lottery_type)
@@ -3421,9 +3469,10 @@ async def admin_upload_ticket(request: Request):
                 ticket_images = [round_["ticket_image"]]
             trustee = await _trustee_dict_for_user(db, user)
             _spawn_bg(_email_round_documents(
-                round_id=round_["id"], group_name=group["name"], lottery_type=lottery_type,
+                round_id=round_["id"], group_seq=round_.get("group_seq") or round_["id"],
+                group_name=group["name"], lottery_type=lottery_type,
                 draw_date=round_.get("draw_date"), closed_at=round_.get("closed_at"),
-                pool=pool, trustee=trustee, participants=email_parts,
+                pool=pool, trustee=trustee, participants=email_parts, all_parts=all_parts,
                 ticket_images=ticket_images, nums_str=nums_str,
                 participants_count=len(participant_ids),
             ))
