@@ -661,13 +661,15 @@ export default function Home({ user, onUserUpdate }) {
                 <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>
                   Round #{lastDrawn.group_seq ?? lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
                 </span>
-                <span className={`status-pill ${lastDrawn.display_status === 'WON' ? 'won' : 'revealed'}`}>
-                  {lastDrawn.display_status === 'WON' ? 'Won' : 'Drawn'}
+                <span className={`status-pill ${(lastDrawn.my_prize > 0 || lastDrawn.my_free_won > 0) ? 'won' : 'revealed'}`}>
+                  {(lastDrawn.my_prize > 0 || lastDrawn.my_free_won > 0) ? 'Won' : 'Drawn'}
                 </span>
               </div>
               <div className="row between">
                 {lastDrawn.my_prize > 0 ? (
                   <span className="chip chip-money">Won {fmtCAD(lastDrawn.my_prize)}</span>
+                ) : lastDrawn.my_free_won > 0 ? (
+                  <span className="chip chip-gold">🎁 {fmtCAD(lastDrawn.my_free_won)} free tickets</span>
                 ) : lastDrawn.my_stake ? (
                   <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize this round</span>
                 ) : (

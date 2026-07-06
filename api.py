@@ -2136,6 +2136,14 @@ async def api_rounds(request: Request):
         rd["participants_count"] = int(rd.get("participants_count") or 0)
         rd["participants"] = rd["participants_count"]
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
+        # This member's proportional share of any free tickets the round won.
+        ftw = int(rd.get("free_tickets_won") or 0)
+        if ftw > 0 and rd.get("my_stake") and rd.get("pool"):
+            fv_total = free_ticket_cash_value(rd.get("lottery_type"), ftw)
+            rd["my_free_won"] = round((rd["my_stake"] / rd["pool"]) * fv_total, 2)
+        else:
+            rd["my_free_won"] = 0
+        rd["free_tickets_won"] = ftw
         saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
         ticket_images = [t["image"] for t in saved if t.get("image")]
         if not ticket_images and rd.get("ticket_image"):

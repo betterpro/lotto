@@ -347,6 +347,13 @@ function RoundCard({ round }) {
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--money)' }}>Won</span>
               </>
+            ) : round.my_free_won > 0 ? (
+              <>
+                <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: 'var(--gold)' }}>
+                  🎁 {fmtMoney(round.my_free_won)}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--gold)' }}>Free tickets</span>
+              </>
             ) : (
               <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize</span>
             )}
