@@ -2878,7 +2878,7 @@ async def admin_resync_free_tickets(request: Request):
     # 2) Re-arm the source draw's free tickets (the most recent drawn round of
     #    this game with free tickets, before the target).
     cur = await db.execute(
-        """SELECT id FROM rounds WHERE group_id=? AND lottery_type=? AND status='drawn'
+        """SELECT id, group_seq FROM rounds WHERE group_id=? AND lottery_type=? AND status='drawn'
              AND free_tickets_won > 0 AND id < ? ORDER BY id DESC LIMIT 1""",
         (gid, lottery_type, target_id),
     )
@@ -2886,6 +2886,12 @@ async def admin_resync_free_tickets(request: Request):
     if not source:
         await db.close()
         raise HTTPException(400, "No prior drawn round with free tickets to apply")
+    # Clear any prior free-ticket activity for this draw so re-syncing doesn't duplicate it.
+    src_seq = source["group_seq"] or source["id"]
+    await db.execute(
+        "DELETE FROM transactions WHERE type='free_win' AND group_id=? AND note=?",
+        (gid, f"Free tickets — Round #{src_seq}"),
+    )
     await db.execute("UPDATE rounds SET free_tickets_consumed=0 WHERE id=?", (source["id"],))
     await db.commit()
 

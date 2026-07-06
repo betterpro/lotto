@@ -7,15 +7,28 @@ function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
+// Backend timestamps are UTC "YYYY-MM-DD HH:MM:SS" (space, no zone) — WebKit
+// (Telegram) rejects that as Invalid Date, so normalise to ISO UTC before parsing.
+function parseTs(s) {
+  if (!s) return null
+  let str = String(s).trim()
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(str)) {
+    str = str.replace(' ', 'T')
+    if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(str)) str += 'Z'  // treat as UTC
+  }
+  const d = new Date(str)
+  return isNaN(d.getTime()) ? null : d
+}
+
 function fmtTime(s) {
-  if (!s) return ''
-  const d = new Date(s)
+  const d = parseTs(s)
+  if (!d) return ''
   return d.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 function fmtDay(s) {
-  if (!s) return ''
-  const d    = new Date(s.includes('T') ? s : s + 'T00:00:00')
+  const d = parseTs(s)
+  if (!d) return ''
   const now  = new Date()
   const diff = Math.floor((now - d) / 86400000)
   if (diff === 0) return 'Today'
@@ -36,6 +49,7 @@ function groupByDay(txs) {
 const TX_META = {
   deposit:     { icon: WalletIcon,  color: 'var(--money)', sign: '+', label: 'Top-up'         },
   win:         { icon: TrophyIcon,  color: 'var(--gold)',  sign: '+', label: 'Prize won'       },
+  free_win:    { icon: TrophyIcon,  color: 'var(--gold)',  sign: '',  label: 'Free tickets won', free: true },
   refund:      { icon: ArrowDownIcon, color: 'var(--tg)',  sign: '+', label: 'Refund'          },
   participate: { icon: TicketIcon,  color: 'var(--tx-3)', sign: '−', label: 'Joined round'    },
   withdraw:    { icon: WalletIcon,  color: 'var(--danger)',sign: '−', label: 'Withdrawal'      },
@@ -85,7 +99,11 @@ export default function History() {
     </div>
   )
 
-  const filtered = filter === 'all' ? txs : txs.filter(t => t.type === filter)
+  const filtered = filter === 'all'
+    ? txs
+    : filter === 'win'
+      ? txs.filter(t => t.type === 'win' || t.type === 'free_win')
+      : txs.filter(t => t.type === filter)
 
   const totalIn  = txs.filter(t => ['deposit','win','refund'].includes(t.type)).reduce((a, t) => a + (t.amount || 0), 0)
   const totalOut = txs.filter(t => ['participate','withdraw'].includes(t.type)).reduce((a, t) => a + (t.amount || 0), 0)
@@ -145,17 +163,20 @@ export default function History() {
                 const meta = TX_META[tx.type] ?? { icon: WalletIcon, color: 'var(--tx-3)', sign: '', label: tx.type }
                 const IconComp = meta.icon
                 const pos = meta.sign === '+'
+                const highlight = pos || meta.free
                 return (
                   <div key={tx.id} className="act-row" style={idx < items.length - 1 ? { borderBottom: '.5px solid var(--hairline)' } : {}}>
-                    <div className="act-icon" style={{ background: pos ? `${meta.color}18` : 'var(--bg-3)', color: meta.color }}>
+                    <div className="act-icon" style={{ background: highlight ? `${meta.color}18` : 'var(--bg-3)', color: meta.color }}>
                       <IconComp width={16} height={16} />
                     </div>
                     <div className="col grow" style={{ minWidth: 0 }}>
-                      <span style={{ fontSize: 15, fontWeight: 500 }}>{tx.note || meta.label}</span>
-                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>{fmtTime(tx.created_at)}</span>
+                      <span style={{ fontSize: 15, fontWeight: 500 }}>{meta.free ? '🎁 ' : ''}{tx.note || meta.label}</span>
+                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>
+                        {meta.free ? 'Free stake · ' : ''}{fmtTime(tx.created_at)}
+                      </span>
                     </div>
-                    <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: pos ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
-                      {meta.sign}{fmtCAD(Math.abs(tx.amount))}
+                    <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: highlight ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
+                      {meta.sign}{fmtCAD(Math.abs(tx.amount))}{meta.free ? ' free' : ''}
                     </span>
                   </div>
                 )

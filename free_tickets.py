@@ -94,6 +94,7 @@ async def apply_pending_free_tickets(
     # holder gets 10% of the free-ticket value). The whole-ticket count is still
     # distributed as integers so the trustee buys the right number of tickets.
     src_type = source.get("lottery_type") or lottery_type
+    src_seq = source.get("group_seq") or source["id"]
     total_value = free_ticket_cash_value(src_type, remaining)
     value_alloc = distribute_value_shares(total_value, parts, pool)
     count_alloc = distribute_integer_shares(remaining, parts, pool)
@@ -105,6 +106,12 @@ async def apply_pending_free_tickets(
         cnt = count_alloc.get(user_id, 0)
         if value <= 0 and cnt <= 0:
             continue
+        # Activity log: free stake realized for this member (not cash — no balance change).
+        if value > 0:
+            await db.execute(
+                "INSERT INTO transactions (user_id, type, amount, note, group_id) VALUES (?,?,?,?,?)",
+                (user_id, "free_win", round(value, 2), f"Free tickets — Round #{src_seq}", group_id),
+            )
         cur = await db.execute(
             "SELECT * FROM participations WHERE round_id = ? AND user_id = ?",
             (round_id, user_id),
