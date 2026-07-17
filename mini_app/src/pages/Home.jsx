@@ -598,47 +598,66 @@ export default function Home({ user, onUserUpdate }) {
         </div>
       </div>
 
-      {/* Your stake */}
-      {round?.my_stake != null && (
-        <>
-          <div className="section"><div className="label">Your stake in Round #{round.group_seq ?? round.id}</div></div>
-          <div className="stack">
-            <div className="card">
-              <div className="row between">
-                <div className="col gap-4">
-                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>Shares owned</span>
-                  <div className="row gap-8" style={{ alignItems: 'baseline' }}>
-                    <span className="mono" style={{ fontSize: 27, fontWeight: 700 }}>{myShares}</span>
-                    <span style={{ fontSize: 14, color: 'var(--tx-3)' }}>
-                      share{myShares !== 1 ? 's' : ''} · {playerCount(round)} players
-                    </span>
-                  </div>
-                  <span style={{ fontSize: 12, color: 'var(--money)' }}>
-                    = {fmtCAD(round.my_stake)} invested
+      {/* Latest round results — this group's win for the most recent drawn round */}
+      {lastDrawn && (() => {
+        const groupPrize = Number(lastDrawn.total_prize || 0)
+        const freeTix = Number(lastDrawn.free_tickets_won || 0)
+        const freeVal = Number(lastDrawn.free_value_total || 0)
+        const groupWon = groupPrize > 0 || freeTix > 0
+        const joined = lastDrawn.my_stake != null
+        const myWon = Number(lastDrawn.my_prize || 0) > 0 || Number(lastDrawn.my_free_won || 0) > 0
+        return (
+          <>
+            <div className="section"><div className="label">Latest round results</div></div>
+            <div className="stack">
+              <div className="card">
+                <div className="row between" style={{ marginBottom: 10, alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>
+                    Round #{lastDrawn.group_seq ?? lastDrawn.id}
+                    {lastDrawn.draw_date && (
+                      <span style={{ color: 'var(--tx-3)', fontWeight: 400 }}> · {lastDrawn.draw_date}</span>
+                    )}
+                  </span>
+                  <span className={`status-pill ${groupWon ? 'won' : 'revealed'}`}>
+                    {groupWon ? 'Group won' : 'Drawn'}
                   </span>
                 </div>
-                <div className="col gap-4" style={{ alignItems: 'flex-end' }}>
-                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
-                    {winPot ? 'Win potential' : 'Win chance'}
+
+                <div className="sum-row" style={{ padding: '9px 0', borderTop: '.5px solid var(--hairline)' }}>
+                  <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Group prize</span>
+                  <span className="mono" style={{ fontSize: 16, fontWeight: 700, color: groupPrize > 0 ? 'var(--money)' : 'var(--tx-3)' }}>
+                    {groupPrize > 0 ? fmtCAD(groupPrize) : '—'}
                   </span>
-                  {winPot ? (
-                    <>
-                      <span className="mono" style={{ fontSize: 27, fontWeight: 700, color: 'var(--gold)' }}>
-                        ${fmtBig(winPot)}
-                      </span>
-                      <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>if 1 ticket wins jackpot</span>
-                    </>
-                  ) : (
-                    <span className="mono" style={{ fontSize: 27, fontWeight: 700, color: 'var(--gold)' }}>
-                      {round.my_pct}%
+                </div>
+                {freeTix > 0 && (
+                  <div className="sum-row" style={{ padding: '9px 0', borderTop: '.5px solid var(--hairline)' }}>
+                    <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Free tickets won</span>
+                    <span className="chip chip-gold">🎁 {freeTix} · {fmtCAD(freeVal)}</span>
+                  </div>
+                )}
+
+                <div className="sum-row" style={{ padding: '9px 0 0', borderTop: '.5px solid var(--hairline)' }}>
+                  <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>Your win</span>
+                  {!joined ? (
+                    <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>You didn’t join</span>
+                  ) : myWon ? (
+                    <span className="mono" style={{ fontSize: 15, fontWeight: 700 }}>
+                      {Number(lastDrawn.my_prize || 0) > 0 && (
+                        <span style={{ color: 'var(--money)' }}>{fmtCAD(lastDrawn.my_prize)}</span>
+                      )}
+                      {Number(lastDrawn.my_free_won || 0) > 0 && (
+                        <span style={{ color: 'var(--gold)' }}> 🎁 {fmtCAD(lastDrawn.my_free_won)}</span>
+                      )}
                     </span>
+                  ) : (
+                    <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize</span>
                   )}
                 </div>
               </div>
             </div>
-          </div>
-        </>
-      )}
+          </>
+        )
+      })()}
 
       <GroupsSections
         user={user}
@@ -646,45 +665,6 @@ export default function Home({ user, onUserUpdate }) {
         onActiveGroupChange={reloadLive}
         showToast={showToast}
       />
-
-      {/* Last drawn round result */}
-      {lastDrawn && (
-        <>
-          <div className="section">
-            <div className="row between">
-              <div className="label" style={{ marginBottom: 0 }}>Last round</div>
-            </div>
-          </div>
-          <div className="stack" style={{ marginBottom: 12 }}>
-            <div className="card">
-              <div className="row between" style={{ marginBottom: 8 }}>
-                <span style={{ fontSize: 14, color: 'var(--tx-2)' }}>
-                  Round #{lastDrawn.group_seq ?? lastDrawn.id}{lastDrawn.draw_date ? ` · ${lastDrawn.draw_date}` : ''}
-                </span>
-                <span className={`status-pill ${(lastDrawn.my_prize > 0 || lastDrawn.my_free_won > 0) ? 'won' : 'revealed'}`}>
-                  {(lastDrawn.my_prize > 0 || lastDrawn.my_free_won > 0) ? 'Won' : 'Drawn'}
-                </span>
-              </div>
-              <div className="row between">
-                {lastDrawn.my_prize > 0 ? (
-                  <span className="chip chip-money">Won {fmtCAD(lastDrawn.my_prize)}</span>
-                ) : lastDrawn.my_free_won > 0 ? (
-                  <span className="chip chip-gold">🎁 {fmtCAD(lastDrawn.my_free_won)} free tickets</span>
-                ) : lastDrawn.my_stake ? (
-                  <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>No prize this round</span>
-                ) : (
-                  <span style={{ fontSize: 13, color: 'var(--tx-3)' }}>Did not join</span>
-                )}
-                {lastDrawn.jackpot > 0 && (
-                  <span style={{ fontSize: 13, color: 'var(--tx-2)' }}>
-                    ${fmtBig(lastDrawn.jackpot)} jackpot
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        </>
-      )}
 
       <JoinSheet
         open={join}

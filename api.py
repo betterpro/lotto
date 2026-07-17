@@ -2139,7 +2139,8 @@ async def api_rounds(request: Request):
           p.amount as my_stake, p.shares as my_shares, p.prize as my_prize,
           p.free_ticket_value as my_free_value,
           (SELECT COUNT(*) FROM participations WHERE round_id=r.id) as participants_count,
-          (SELECT COALESCE(SUM(free_ticket_value),0) FROM participations WHERE round_id=r.id) as free_stake_total
+          (SELECT COALESCE(SUM(free_ticket_value),0) FROM participations WHERE round_id=r.id) as free_stake_total,
+          (SELECT COALESCE(SUM(prize),0) FROM participations WHERE round_id=r.id) as total_prize
         FROM rounds r
         LEFT JOIN participations p ON p.round_id=r.id AND p.user_id=?
         WHERE r.group_id = ?
@@ -2164,12 +2165,14 @@ async def api_rounds(request: Request):
         rd["my_pct"] = round((rd["my_stake"] / rd["pool"]) * 100, 1) if rd.get("my_stake") and rd.get("pool") else None
         # This member's proportional share of any free tickets the round won.
         ftw = int(rd.get("free_tickets_won") or 0)
+        fv_total = free_ticket_cash_value(rd.get("lottery_type"), ftw) if ftw > 0 else 0.0
         if ftw > 0 and rd.get("my_stake") and rd.get("pool"):
-            fv_total = free_ticket_cash_value(rd.get("lottery_type"), ftw)
             rd["my_free_won"] = round((rd["my_stake"] / rd["pool"]) * fv_total, 2)
         else:
             rd["my_free_won"] = 0
         rd["free_tickets_won"] = ftw
+        rd["free_value_total"] = round(fv_total, 2)
+        rd["total_prize"] = round(float(rd.get("total_prize") or 0), 2)
         saved = parse_round_tickets(rd.get("round_tickets"), rd.get("lottery_type"))
         ticket_images = [t["image"] for t in saved if t.get("image")]
         if not ticket_images and rd.get("ticket_image"):
