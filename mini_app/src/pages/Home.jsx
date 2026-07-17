@@ -515,57 +515,7 @@ export default function Home({ user, onUserUpdate }) {
 
   return (
     <div className="tab-content">
-      <div className="home-trustee">
-        {trusteeName ? (
-          <>
-            <TelegramAvatar user={user.trustee} size={44} />
-            <div className="col gap-2 grow" style={{ minWidth: 0 }}>
-              <span className="home-trustee-label">Your trustee</span>
-              <span className="home-trustee-name">{trusteeName}</span>
-              {groupName && (
-                <span className="home-trustee-group">{groupName}</span>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="col gap-2 grow" style={{ minWidth: 0 }}>
-            <span className="home-trustee-label">Your group</span>
-            <span className="home-trustee-name">{groupName || 'LottoChee'}</span>
-          </div>
-        )}
-        <button
-          type="button"
-          className="home-trustee-balance chip chip-money"
-          onClick={() => navigate('/topup')}
-        >
-          <WalletIcon width={13} height={13} />
-          <span className="mono">{fmtCAD(user.credit ?? 0)}</span>
-        </button>
-      </div>
-
-      {/* Live rounds — swipe deck */}
-      {liveRounds === undefined ? (
-        <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
-      ) : liveRounds.length === 0 ? (
-        <div className="home-empty-wrap">
-          <div className="jackpot home-empty">
-            <div className="home-empty-icon">🎰</div>
-            <p className="home-empty-title">No active round</p>
-            <p className="home-empty-sub">The trustee will open one soon!</p>
-          </div>
-        </div>
-      ) : (
-        <LiveRoundDeck
-          rounds={liveRounds}
-          index={roundIndex}
-          onIndexChange={setRoundIndex}
-          renderCard={(r, peek) => (
-            <LiveRoundCard round={r} peek={peek} onJoin={() => setJoin(true)} />
-          )}
-        />
-      )}
-
-      {/* Wallet — add credit */}
+      {/* Balance — add credit (top) */}
       <div className="stack" style={{ marginTop: 10 }}>
         <div className="card" style={{
           background: 'linear-gradient(135deg, rgba(78,208,122,.12), rgba(46,166,255,.08))',
@@ -597,6 +547,28 @@ export default function Home({ user, onUserUpdate }) {
           </div>
         </div>
       </div>
+
+      {/* Live rounds — swipe deck */}
+      {liveRounds === undefined ? (
+        <div style={{ padding: '40px 0', display: 'flex', justifyContent: 'center' }}><div className="spinner" /></div>
+      ) : liveRounds.length === 0 ? (
+        <div className="home-empty-wrap">
+          <div className="jackpot home-empty">
+            <div className="home-empty-icon">🎰</div>
+            <p className="home-empty-title">No active round</p>
+            <p className="home-empty-sub">The trustee will open one soon!</p>
+          </div>
+        </div>
+      ) : (
+        <LiveRoundDeck
+          rounds={liveRounds}
+          index={roundIndex}
+          onIndexChange={setRoundIndex}
+          renderCard={(r, peek) => (
+            <LiveRoundCard round={r} peek={peek} onJoin={() => setJoin(true)} />
+          )}
+        />
+      )}
 
       {/* Latest round results — this group's win for the most recent drawn round */}
       {lastDrawn && (() => {
@@ -665,6 +637,30 @@ export default function Home({ user, onUserUpdate }) {
         onActiveGroupChange={reloadLive}
         showToast={showToast}
       />
+
+      {/* Trustee — moved to the end */}
+      <div className="section"><div className="label">{trusteeName ? 'Your trustee' : 'Your group'}</div></div>
+      <div className="stack" style={{ marginBottom: 12 }}>
+        <div className="home-trustee" style={{ margin: 0 }}>
+          {trusteeName ? (
+            <>
+              <TelegramAvatar user={user.trustee} size={44} />
+              <div className="col gap-2 grow" style={{ minWidth: 0 }}>
+                <span className="home-trustee-label">Your trustee</span>
+                <span className="home-trustee-name">{trusteeName}</span>
+                {groupName && (
+                  <span className="home-trustee-group">{groupName}</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="col gap-2 grow" style={{ minWidth: 0 }}>
+              <span className="home-trustee-label">Your group</span>
+              <span className="home-trustee-name">{groupName || 'LottoChee'}</span>
+            </div>
+          )}
+        </div>
+      </div>
 
       <JoinSheet
         open={join}
