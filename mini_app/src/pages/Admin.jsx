@@ -1575,6 +1575,7 @@ const EMPTY_NOTIFICATION_RULE = {
   threshold: '5',
   message: 'Hi {name}, your credit is ${credit}. Please increase your credit.',
   text_direction: 'auto',
+  language: 'en',
   enabled: true,
 }
 
@@ -1593,6 +1594,23 @@ const NOTIFICATION_FORMATS = [
   { tag: 'code', label: '</>', title: 'Code', sample: 'code' },
   { tag: 'tg-spoiler', label: 'Spoiler', title: 'Spoiler', sample: 'hidden text' },
   { tag: 'blockquote', label: 'Quote', title: 'Quote', sample: 'quoted text' },
+]
+
+const NOTIFICATION_LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'fa', label: 'فارسی' },
+  { value: 'fr', label: 'Français' },
+]
+const NOTIFICATION_AI_TONES = [
+  { value: 'friendly', label: 'Friendly' },
+  { value: 'fun', label: 'Fun' },
+  { value: 'professional', label: 'Professional' },
+  { value: 'urgent', label: 'Urgent' },
+]
+const NOTIFICATION_AI_LENGTHS = [
+  { value: 'short', label: 'Short' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'detailed', label: 'Detailed' },
 ]
 
 function NotificationMessageEditor({ value, onChange, direction, onDirectionChange, placeholders }) {
@@ -1670,6 +1688,7 @@ function NotificationsTab({ showToast }) {
   const [form, setForm] = useState({ ...EMPTY_NOTIFICATION_RULE })
   const [editingId, setEditingId] = useState(null)
   const [busy, setBusy] = useState({})
+  const [aiOptions, setAiOptions] = useState({ tone: 'fun', length: 'short' })
 
   const load = useCallback(() => api.admin.notificationRules()
     .then(d => { setRules(d.rules || []); setEvents(d.events || []) })
@@ -1695,6 +1714,7 @@ function NotificationsTab({ showToast }) {
       threshold: String(rule.threshold),
       message: rule.message,
       text_direction: rule.text_direction || 'auto',
+      language: rule.language || 'en',
       enabled: !!rule.enabled,
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1756,6 +1776,39 @@ function NotificationsTab({ showToast }) {
       await load()
     } catch (e) { showToast(e.message, 'error') }
     finally { setB(`delete-${rule.id}`, false) }
+  }
+
+  function selectLanguage(language) {
+    setForm(p => ({
+      ...p,
+      language,
+      text_direction: language === 'fa' ? 'rtl' : 'ltr',
+    }))
+  }
+
+  async function generateWithAI() {
+    setB('ai', true)
+    try {
+      const result = await api.admin.generateNotificationRule({
+        trigger_type: form.trigger_type,
+        event_key: form.event_key,
+        condition_field: form.condition_field,
+        operator: form.operator,
+        threshold: Number(form.threshold),
+        language: form.language || 'en',
+        tone: aiOptions.tone,
+        length: aiOptions.length,
+        text_direction: form.text_direction || 'auto',
+      })
+      setForm(p => ({
+        ...p,
+        message: result.message,
+        language: result.language || p.language,
+        text_direction: result.text_direction || p.text_direction,
+      }))
+      showToast('AI notification created — review it before saving', 'success')
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setB('ai', false) }
   }
 
   const selectedEvent = events.find(event => event.value === form.event_key)
@@ -1844,6 +1897,30 @@ function NotificationsTab({ showToast }) {
 
         <div style={{ borderRadius: 12, padding: 12, background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.22)' }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: 'var(--money)', marginBottom: 8 }}>THEN · SEND TELEGRAM MESSAGE</div>
+          <div style={{ borderRadius: 10, padding: 10, marginBottom: 10, background: 'var(--surface-2)', border: '.5px solid var(--hairline)' }}>
+            <div className="row between" style={{ marginBottom: 8, alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 750 }}>✨ AI notification creator</div>
+                <div style={{ fontSize: 11, color: 'var(--tx-3)', marginTop: 2 }}>Uses the selected WHEN model and its dynamic items</div>
+              </div>
+              <button type="button" className="btn btn-primary btn-sm" disabled={busy.ai} onClick={generateWithAI}>
+                {busy.ai ? 'Creating…' : 'Create with AI'}
+              </button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+              <select className="input" value={form.language || 'en'} onChange={e => selectLanguage(e.target.value)}>
+                {NOTIFICATION_LANGUAGES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+              <select className="input" value={aiOptions.tone}
+                onChange={e => setAiOptions(p => ({ ...p, tone: e.target.value }))}>
+                {NOTIFICATION_AI_TONES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+              <select className="input" value={aiOptions.length}
+                onChange={e => setAiOptions(p => ({ ...p, length: e.target.value }))}>
+                {NOTIFICATION_AI_LENGTHS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
+            </div>
+          </div>
           <NotificationMessageEditor
             value={form.message}
             onChange={message => setForm(p => ({ ...p, message }))}
@@ -1893,7 +1970,7 @@ function NotificationsTab({ showToast }) {
             <b>THEN</b> {rule.message}
           </div>
           <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
-            Direction: {(rule.text_direction || 'auto').toUpperCase()}
+            Language: {(rule.language || 'en').toUpperCase()} · Direction: {(rule.text_direction || 'auto').toUpperCase()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
             Sent {Number(rule.sent_count || 0)} time{Number(rule.sent_count || 0) === 1 ? '' : 's'}

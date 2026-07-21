@@ -254,6 +254,7 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'condition'",
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS event_key TEXT",
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS text_direction TEXT NOT NULL DEFAULT 'auto'",
+    "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'en'",
     """DO $$ BEGIN
          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notification_rules_trigger_type_check') THEN
            ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_trigger_type_check
@@ -270,6 +271,12 @@ _SCHEMA_STATEMENTS = [
          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notification_rules_text_direction_check') THEN
            ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_text_direction_check
              CHECK (text_direction IN ('auto','ltr','rtl'));
+         END IF;
+       END $$""",
+    """DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notification_rules_language_check') THEN
+           ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_language_check
+             CHECK (language IN ('en','fa','fr'));
          END IF;
        END $$""",
     "CREATE INDEX IF NOT EXISTS idx_notification_rules_group_event ON notification_rules (group_id, event_key) WHERE enabled=1 AND trigger_type='event'",

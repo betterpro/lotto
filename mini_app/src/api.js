@@ -213,6 +213,7 @@ export const api = {
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
     broadcast:    (message)       => req('POST', '/api/admin/broadcast', { message }),
     notificationRules: ()        => req('GET', '/api/admin/notification-rules'),
+    generateNotificationRule: (body) => req('POST', '/api/admin/notification-rules/generate', body),
     createNotificationRule: (body) => req('POST', '/api/admin/notification-rules', body),
     updateNotificationRule: (id, body) => req('PATCH', `/api/admin/notification-rules/${id}`, body),
     deleteNotificationRule: (id) => req('DELETE', `/api/admin/notification-rules/${id}`),
