@@ -71,7 +71,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             is_platform_admin=is_platform,
         )
         if slug:
-            await join_group_by_slug(conn, user.id, slug)
+            err, joined_group, membership_created = await join_group_by_slug(conn, user.id, slug)
+            notify_join = ctx.bot_data.get("notify_new_group_membership")
+            if not err and joined_group and membership_created and notify_join:
+                await notify_join(conn, dict(joined_group), user.id)
         if group_name:
             welcome = (
                 f"👋 Welcome, *{user.first_name}*!\n\n"
@@ -87,9 +90,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         welcome = f"👋 Welcome back, *{user.first_name}*!"
         if slug:
-            err, joined = await join_group_by_slug(conn, user.id, slug)
-            if not err and joined:
-                welcome = f"👋 Welcome! You've joined *{joined['name']}*."
+            err, joined_group, membership_created = await join_group_by_slug(conn, user.id, slug)
+            if not err and joined_group:
+                welcome = f"👋 Welcome! You've joined *{joined_group['name']}*."
+                notify_join = ctx.bot_data.get("notify_new_group_membership")
+                if membership_created and notify_join:
+                    await notify_join(conn, dict(joined_group), user.id)
             elif err:
                 welcome += f"\n\n⚠️ {err}"
 

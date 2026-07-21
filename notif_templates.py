@@ -57,6 +57,43 @@ NOTIF_TEMPLATES: dict[str, dict] = {
         ),
         "sample": {"name": "Alex", "rid": 12, "pool": "150"},
     },
+    "member_joined": {
+        "label": "New member joined",
+        "desc": "Welcomes a new member to the group and energizes the community.",
+        "default": (
+            "🎉 <b>{name} joined {group}!</b>\n"
+            "We’re now <b>{member_count}</b> members strong — welcome to the crew! 🙌"
+        ),
+        "sample": {"name": "Alex", "group": "Friday Office Pool", "member_count": 14},
+    },
+    "invite_friends": {
+        "label": "Invite your friends",
+        "desc": "Prompts a newly joined member to grow the group using its invite link.",
+        "default": (
+            "🙌 <b>Welcome to {group}, {name}!</b>\n"
+            "Lottery pools are more fun together. Invite your friends to join the group:\n"
+            "{invite_link}\n"
+            "Join code: <code>{join_code}</code>"
+        ),
+        "sample": {
+            "name": "Alex", "group": "Friday Office Pool",
+            "invite_link": "https://t.me/LottoCheeBot?startapp=join_friday-office-pool",
+            "join_code": "CHEE-4821",
+        },
+    },
+    "contribution_momentum": {
+        "label": "Contribution momentum",
+        "desc": "Encourages members who have not added shares after activity in an open round.",
+        "default": (
+            "🔥 <b>{name} just added shares to {lotto_name} Round #{rid}!</b>\n"
+            "The pool is now <b>${pool}</b>. Keep the momentum going with a "
+            "<b>${price}</b> share when you’re ready. 🍀"
+        ),
+        "sample": {
+            "name": "Alex", "lotto_name": "Lotto Max", "rid": 12,
+            "pool": "150", "price": "5",
+        },
+    },
     "auto_joined": {
         "label": "Auto-joined a round",
         "desc": "Confirms an auto-participate entry was placed.",
@@ -195,6 +232,9 @@ VAR_HELP: dict[str, str] = {
     "pct": "member's share (%)",
     "group": "group name",
     "message": "the message the trustee typed",
+    "member_count": "current number of members in the group",
+    "invite_link": "shareable Telegram group invite link",
+    "join_code": "group join code",
 }
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")

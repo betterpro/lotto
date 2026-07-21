@@ -276,12 +276,15 @@ def _init_start_param(params: dict) -> str | None:
 
 async def _assign_group_from_slug(db, telegram_id: int, slug: str) -> str | None:
     """Add group membership from invite slug. Returns error message or None on success."""
-    err, _group = await join_group_by_slug(db, telegram_id, slug)
+    err, group, joined = await join_group_by_slug(db, telegram_id, slug)
+    if not err and group and joined:
+        await _notify_new_group_membership(db, dict(group), telegram_id)
     return err
 
 
 async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
     """Load or create user from Telegram user dict; optional invite slug join."""
+    joined_group = None
     row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
     user = await row.fetchone()
     if user is None:
@@ -309,10 +312,13 @@ async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
         )
         if group_id and invite_g:
             role = "trustee" if invite_g["trustee_user_id"] == tg["id"] else "member"
-            await add_group_member(db, group_id, tg["id"], role)
+            if await add_group_member(db, group_id, tg["id"], role):
+                joined_group = dict(invite_g)
         await db.commit()
         row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
         user = await row.fetchone()
+        if joined_group:
+            await _notify_new_group_membership(db, joined_group, tg["id"])
     elif invite_slug:
         err = await _assign_group_from_slug(db, tg["id"], invite_slug)
         if err:
@@ -466,6 +472,7 @@ def _apply_text_direction(text: str, direction: str) -> str:
 # trustee, or the whole group), so a rule can never widen its own audience.
 _NOTIFICATION_EVENT_KEYS = (
     "new_round", "round_closing", "round_closed_trustee", "contribution",
+    "member_joined", "invite_friends", "contribution_momentum",
     "auto_joined", "auto_join_skipped", "etransfer_received",
     "ticket_purchased", "draw_reminder", "free_tickets",
     "results_auto_win", "results_auto_nowin", "you_won", "results_no_prize",
@@ -475,6 +482,9 @@ _EVENT_RECIPIENTS = {
     "round_closing": "Members who have not joined",
     "round_closed_trustee": "Group trustee",
     "contribution": "Other round participants",
+    "member_joined": "Existing group members",
+    "invite_friends": "Newly joined member",
+    "contribution_momentum": "Members who have not joined the round",
     "auto_joined": "Affected member",
     "auto_join_skipped": "Affected member",
     "etransfer_received": "Affected member",
@@ -488,6 +498,7 @@ _EVENT_RECIPIENTS = {
 }
 _LOTTERY_EVENT_KEYS = {
     "new_round", "round_closing", "round_closed_trustee", "contribution",
+    "contribution_momentum",
     "auto_joined", "auto_join_skipped", "ticket_purchased", "draw_reminder",
     "free_tickets", "results_auto_win", "results_auto_nowin", "you_won",
     "results_no_prize",
@@ -506,6 +517,19 @@ _AI_EVENT_GUIDANCE = {
     ),
     "round_closing": "Members join by buying shares, not tickets. Urgency is appropriate because this round is closing.",
     "contribution": "Describe the member buying or adding shares; never say they bought a ticket.",
+    "member_joined": (
+        "Celebrate the named member joining the group. Keep it warm and communal; "
+        "do not claim that they contributed or bought shares yet."
+    ),
+    "invite_friends": (
+        "Invite the newly joined member to share {invite_link} or {join_code}. "
+        "Keep it friendly and optional, with no promises about winning."
+    ),
+    "contribution_momentum": (
+        "Write an energetic but responsible nudge for a member who has not joined "
+        "the round yet. Say that {name} added shares, use {pool} and {price} only "
+        "as factual values, never promise a win, and avoid pressure or fake scarcity."
+    ),
     "auto_joined": "Confirm that shares were purchased automatically; do not say the member bought a ticket.",
     "auto_join_skipped": "Explain that automatic share purchase was skipped; do not tell the member to buy a ticket.",
     "ticket_purchased": "The group or trustee purchased the official lottery ticket; do not imply the member personally bought it.",
@@ -932,6 +956,53 @@ async def _notify_model(db, telegram_id: int, event_key: str, group_id: int | No
     return delivered
 
 
+async def _notify_new_group_membership(db, group: dict, member_id: int) -> None:
+    """Emit the social notifications for a genuinely new member membership."""
+    gid = group["id"]
+    if group.get("trustee_user_id") == member_id:
+        return
+
+    user_cur = await db.execute(
+        "SELECT full_name, username FROM users WHERE telegram_id=?", (member_id,),
+    )
+    member = await user_cur.fetchone()
+    if not member:
+        return
+    name = member.get("full_name") or member.get("username") or "A new member"
+    group_name = group.get("name") or "the group"
+    count_cur = await db.execute(
+        "SELECT COUNT(*) AS total FROM group_members WHERE group_id=?", (gid,),
+    )
+    count_row = await count_cur.fetchone()
+    member_count = int(count_row["total"] if count_row else 1)
+    event_ref = f"group:{gid}:member:{member_id}"
+
+    recipients_cur = await db.execute(
+        """SELECT u.telegram_id FROM users u
+           JOIN group_members gm ON gm.user_id=u.telegram_id AND gm.group_id=?
+           LEFT JOIN user_settings s ON s.user_id=u.telegram_id
+           WHERE u.telegram_id != ? AND COALESCE(s.notif_contribution, 1)=1""",
+        (gid, member_id),
+    )
+    for recipient in await recipients_cur.fetchall():
+        await _notify_model(
+            db, recipient["telegram_id"], "member_joined", gid, event_ref,
+            name=html.escape(name), group=html.escape(group_name),
+            member_count=member_count,
+        )
+
+    join_code = await ensure_join_code(db, group)
+    invite_link = (
+        f"https://t.me/{_bot_username}?startapp=join_{group['slug']}"
+        if _bot_username else config.MINI_APP_URL
+    )
+    await _notify_model(
+        db, member_id, "invite_friends", gid, event_ref,
+        name=html.escape(name), group=html.escape(group_name),
+        invite_link=html.escape(invite_link or ""), join_code=html.escape(join_code),
+    )
+
+
 async def _evaluate_rules_for_user_safely(db, user_id: int) -> None:
     """Evaluate immediately after credit changes; the background scan is fallback."""
     try:
@@ -1047,7 +1118,9 @@ async def _notify_all(db, text: str, setting_col: str | None = None,
             await _notify(row["telegram_id"], text)
 
 
-async def _notify_round_contribution(db, round_d: dict, contributor: dict):
+async def _notify_round_contribution(
+    db, round_d: dict, contributor: dict, *, new_participant: bool = False,
+):
     """Tell the round's other participants that a member added to the pool."""
     rid = round_d.get("group_seq") or round_d["id"]
     name = contributor.get("full_name") or contributor.get("username") or "A member"
@@ -1068,6 +1141,35 @@ async def _notify_round_contribution(db, round_d: dict, contributor: dict):
             db, row["user_id"], "contribution", round_d.get("group_id"),
             f"round:{round_d['id']}:member:{contributor['telegram_id']}:pool:{pool:.2f}",
             **context,
+        )
+
+    # Send one broader momentum nudge per round: only the first member's first
+    # contribution can trigger it, and only members still outside the round see it.
+    if not new_participant or round_d.get("group_id") is None:
+        return
+    count_cur = await db.execute(
+        "SELECT COUNT(*) AS total FROM participations WHERE round_id=?",
+        (round_d["id"],),
+    )
+    count_row = await count_cur.fetchone()
+    if not count_row or int(count_row["total"]) != 1:
+        return
+    context["price"] = f"{float(round_d.get('price_per_share') or 5):.0f}"
+    members_cur = await db.execute(
+        """SELECT u.telegram_id FROM users u
+           JOIN group_members gm ON gm.user_id=u.telegram_id AND gm.group_id=?
+           LEFT JOIN user_settings s ON s.user_id=u.telegram_id
+           WHERE COALESCE(s.notif_contribution, 1)=1
+             AND NOT EXISTS (
+                 SELECT 1 FROM participations p
+                 WHERE p.round_id=? AND p.user_id=u.telegram_id
+             )""",
+        (round_d["group_id"], round_d["id"]),
+    )
+    for row in await members_cur.fetchall():
+        await _notify_model(
+            db, row["telegram_id"], "contribution_momentum",
+            round_d["group_id"], f"round:{round_d['id']}", **context,
         )
 
 
@@ -1713,6 +1815,7 @@ async def lifespan(app: FastAPI):
         os.environ["MINI_APP_URL"] = render_url
         config.MINI_APP_URL = render_url
     _ptb_app = build_application()
+    _ptb_app.bot_data["notify_new_group_membership"] = _notify_new_group_membership
     await _ptb_app.initialize()
     await _ptb_app.start()
     try:
@@ -1934,10 +2037,12 @@ async def api_group_join(request: Request):
     slug = (body.get("slug") or "").strip().lower()
     if not slug:
         raise HTTPException(400, "slug required")
-    err, _group = await join_group_by_slug(db, user["telegram_id"], slug)
+    err, group, joined = await join_group_by_slug(db, user["telegram_id"], slug)
     if err:
         await db.close()
         raise HTTPException(400, err)
+    if joined:
+        await _notify_new_group_membership(db, dict(group), user["telegram_id"])
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     ctx = await enrich_user_context(db, dict(row))
@@ -2029,10 +2134,12 @@ async def api_group_join_code(request: Request):
     if not code:
         await db.close()
         raise HTTPException(400, "Enter a join code")
-    err, group = await join_group_by_code(db, user["telegram_id"], code)
+    err, group, joined = await join_group_by_code(db, user["telegram_id"], code)
     if err:
         await db.close()
         raise HTTPException(400, err)
+    if joined:
+        await _notify_new_group_membership(db, dict(group), user["telegram_id"])
     cur = await db.execute("SELECT * FROM users WHERE telegram_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
     ctx = await enrich_user_context(db, dict(row))
@@ -2876,7 +2983,7 @@ async def api_participate(request: Request):
     my = await cur.fetchone()
     my_pct = round((my["amount"] / pool) * 100, 1) if my and pool else 0
     round_d["pool"] = pool
-    await _notify_round_contribution(db, round_d, user)
+    await _notify_round_contribution(db, round_d, user, new_participant=not bool(existing))
     await db.close()
     return {"ok": True, "my_pct": my_pct}
 

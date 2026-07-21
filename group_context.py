@@ -157,13 +157,16 @@ async def user_in_group(db, user_id: int, group_id: int) -> bool:
     return await cur.fetchone() is not None
 
 
-async def add_group_member(db, group_id: int, user_id: int, role: str = "member") -> None:
-    await db.execute(
+async def add_group_member(db, group_id: int, user_id: int, role: str = "member") -> bool:
+    """Add a membership and report whether this call created it."""
+    cur = await db.execute(
         """INSERT INTO group_members (group_id, user_id, role)
            VALUES (?, ?, ?)
-           ON CONFLICT (group_id, user_id) DO NOTHING""",
+           ON CONFLICT (group_id, user_id) DO NOTHING
+           RETURNING user_id""",
         (group_id, user_id, role),
     )
+    return await cur.fetchone() is not None
 
 
 async def get_user_groups(db, user_id: int) -> list[dict]:
@@ -210,15 +213,15 @@ async def ensure_active_group_id(db, user: dict) -> int | None:
     return gid
 
 
-async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | None, dict | None]:
-    """Add membership; set active group if user has none. Returns (error, group_row)."""
+async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | None, dict | None, bool]:
+    """Add membership; return (error, group row, membership_was_created)."""
     group = await get_group_by_slug(db, slug)
     if not group:
-        return "Invalid invite link", None
+        return "Invalid invite link", None, False
     if group["status"] != "active":
-        return "This group is not accepting members", None
+        return "This group is not accepting members", None, False
     role = "trustee" if group["trustee_user_id"] == telegram_id else "member"
-    await add_group_member(db, group["id"], telegram_id, role)
+    joined = await add_group_member(db, group["id"], telegram_id, role)
     cur = await db.execute("SELECT group_id FROM users WHERE telegram_id = ?", (telegram_id,))
     row = await cur.fetchone()
     if not row or not row["group_id"]:
@@ -227,18 +230,18 @@ async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | Non
             (group["id"], telegram_id),
         )
     await db.commit()
-    return None, group
+    return None, group, joined
 
 
-async def join_group_by_code(db, telegram_id: int, code: str) -> tuple[str | None, dict | None]:
-    """Add membership via a group join code. Returns (error, group_row)."""
+async def join_group_by_code(db, telegram_id: int, code: str) -> tuple[str | None, dict | None, bool]:
+    """Add membership via code; return (error, group row, membership_was_created)."""
     group = await get_group_by_join_code(db, code)
     if not group:
-        return "That code didn’t match any group. Check it with your trustee.", None
+        return "That code didn’t match any group. Check it with your trustee.", None, False
     if group["status"] != "active":
-        return "This group is not accepting members", None
+        return "This group is not accepting members", None, False
     role = "trustee" if group["trustee_user_id"] == telegram_id else "member"
-    await add_group_member(db, group["id"], telegram_id, role)
+    joined = await add_group_member(db, group["id"], telegram_id, role)
     cur = await db.execute("SELECT group_id FROM users WHERE telegram_id = ?", (telegram_id,))
     row = await cur.fetchone()
     if not row or not row["group_id"]:
@@ -247,7 +250,7 @@ async def join_group_by_code(db, telegram_id: int, code: str) -> tuple[str | Non
             (group["id"], telegram_id),
         )
     await db.commit()
-    return None, group
+    return None, group, joined
 
 
 async def enrich_user_context(db, user: dict) -> dict:
