@@ -1574,6 +1574,7 @@ const EMPTY_NOTIFICATION_RULE = {
   operator: 'lt',
   threshold: '5',
   message: 'Hi {name}, your credit is ${credit}. Please increase your credit.',
+  text_direction: 'auto',
   enabled: true,
 }
 
@@ -1582,6 +1583,85 @@ const NOTIFICATION_OPERATOR_LABELS = {
   lte: 'is at most',
   gt: 'is greater than',
   gte: 'is at least',
+}
+
+const NOTIFICATION_FORMATS = [
+  { tag: 'b', label: 'B', title: 'Bold', sample: 'bold text' },
+  { tag: 'i', label: 'I', title: 'Italic', sample: 'italic text' },
+  { tag: 'u', label: 'U', title: 'Underline', sample: 'underlined text' },
+  { tag: 's', label: 'S', title: 'Strikethrough', sample: 'strikethrough text' },
+  { tag: 'code', label: '</>', title: 'Code', sample: 'code' },
+  { tag: 'tg-spoiler', label: 'Spoiler', title: 'Spoiler', sample: 'hidden text' },
+  { tag: 'blockquote', label: 'Quote', title: 'Quote', sample: 'quoted text' },
+]
+
+function NotificationMessageEditor({ value, onChange, direction, onDirectionChange, placeholders }) {
+  const textareaRef = useRef(null)
+
+  function replaceSelection(before, after = '', sample = '') {
+    const input = textareaRef.current
+    const start = input?.selectionStart ?? value.length
+    const end = input?.selectionEnd ?? start
+    const selected = value.slice(start, end) || sample
+    const next = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`
+    onChange(next)
+    const cursorStart = start + before.length
+    const cursorEnd = cursorStart + selected.length
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(cursorStart, cursorEnd)
+    })
+  }
+
+  function insertDynamic(key) {
+    if (!key) return
+    const input = textareaRef.current
+    const start = input?.selectionStart ?? value.length
+    const end = input?.selectionEnd ?? start
+    const token = `{${key}}`
+    onChange(`${value.slice(0, start)}${token}${value.slice(end)}`)
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+      textareaRef.current?.setSelectionRange(start + token.length, start + token.length)
+    })
+  }
+
+  return (
+    <div className="col gap-8">
+      <div className="row gap-6" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        {NOTIFICATION_FORMATS.map(format => (
+          <button key={format.tag} type="button" className="btn btn-ghost btn-sm"
+            title={format.title}
+            style={{ minWidth: format.label.length > 2 ? 58 : 36, fontWeight: format.tag === 'b' ? 800 : undefined,
+              fontStyle: format.tag === 'i' ? 'italic' : undefined,
+              textDecoration: format.tag === 'u' ? 'underline' : format.tag === 's' ? 'line-through' : undefined }}
+            onClick={() => replaceSelection(`<${format.tag}>`, `</${format.tag}>`, format.sample)}>
+            {format.label}
+          </button>
+        ))}
+      </div>
+
+      <textarea ref={textareaRef} className="input" rows={6} maxLength={3500}
+        dir={direction === 'auto' ? 'auto' : direction}
+        value={value} onChange={e => onChange(e.target.value)}
+        style={{ resize: 'vertical', lineHeight: 1.55, textAlign: direction === 'rtl' ? 'right' : direction === 'ltr' ? 'left' : 'start' }} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(120px, .55fr)', gap: 8 }}>
+        <select className="input" value="" onChange={e => insertDynamic(e.target.value)}>
+          <option value="">Insert dynamic value…</option>
+          {placeholders.map(key => <option key={key} value={key}>{`{${key}}`}</option>)}
+        </select>
+        <select className="input" value={direction} onChange={e => onDirectionChange(e.target.value)}>
+          <option value="auto">Direction: Auto</option>
+          <option value="ltr">Direction: LTR</option>
+          <option value="rtl">Direction: RTL</option>
+        </select>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.45 }}>
+        Select text before choosing a format. Dynamic values are inserted at the cursor. Telegram formatting is validated before saving.
+      </div>
+    </div>
+  )
 }
 
 function NotificationsTab({ showToast }) {
@@ -1614,6 +1694,7 @@ function NotificationsTab({ showToast }) {
       operator: rule.operator,
       threshold: String(rule.threshold),
       message: rule.message,
+      text_direction: rule.text_direction || 'auto',
       enabled: !!rule.enabled,
     })
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1763,17 +1844,13 @@ function NotificationsTab({ showToast }) {
 
         <div style={{ borderRadius: 12, padding: 12, background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.22)' }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: 'var(--money)', marginBottom: 8 }}>THEN · SEND TELEGRAM MESSAGE</div>
-          <textarea className="input" rows={4} maxLength={3500} value={form.message}
-            onChange={e => setForm(p => ({ ...p, message: e.target.value }))}
-            style={{ resize: 'vertical', lineHeight: 1.5 }} />
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-            {placeholders.map(key => (
-              <button key={key} type="button" className="chip" style={{ cursor: 'pointer' }}
-                onClick={() => setForm(p => ({ ...p, message: `${p.message}{${key}}` }))}>
-                {`{${key}}`}
-              </button>
-            ))}
-          </div>
+          <NotificationMessageEditor
+            value={form.message}
+            onChange={message => setForm(p => ({ ...p, message }))}
+            direction={form.text_direction || 'auto'}
+            onDirectionChange={text_direction => setForm(p => ({ ...p, text_direction }))}
+            placeholders={placeholders}
+          />
         </div>
 
         <label className="row between" style={{ cursor: 'pointer', padding: '2px 0' }}>
@@ -1810,8 +1887,13 @@ function NotificationsTab({ showToast }) {
               ? (events.find(event => event.value === rule.event_key)?.label || rule.event_key)
               : <>member credit {NOTIFICATION_OPERATOR_LABELS[rule.operator]} <span className="mono">{fmtCAD(rule.threshold)}</span></>}
           </div>
-          <div style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+          <div dir={(rule.text_direction || 'auto') === 'auto' ? 'auto' : rule.text_direction}
+            style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap',
+              textAlign: rule.text_direction === 'rtl' ? 'right' : rule.text_direction === 'ltr' ? 'left' : 'start' }}>
             <b>THEN</b> {rule.message}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
+            Direction: {(rule.text_direction || 'auto').toUpperCase()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
             Sent {Number(rule.sent_count || 0)} time{Number(rule.sent_count || 0) === 1 ? '' : 's'}

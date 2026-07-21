@@ -16,6 +16,7 @@ import math
 import os
 import random
 import re
+from html.parser import HTMLParser
 from string import Formatter
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -401,6 +402,52 @@ _RULE_OPERATORS = {
     "gte": lambda value, threshold: value >= threshold,
 }
 _RULE_PLACEHOLDERS = {"name", "credit", "threshold", "group"}
+_RULE_DIRECTIONS = {"auto", "ltr", "rtl"}
+_TELEGRAM_FORMAT_TAGS = {
+    "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+    "code", "pre", "blockquote", "tg-spoiler",
+}
+
+
+class _TelegramHTMLValidator(HTMLParser):
+    """Validate the safe formatting subset exposed by the admin editor."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in _TELEGRAM_FORMAT_TAGS:
+            raise ValueError(f"Unsupported formatting tag: <{tag}>")
+        if attrs:
+            raise ValueError("Formatting tags cannot contain attributes")
+        self.stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raise ValueError(f"Unsupported self-closing formatting tag: <{tag}/>")
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self.stack or self.stack[-1] != tag:
+            raise ValueError(f"Formatting tag </{tag}> is not correctly nested")
+        self.stack.pop()
+
+    def finish(self) -> None:
+        self.close()
+        if self.stack:
+            raise ValueError(f"Formatting tag <{self.stack[-1]}> is not closed")
+
+
+def _validate_telegram_html(message: str) -> None:
+    validator = _TelegramHTMLValidator()
+    validator.feed(message)
+    validator.finish()
+
+
+def _apply_text_direction(text: str, direction: str) -> str:
+    if direction not in {"ltr", "rtl"}:
+        return text
+    mark = "\u200e" if direction == "ltr" else "\u200f"
+    return mark + text.replace("\n", "\n" + mark)
 
 # Every automated built-in notification is available as an event trigger. The
 # recipient is inherited from the operational flow (member, participants,
@@ -462,13 +509,17 @@ def _validate_rule_message(message: str, allowed_placeholders: set[str]) -> str:
                 raise HTTPException(400, "Placeholder formatting is not supported")
     except ValueError:
         raise HTTPException(400, "Notification text contains unmatched braces")
+    try:
+        _validate_telegram_html(message)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return message
 
 
 def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
     data = dict(current or {})
     for key in ("name", "trigger_type", "event_key", "condition_field", "operator",
-                "threshold", "message", "enabled"):
+                "threshold", "message", "text_direction", "enabled"):
         if key in body:
             data[key] = body[key]
 
@@ -500,6 +551,9 @@ def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
     if not isinstance(enabled_value, (bool, int)):
         raise HTTPException(400, "enabled must be true or false")
     allowed = _event_placeholders(event_key) if event_key else _RULE_PLACEHOLDERS
+    text_direction = str(data.get("text_direction") or "auto").lower()
+    if text_direction not in _RULE_DIRECTIONS:
+        raise HTTPException(400, "Text direction must be auto, left-to-right, or right-to-left")
     return {
         "name": name,
         "trigger_type": trigger_type,
@@ -508,6 +562,7 @@ def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
         "operator": operator,
         "threshold": threshold,
         "message": _validate_rule_message(data.get("message"), allowed),
+        "text_direction": text_direction,
         "enabled": int(bool(enabled_value)),
     }
 
@@ -520,7 +575,8 @@ def _render_rule_message(rule: dict, member: dict, context: dict | None = None) 
         "group": html.escape(str(rule.get("group_name") or "your group")),
     }
     values.update(context or {})
-    return str(rule["message"]).format_map(values)
+    rendered = str(rule["message"]).format_map(values)
+    return _apply_text_direction(rendered, str(rule.get("text_direction") or "auto"))
 
 
 async def _evaluate_notification_rules(db, group_id: int | None = None,
@@ -3107,11 +3163,12 @@ async def admin_create_notification_rule(request: Request):
         cur = await db.execute(
             """INSERT INTO notification_rules
                (group_id, name, trigger_type, event_key, condition_field, operator,
-                threshold, message, enabled, created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+                threshold, message, text_direction, enabled, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
             (group["id"], data["name"], data["trigger_type"], data["event_key"],
              data["condition_field"], data["operator"], data["threshold"],
-             data["message"], data["enabled"], user["telegram_id"]),
+             data["message"], data["text_direction"], data["enabled"],
+             user["telegram_id"]),
         )
         created = await cur.fetchone()
         await db.commit()
@@ -3144,11 +3201,12 @@ async def admin_update_notification_rule(rule_id: int, request: Request):
         await db.execute(
             """UPDATE notification_rules SET
                  name=?, trigger_type=?, event_key=?, condition_field=?, operator=?,
-                 threshold=?, message=?, enabled=?, updated_at=datetime('now')
+                 threshold=?, message=?, text_direction=?, enabled=?, updated_at=datetime('now')
                WHERE id=? AND group_id=?""",
             (data["name"], data["trigger_type"], data["event_key"],
              data["condition_field"], data["operator"], data["threshold"],
-             data["message"], data["enabled"], rule_id, group["id"]),
+             data["message"], data["text_direction"], data["enabled"],
+             rule_id, group["id"]),
         )
         if condition_changed or newly_enabled:
             await db.execute(

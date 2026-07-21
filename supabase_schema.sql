@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS notification_rules (
     trigger_type    TEXT NOT NULL DEFAULT 'condition'
                     CHECK (trigger_type IN ('condition', 'event')),
     event_key       TEXT,
+    text_direction  TEXT NOT NULL DEFAULT 'auto'
+                    CHECK (text_direction IN ('auto', 'ltr', 'rtl')),
     condition_field TEXT NOT NULL DEFAULT 'credit' CHECK (condition_field = 'credit'),
     operator        TEXT NOT NULL DEFAULT 'lt' CHECK (operator IN ('lt', 'lte', 'gt', 'gte')),
     threshold       FLOAT8 NOT NULL CHECK (threshold >= 0),
