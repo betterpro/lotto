@@ -377,10 +377,10 @@ def render_notif(key: str, **vars) -> str:
     return render_template(tmpl, vars)
 
 
-async def _notify(telegram_id: int, text: str):
-    """Send a Telegram message with an Open App button. Silently swallows errors."""
+async def _notify(telegram_id: int, text: str) -> bool:
+    """Send a Telegram message and report whether Telegram accepted it."""
     if _ptb_app is None:
-        return
+        return False
     try:
         await _ptb_app.bot.send_message(
             chat_id=telegram_id,
@@ -388,8 +388,10 @@ async def _notify(telegram_id: int, text: str):
             parse_mode="HTML",
             reply_markup=_open_app_markup(),
         )
+        return True
     except Exception as e:
         log.debug("Notification to %s skipped: %s", telegram_id, e)
+        return False
 
 
 _RULE_OPERATORS = {
