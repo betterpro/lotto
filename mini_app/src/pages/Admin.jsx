@@ -1613,35 +1613,147 @@ const NOTIFICATION_AI_LENGTHS = [
   { value: 'detailed', label: 'Detailed' },
 ]
 
-function NotificationMessageEditor({ value, onChange, direction, onDirectionChange, placeholders }) {
-  const textareaRef = useRef(null)
+const TELEGRAM_EDITOR_TAGS = new Set([
+  'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del',
+  'code', 'pre', 'blockquote', 'tg-spoiler', 'br',
+])
+const TELEGRAM_TAG_MAP = {
+  strong: 'b', em: 'i', ins: 'u', strike: 's', del: 's',
+}
 
-  function replaceSelection(before, after = '', sample = '') {
-    const input = textareaRef.current
-    const start = input?.selectionStart ?? value.length
-    const end = input?.selectionEnd ?? start
-    const selected = value.slice(start, end) || sample
-    const next = `${value.slice(0, start)}${before}${selected}${after}${value.slice(end)}`
-    onChange(next)
-    const cursorStart = start + before.length
-    const cursorEnd = cursorStart + selected.length
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus()
-      textareaRef.current?.setSelectionRange(cursorStart, cursorEnd)
-    })
+function escapeEditorText(text) {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+}
+
+function serializeTelegramNode(node) {
+  if (node.nodeType === Node.TEXT_NODE) return escapeEditorText(node.nodeValue || '')
+  if (node.nodeType !== Node.ELEMENT_NODE) return ''
+  const sourceTag = node.tagName.toLowerCase()
+  const children = [...node.childNodes].map(serializeTelegramNode).join('')
+  if (sourceTag === 'br') return '\n'
+  if (sourceTag === 'div' || sourceTag === 'p') return `${children}\n`
+  const tag = TELEGRAM_TAG_MAP[sourceTag] || sourceTag
+  if (!TELEGRAM_EDITOR_TAGS.has(sourceTag)) return children
+  return `<${tag}>${children}</${tag}>`
+}
+
+function serializeTelegramEditor(editor) {
+  return [...editor.childNodes].map(serializeTelegramNode).join('')
+    .replace(/\n{3,}/g, '\n\n').replace(/\n+$/g, '')
+}
+
+function safeTelegramEditorHtml(value) {
+  if (typeof document === 'undefined') return ''
+  const template = document.createElement('template')
+  template.innerHTML = value || ''
+  for (const element of [...template.content.querySelectorAll('*')]) {
+    const tag = element.tagName.toLowerCase()
+    if (!TELEGRAM_EDITOR_TAGS.has(tag)) {
+      element.replaceWith(document.createTextNode(element.textContent || ''))
+      continue
+    }
+    for (const attr of [...element.attributes]) element.removeAttribute(attr.name)
+  }
+  return template.innerHTML
+}
+
+function FormattedNotificationText({ value, direction = 'auto' }) {
+  return <div dir={direction === 'auto' ? 'auto' : direction}
+    dangerouslySetInnerHTML={{ __html: safeTelegramEditorHtml(value) }} />
+}
+
+function NotificationMessageEditor({ value, onChange, direction, onDirectionChange, placeholders, placeholderHelp = {} }) {
+  const editorRef = useRef(null)
+  const selectionRef = useRef(null)
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || document.activeElement === editor) return
+    const safe = safeTelegramEditorHtml(value)
+    if (editor.innerHTML !== safe) editor.innerHTML = safe
+  }, [value])
+
+  function saveSelection() {
+    const editor = editorRef.current
+    const selection = window.getSelection()
+    if (!editor || !selection?.rangeCount) return
+    const range = selection.getRangeAt(0)
+    if (editor.contains(range.commonAncestorContainer)) selectionRef.current = range.cloneRange()
+  }
+
+  function activeRange() {
+    const editor = editorRef.current
+    if (!editor) return null
+    const selection = window.getSelection()
+    let range = selectionRef.current?.cloneRange()
+    if (!range || !editor.contains(range.commonAncestorContainer)) {
+      range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+    }
+    selection.removeAllRanges()
+    selection.addRange(range)
+    return range
+  }
+
+  function emitChange() {
+    const editor = editorRef.current
+    if (!editor) return
+    const next = serializeTelegramEditor(editor)
+    if (next.length <= 3500) onChange(next)
+    else editor.innerHTML = safeTelegramEditorHtml(value)
+    saveSelection()
+  }
+
+  function applyFormat(format) {
+    const editor = editorRef.current
+    const range = activeRange()
+    if (!editor || !range) return
+    const element = document.createElement(format.tag)
+    if (range.collapsed) element.textContent = format.sample
+    else element.appendChild(range.extractContents())
+    range.insertNode(element)
+    const selection = window.getSelection()
+    range.selectNodeContents(element)
+    selection.removeAllRanges()
+    selection.addRange(range)
+    editor.focus()
+    emitChange()
   }
 
   function insertDynamic(key) {
     if (!key) return
-    const input = textareaRef.current
-    const start = input?.selectionStart ?? value.length
-    const end = input?.selectionEnd ?? start
+    const editor = editorRef.current
+    const range = activeRange()
+    if (!editor || !range) return
     const token = `{${key}}`
-    onChange(`${value.slice(0, start)}${token}${value.slice(end)}`)
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus()
-      textareaRef.current?.setSelectionRange(start + token.length, start + token.length)
-    })
+    range.deleteContents()
+    const text = document.createTextNode(token)
+    range.insertNode(text)
+    range.setStartAfter(text)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection.removeAllRanges()
+    selection.addRange(range)
+    editor.focus()
+    emitChange()
+  }
+
+  function pastePlainText(event) {
+    event.preventDefault()
+    const editor = editorRef.current
+    const range = activeRange()
+    if (!editor || !range) return
+    const text = document.createTextNode(event.clipboardData.getData('text/plain'))
+    range.deleteContents()
+    range.insertNode(text)
+    range.setStartAfter(text)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection.removeAllRanges()
+    selection.addRange(range)
+    editor.focus()
+    emitChange()
   }
 
   return (
@@ -1653,21 +1765,26 @@ function NotificationMessageEditor({ value, onChange, direction, onDirectionChan
             style={{ minWidth: format.label.length > 2 ? 58 : 36, fontWeight: format.tag === 'b' ? 800 : undefined,
               fontStyle: format.tag === 'i' ? 'italic' : undefined,
               textDecoration: format.tag === 'u' ? 'underline' : format.tag === 's' ? 'line-through' : undefined }}
-            onClick={() => replaceSelection(`<${format.tag}>`, `</${format.tag}>`, format.sample)}>
+            onMouseDown={e => e.preventDefault()}
+            onClick={() => applyFormat(format)}>
             {format.label}
           </button>
         ))}
       </div>
 
-      <textarea ref={textareaRef} className="input" rows={6} maxLength={3500}
-        dir={direction === 'auto' ? 'auto' : direction}
-        value={value} onChange={e => onChange(e.target.value)}
-        style={{ resize: 'vertical', lineHeight: 1.55, textAlign: direction === 'rtl' ? 'right' : direction === 'ltr' ? 'left' : 'start' }} />
+      <div ref={editorRef} className="input" contentEditable suppressContentEditableWarning
+        role="textbox" aria-multiline="true" dir={direction === 'auto' ? 'auto' : direction}
+        onInput={emitChange} onPaste={pastePlainText}
+        onMouseUp={saveSelection} onKeyUp={saveSelection} onBlur={saveSelection}
+        style={{ minHeight: 132, height: 'auto', overflowY: 'auto', whiteSpace: 'pre-wrap',
+          lineHeight: 1.55, textAlign: direction === 'rtl' ? 'right' : direction === 'ltr' ? 'left' : 'start' }} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(120px, .55fr)', gap: 8 }}>
         <select className="input" value="" onChange={e => insertDynamic(e.target.value)}>
           <option value="">Insert dynamic value…</option>
-          {placeholders.map(key => <option key={key} value={key}>{`{${key}}`}</option>)}
+          {placeholders.map(key => <option key={key} value={key}>
+            {`{${key}}${placeholderHelp[key] ? ` — ${placeholderHelp[key]}` : ''}`}
+          </option>)}
         </select>
         <select className="input" value={direction} onChange={e => onDirectionChange(e.target.value)}>
           <option value="auto">Direction: Auto</option>
@@ -1676,7 +1793,7 @@ function NotificationMessageEditor({ value, onChange, direction, onDirectionChan
         </select>
       </div>
       <div style={{ fontSize: 11, color: 'var(--tx-3)', lineHeight: 1.45 }}>
-        Select text before choosing a format. Dynamic values are inserted at the cursor. Telegram formatting is validated before saving.
+        The editor shows Telegram formatting directly. Select text before choosing a format; dynamic values are inserted at the cursor.
       </div>
     </div>
   )
@@ -1688,7 +1805,7 @@ function NotificationsTab({ showToast }) {
   const [form, setForm] = useState({ ...EMPTY_NOTIFICATION_RULE })
   const [editingId, setEditingId] = useState(null)
   const [busy, setBusy] = useState({})
-  const [aiOptions, setAiOptions] = useState({ tone: 'fun', length: 'short' })
+  const [aiOptions, setAiOptions] = useState({ tone: 'fun', length: 'short', instructions: '' })
 
   const load = useCallback(() => api.admin.notificationRules()
     .then(d => { setRules(d.rules || []); setEvents(d.events || []) })
@@ -1798,6 +1915,7 @@ function NotificationsTab({ showToast }) {
         language: form.language || 'en',
         tone: aiOptions.tone,
         length: aiOptions.length,
+        instructions: aiOptions.instructions,
         text_direction: form.text_direction || 'auto',
       })
       setForm(p => ({
@@ -1920,6 +2038,11 @@ function NotificationsTab({ showToast }) {
                 {NOTIFICATION_AI_LENGTHS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
               </select>
             </div>
+            <textarea className="input" rows={2} maxLength={600}
+              value={aiOptions.instructions}
+              onChange={e => setAiOptions(p => ({ ...p, instructions: e.target.value }))}
+              placeholder="Extra instructions, e.g. don’t mention the group name or jackpot"
+              style={{ marginTop: 7, resize: 'vertical', lineHeight: 1.45 }} />
           </div>
           <NotificationMessageEditor
             value={form.message}
@@ -1927,6 +2050,7 @@ function NotificationsTab({ showToast }) {
             direction={form.text_direction || 'auto'}
             onDirectionChange={text_direction => setForm(p => ({ ...p, text_direction }))}
             placeholders={placeholders}
+            placeholderHelp={selectedEvent?.placeholder_help || {}}
           />
         </div>
 
@@ -1967,7 +2091,7 @@ function NotificationsTab({ showToast }) {
           <div dir={(rule.text_direction || 'auto') === 'auto' ? 'auto' : rule.text_direction}
             style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap',
               textAlign: rule.text_direction === 'rtl' ? 'right' : rule.text_direction === 'ltr' ? 'left' : 'start' }}>
-            <b>THEN</b> {rule.message}
+            <b>THEN</b> <FormattedNotificationText value={rule.message} direction={rule.text_direction || 'auto'} />
           </div>
           <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
             Language: {(rule.language || 'en').toUpperCase()} · Direction: {(rule.text_direction || 'auto').toUpperCase()}
