@@ -402,8 +402,53 @@ _RULE_OPERATORS = {
 }
 _RULE_PLACEHOLDERS = {"name", "credit", "threshold", "group"}
 
+# Every automated built-in notification is available as an event trigger. The
+# recipient is inherited from the operational flow (member, participants,
+# trustee, or the whole group), so a rule can never widen its own audience.
+_NOTIFICATION_EVENT_KEYS = (
+    "new_round", "round_closing", "round_closed_trustee", "contribution",
+    "auto_joined", "auto_join_skipped", "etransfer_received",
+    "ticket_purchased", "draw_reminder", "free_tickets",
+    "results_auto_win", "results_auto_nowin", "you_won", "results_no_prize",
+)
+_EVENT_RECIPIENTS = {
+    "new_round": "All group members",
+    "round_closing": "Members who have not joined",
+    "round_closed_trustee": "Group trustee",
+    "contribution": "Other round participants",
+    "auto_joined": "Affected member",
+    "auto_join_skipped": "Affected member",
+    "etransfer_received": "Affected member",
+    "ticket_purchased": "Round participants",
+    "draw_reminder": "Round participants",
+    "free_tickets": "Affected member",
+    "results_auto_win": "Round participants",
+    "results_auto_nowin": "Round participants",
+    "you_won": "Affected participant",
+    "results_no_prize": "Affected participant",
+}
 
-def _validate_rule_message(message: str) -> str:
+
+def _event_placeholders(event_key: str) -> set[str]:
+    model = NOTIF_TEMPLATES.get(event_key, {})
+    return _RULE_PLACEHOLDERS | set((model.get("sample") or {}).keys())
+
+
+def _notification_event_catalog() -> list[dict]:
+    return [
+        {
+            "value": key,
+            "label": NOTIF_TEMPLATES[key]["label"],
+            "description": NOTIF_TEMPLATES[key]["desc"],
+            "recipient": _EVENT_RECIPIENTS[key],
+            "placeholders": sorted(_event_placeholders(key)),
+            "default_message": NOTIF_TEMPLATES[key]["default"],
+        }
+        for key in _NOTIFICATION_EVENT_KEYS
+    ]
+
+
+def _validate_rule_message(message: str, allowed_placeholders: set[str]) -> str:
     message = str(message or "").strip()
     if not message:
         raise HTTPException(400, "Notification text is required")
@@ -411,7 +456,7 @@ def _validate_rule_message(message: str) -> str:
         raise HTTPException(400, "Notification text must be 3,500 characters or fewer")
     try:
         for _literal, field, format_spec, conversion in Formatter().parse(message):
-            if field and field not in _RULE_PLACEHOLDERS:
+            if field and field not in allowed_placeholders:
                 raise HTTPException(400, f"Unknown placeholder: {{{field}}}")
             if format_spec or conversion:
                 raise HTTPException(400, "Placeholder formatting is not supported")
@@ -422,21 +467,31 @@ def _validate_rule_message(message: str) -> str:
 
 def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
     data = dict(current or {})
-    for key in ("name", "condition_field", "operator", "threshold", "message", "enabled"):
+    for key in ("name", "trigger_type", "event_key", "condition_field", "operator",
+                "threshold", "message", "enabled"):
         if key in body:
             data[key] = body[key]
 
     name = str(data.get("name") or "").strip()
     if not name or len(name) > 80:
         raise HTTPException(400, "Rule name must be between 1 and 80 characters")
+    trigger_type = str(data.get("trigger_type") or "condition")
+    if trigger_type not in {"condition", "event"}:
+        raise HTTPException(400, "Invalid notification trigger type")
+    event_key = str(data.get("event_key") or "").strip() or None
+    if trigger_type == "event" and event_key not in _NOTIFICATION_EVENT_KEYS:
+        raise HTTPException(400, "Invalid notification event")
+    if trigger_type == "condition":
+        event_key = None
     condition_field = str(data.get("condition_field") or "credit")
     if condition_field != "credit":
-        raise HTTPException(400, "Only member credit rules are currently supported")
+        raise HTTPException(400, "Invalid notification condition")
     operator = str(data.get("operator") or "lt")
     if operator not in _RULE_OPERATORS:
         raise HTTPException(400, "Invalid comparison operator")
     try:
-        threshold = float(data.get("threshold"))
+        threshold = float(data.get("threshold") if data.get("threshold") is not None
+                          else (0 if trigger_type == "event" else None))
     except (TypeError, ValueError):
         raise HTTPException(400, "A valid credit threshold is required")
     if not math.isfinite(threshold) or threshold < 0 or threshold > 1_000_000_000:
@@ -444,23 +499,27 @@ def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
     enabled_value = data.get("enabled", True)
     if not isinstance(enabled_value, (bool, int)):
         raise HTTPException(400, "enabled must be true or false")
+    allowed = _event_placeholders(event_key) if event_key else _RULE_PLACEHOLDERS
     return {
         "name": name,
+        "trigger_type": trigger_type,
+        "event_key": event_key,
         "condition_field": condition_field,
         "operator": operator,
         "threshold": threshold,
-        "message": _validate_rule_message(data.get("message")),
+        "message": _validate_rule_message(data.get("message"), allowed),
         "enabled": int(bool(enabled_value)),
     }
 
 
-def _render_rule_message(rule: dict, member: dict) -> str:
+def _render_rule_message(rule: dict, member: dict, context: dict | None = None) -> str:
     values = {
         "name": html.escape(str(member.get("full_name") or member.get("username") or "member")),
         "credit": f"{float(member.get('credit') or 0):.2f}",
         "threshold": f"{float(rule.get('threshold') or 0):.2f}",
         "group": html.escape(str(rule.get("group_name") or "your group")),
     }
+    values.update(context or {})
     return str(rule["message"]).format_map(values)
 
 
@@ -472,7 +531,7 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
         SELECT r.*, g.name AS group_name
         FROM notification_rules r
         JOIN groups g ON g.id = r.group_id
-        WHERE r.enabled = 1
+        WHERE r.enabled = 1 AND r.trigger_type = 'condition'
     """
     params: list = []
     if group_id is not None:
@@ -573,6 +632,65 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
     return stats
 
 
+async def _notify_model(db, telegram_id: int, event_key: str, group_id: int | None,
+                        event_ref: str, **context) -> bool:
+    """Deliver a built-in model or its group-authored event automation(s)."""
+    default_text = render_notif(event_key, group_id=group_id, **context)
+    if group_id is None or event_key not in _NOTIFICATION_EVENT_KEYS:
+        return await _notify(telegram_id, default_text)
+
+    cur = await db.execute(
+        """SELECT r.*, g.name AS group_name
+           FROM notification_rules r
+           JOIN groups g ON g.id = r.group_id
+           WHERE r.group_id=? AND r.enabled=1
+             AND r.trigger_type='event' AND r.event_key=?
+           ORDER BY r.id""",
+        (group_id, event_key),
+    )
+    rules = [dict(row) for row in await cur.fetchall()]
+    if not rules:
+        return await _notify(telegram_id, default_text)
+
+    user_cur = await db.execute(
+        "SELECT telegram_id, username, full_name, credit FROM users WHERE telegram_id=?",
+        (telegram_id,),
+    )
+    user_row = await user_cur.fetchone()
+    member = dict(user_row) if user_row else {"telegram_id": telegram_id}
+    delivered = False
+    delivery_key = f"{event_key}:{event_ref}"[:240]
+    for rule in rules:
+        rendered = _render_rule_message(rule, member, context)
+        delivery_cur = await db.execute(
+            """INSERT INTO notification_deliveries
+               (rule_id, group_id, user_id, match_cycle, event_key, delivery_key,
+                status, rendered_text)
+               VALUES (?,?,?,0,?,?,?,?)
+               ON CONFLICT (rule_id, user_id, delivery_key) WHERE delivery_key IS NOT NULL
+               DO NOTHING RETURNING id""",
+            (rule["id"], group_id, telegram_id, event_key, delivery_key,
+             "pending", rendered),
+        )
+        delivery = await delivery_cur.fetchone()
+        if not delivery:
+            continue
+        sent = await _notify(telegram_id, rendered)
+        if sent:
+            await db.execute(
+                "UPDATE notification_deliveries SET status='sent', sent_at=datetime('now') WHERE id=?",
+                (delivery["id"],),
+            )
+            delivered = True
+        else:
+            await db.execute(
+                "UPDATE notification_deliveries SET status='failed', error=? WHERE id=?",
+                ("Telegram delivery failed or account is not linked", delivery["id"]),
+            )
+    await db.commit()
+    return delivered
+
+
 async def _evaluate_rules_for_user_safely(db, user_id: int) -> None:
     """Evaluate immediately after credit changes; the background scan is fallback."""
     try:
@@ -652,7 +770,9 @@ async def _upload_ticket_to_storage(
     return f"{config.SUPABASE_URL}/storage/v1/object/public/tickets/{path}"
 
 
-async def _notify_all(db, text: str, setting_col: str | None = None, group_id: int | None = None):
+async def _notify_all(db, text: str, setting_col: str | None = None,
+                      group_id: int | None = None, event_key: str | None = None,
+                      event_ref: str | None = None, event_context: dict | None = None):
     """Notify users in a group, optionally filtering by a user_settings boolean column."""
     if setting_col:
         if group_id is not None:
@@ -679,7 +799,11 @@ async def _notify_all(db, text: str, setting_col: str | None = None, group_id: i
         else:
             cur = await db.execute("SELECT telegram_id FROM users")
     for row in await cur.fetchall():
-        await _notify(row["telegram_id"], text)
+        if event_key and event_ref:
+            await _notify_model(db, row["telegram_id"], event_key, group_id,
+                                event_ref, **(event_context or {}))
+        else:
+            await _notify(row["telegram_id"], text)
 
 
 async def _notify_round_contribution(db, round_d: dict, contributor: dict):
@@ -687,17 +811,20 @@ async def _notify_round_contribution(db, round_d: dict, contributor: dict):
     rid = round_d.get("group_seq") or round_d["id"]
     name = contributor.get("full_name") or contributor.get("username") or "A member"
     pool = float(round_d.get("pool") or 0)
-    text = render_notif("contribution", group_id=round_d.get("group_id"),
-                        name=html.escape(name), rid=rid, pool=f"{pool:.0f}")
+    context = {"name": html.escape(name), "rid": rid, "pool": f"{pool:.0f}"}
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
            WHERE p.round_id = ? AND p.user_id != ?
              AND COALESCE(s.notif_contribution, 1) = 1""",
-        (rid, contributor["telegram_id"]),
+        (round_d["id"], contributor["telegram_id"]),
     )
     for row in await cur.fetchall():
-        await _notify(row["user_id"], text)
+        await _notify_model(
+            db, row["user_id"], "contribution", round_d.get("group_id"),
+            f"round:{round_d['id']}:member:{contributor['telegram_id']}:pool:{pool:.2f}",
+            **context,
+        )
 
 
 async def _notify_round_closed(db, round_id: int):
@@ -726,11 +853,10 @@ async def _notify_round_closed(db, round_id: int):
     pool = float(round_d.get("pool") or 0)
     draw = round_d.get("draw_date")
     draw_str = f" · draw {html.escape(str(draw))}" if draw else ""
-    await _notify(
-        trustee_id,
-        render_notif("round_closed_trustee", group_id=round_d.get("group_id"),
-                     rid=round_d.get("group_seq") or round_id, pool=f"{pool:.0f}",
-                     tickets=tickets, ticket_s="" if tickets == 1 else "s", draw=draw_str),
+    await _notify_model(
+        db, trustee_id, "round_closed_trustee", gid, f"round:{round_id}",
+        rid=round_d.get("group_seq") or round_id, pool=f"{pool:.0f}",
+        tickets=tickets, ticket_s="" if tickets == 1 else "s", draw=draw_str,
     )
 
 
@@ -743,7 +869,6 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
     emoji = "⏰" if hours >= 48 else "⏳"
     jackpot = int(round_d.get("jackpot") or 0)
     jp = f" · <b>${jackpot:,}</b> jackpot" if jackpot else ""
-    text = render_notif("round_closing", group_id=gid, emoji=emoji, rid=rid, hours=hours, jp=jp)
     cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
@@ -756,7 +881,11 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
         (gid, rid),
     )
     for row in await cur.fetchall():
-        await _notify(row["telegram_id"], text)
+        await _notify_model(
+            db, row["telegram_id"], "round_closing", gid,
+            f"round:{round_d['id']}:hours:{hours}",
+            emoji=emoji, rid=rid, hours=hours, jp=jp,
+        )
 
 
 async def _send_round_reminders(db):
@@ -847,9 +976,11 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
 
         # Balance check
         if u["credit"] < amount:
-            await _notify(u["telegram_id"], render_notif(
-                "auto_join_skipped", group_id=group_id, rid=rseq,
-                balance=f"{u['credit']:.2f}", needed=f"{amount:.2f}"))
+            await _notify_model(
+                db, u["telegram_id"], "auto_join_skipped", group_id,
+                f"round:{round_id}:member:{u['telegram_id']}", rid=rseq,
+                balance=f"{u['credit']:.2f}", needed=f"{amount:.2f}",
+            )
             continue
 
         # Already in this round?
@@ -874,9 +1005,12 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
         await db.commit()
         await _evaluate_rules_for_user_safely(db, u["telegram_id"])
         bal = u["credit"] - amount
-        await _notify(u["telegram_id"], render_notif(
-            "auto_joined", group_id=group_id, rid=rseq, shares=shares,
-            share_s="" if shares == 1 else "s", amount=f"{amount:.2f}", balance=f"{bal:.2f}"))
+        await _notify_model(
+            db, u["telegram_id"], "auto_joined", group_id,
+            f"round:{round_id}:member:{u['telegram_id']}", rid=rseq, shares=shares,
+            share_s="" if shares == 1 else "s", amount=f"{amount:.2f}",
+            balance=f"{bal:.2f}",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1074,8 +1208,10 @@ async def _approve_etransfer_deposit(db, dep: dict, receipt: dict) -> bool:
     )
     await db.commit()
     await _evaluate_rules_for_user_safely(db, dep["user_id"])
-    await _notify(dep["user_id"], render_notif("etransfer_received",
-                  group_id=dep.get("group_id"), amount=f"{dep['amount']:.2f}"))
+    await _notify_model(
+        db, dep["user_id"], "etransfer_received", dep.get("group_id"),
+        f"deposit:{dep['id']}", amount=f"{dep['amount']:.2f}",
+    )
     return True
 
 
@@ -1212,8 +1348,6 @@ async def _notify_round_results(db, rd, numbers, bonus, m):
     nums_html = "  ".join(f"<b>{int(n)}</b>" for n in numbers)
     bonus_html = f" · bonus <b>{int(bonus)}</b>" if bonus not in (None, "") else ""
     key = "results_auto_win" if m["any_win"] else "results_auto_nowin"
-    body = render_notif(key, group_id=rd.get("group_id"), seq=seq,
-                        numbers=nums_html, bonus=bonus_html, best=m["best_label"])
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
            LEFT JOIN user_settings s ON s.user_id = p.user_id
@@ -1221,7 +1355,10 @@ async def _notify_round_results(db, rd, numbers, bonus, m):
         (rd["id"],),
     )
     for r in await cur.fetchall():
-        await _notify(r["user_id"], body)
+        await _notify_model(
+            db, r["user_id"], key, rd.get("group_id"), f"round:{rd['id']}",
+            seq=seq, numbers=nums_html, bonus=bonus_html, best=m["best_label"],
+        )
 
 
 async def _fetch_and_apply_results(db):
@@ -2945,7 +3082,12 @@ async def admin_notification_rules(request: Request):
     await db.close()
     return {
         "rules": rules,
+        "trigger_types": [
+            {"value": "condition", "label": "Member condition"},
+            {"value": "event", "label": "System event"},
+        ],
         "fields": [{"value": "credit", "label": "Member credit"}],
+        "events": _notification_event_catalog(),
         "operators": [
             {"value": "lt", "label": "is less than"},
             {"value": "lte", "label": "is at most"},
@@ -2964,16 +3106,17 @@ async def admin_create_notification_rule(request: Request):
         data = _normalise_rule_payload(body)
         cur = await db.execute(
             """INSERT INTO notification_rules
-               (group_id, name, condition_field, operator, threshold, message,
-                enabled, created_by)
-               VALUES (?,?,?,?,?,?,?,?) RETURNING id""",
-            (group["id"], data["name"], data["condition_field"], data["operator"],
-             data["threshold"], data["message"], data["enabled"], user["telegram_id"]),
+               (group_id, name, trigger_type, event_key, condition_field, operator,
+                threshold, message, enabled, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id""",
+            (group["id"], data["name"], data["trigger_type"], data["event_key"],
+             data["condition_field"], data["operator"], data["threshold"],
+             data["message"], data["enabled"], user["telegram_id"]),
         )
         created = await cur.fetchone()
         await db.commit()
         evaluation = {"rules": 0, "evaluated": 0, "sent": 0, "failed": 0}
-        if data["enabled"]:
+        if data["enabled"] and data["trigger_type"] == "condition":
             evaluation = await _evaluate_notification_rules(
                 db, group_id=group["id"], rule_id=created["id"]
             )
@@ -2994,16 +3137,17 @@ async def admin_update_notification_rule(rule_id: int, request: Request):
         data = _normalise_rule_payload(body, current)
         condition_changed = any(
             data[key] != current[key]
-            for key in ("condition_field", "operator", "threshold")
+            for key in ("trigger_type", "event_key", "condition_field", "operator", "threshold")
         )
         enabled_now = bool(data["enabled"])
         newly_enabled = enabled_now and not bool(current["enabled"])
         await db.execute(
             """UPDATE notification_rules SET
-                 name=?, condition_field=?, operator=?, threshold=?, message=?,
-                 enabled=?, updated_at=datetime('now')
+                 name=?, trigger_type=?, event_key=?, condition_field=?, operator=?,
+                 threshold=?, message=?, enabled=?, updated_at=datetime('now')
                WHERE id=? AND group_id=?""",
-            (data["name"], data["condition_field"], data["operator"], data["threshold"],
+            (data["name"], data["trigger_type"], data["event_key"],
+             data["condition_field"], data["operator"], data["threshold"],
              data["message"], data["enabled"], rule_id, group["id"]),
         )
         if condition_changed or newly_enabled:
@@ -3013,7 +3157,8 @@ async def admin_update_notification_rule(rule_id: int, request: Request):
             )
         await db.commit()
         evaluation = {"rules": 0, "evaluated": 0, "sent": 0, "failed": 0}
-        if enabled_now and (condition_changed or newly_enabled):
+        if (enabled_now and data["trigger_type"] == "condition"
+                and (condition_changed or newly_enabled)):
             evaluation = await _evaluate_notification_rules(
                 db, group_id=group["id"], rule_id=rule_id
             )
@@ -3048,7 +3193,10 @@ async def admin_test_notification_rule(rule_id: int, request: Request):
         if not rule:
             raise HTTPException(404, "Notification rule not found")
         rule["group_name"] = group["name"]
-        rendered = _render_rule_message(rule, user)
+        context = {}
+        if rule.get("trigger_type") == "event":
+            context = dict(NOTIF_TEMPLATES[rule["event_key"]].get("sample") or {})
+        rendered = _render_rule_message(rule, user, context)
     finally:
         await db.close()
     sent = await _notify(user["telegram_id"], rendered)
@@ -3273,18 +3421,27 @@ async def admin_new_round(request: Request):
         )
         for row in await cur.fetchall():
             shares = row["free_ticket_shares"]
-            await _notify(row["user_id"], render_notif(
-                "free_tickets", group_id=gid, seq=group_seq, shares=shares,
-                share_s="" if shares == 1 else "s", game=lottery_label(lottery_type)))
+            await _notify_model(
+                db, row["user_id"], "free_tickets", gid,
+                f"round:{round_id}:member:{row['user_id']}", seq=group_seq,
+                shares=shares, share_s="" if shares == 1 else "s",
+                game=lottery_label(lottery_type),
+            )
 
     jackpot_line = f"🏆 Jackpot: <b>${jackpot/1_000_000:.0f}M</b>\n" if jackpot else ""
     draw_line = f"📅 Draw: <b>{draw_date}</b>\n" if draw_date else ""
     target_str = f"target {tickets_target} tickets" if tickets_target else "no ticket limit"
+    new_round_context = {
+        "seq": group_seq, "jackpot_line": jackpot_line, "draw_line": draw_line,
+        "price": f"{price_per_share:.0f}", "target": target_str,
+    }
     await _notify_all(db,
-        render_notif("new_round", group_id=gid, seq=group_seq, jackpot_line=jackpot_line,
-                     draw_line=draw_line, price=f"{price_per_share:.0f}", target=target_str),
+        render_notif("new_round", group_id=gid, **new_round_context),
         setting_col="notif_new_round",
         group_id=gid,
+        event_key="new_round",
+        event_ref=f"round:{round_id}",
+        event_context=new_round_context,
     )
 
     await db.close()
@@ -3752,15 +3909,17 @@ async def admin_upload_ticket(request: Request):
         s = await setting.fetchone()
         notif_ticket   = s["notif_ticket"]   if s else 1
         notif_reminder = s["notif_reminder"] if s else 1
-        msg_parts = []
         if notif_ticket:
-            msg_parts.append(render_notif("ticket_purchased", group_id=round_.get("group_id"),
-                                          rid=round_.get("group_seq") or round_["id"], numbers=nums_str))
+            await _notify_model(
+                db, uid, "ticket_purchased", round_.get("group_id"),
+                f"round:{round_['id']}", rid=round_.get("group_seq") or round_["id"],
+                numbers=nums_str,
+            )
         if notif_reminder:
-            msg_parts.append(render_notif("draw_reminder", group_id=round_.get("group_id"),
-                                          draw=draw_date_str))
-        if msg_parts:
-            await _notify(uid, "\n".join(msg_parts))
+            await _notify_model(
+                db, uid, "draw_reminder", round_.get("group_id"),
+                f"round:{round_['id']}", draw=draw_date_str,
+            )
 
     # Email the round agreement, group play form + ticket photos to participants.
     if email_enabled():
@@ -4270,12 +4429,21 @@ async def admin_enter_results(request: Request):
             else:
                 ft_line = ""
             credited_line = "✅ Credited straight to your balance! 💰" if prize > 0 else ""
-            msg = render_notif("you_won", group_id=gid, rid=rseq, prize_line=prize_line,
-                               ft_line=ft_line, numbers=win_str, credited_line=credited_line)
+            event_key = "you_won"
+            event_context = {
+                "rid": rseq, "prize_line": prize_line, "ft_line": ft_line,
+                "numbers": win_str, "credited_line": credited_line,
+            }
         else:
-            msg = render_notif("results_no_prize", group_id=gid, rid=rseq, numbers=win_str,
-                               stake=f"{p['amount']:.2f}", pct=share_pct)
-        await _notify(p["user_id"], msg)
+            event_key = "results_no_prize"
+            event_context = {
+                "rid": rseq, "numbers": win_str,
+                "stake": f"{p['amount']:.2f}", "pct": share_pct,
+            }
+        await _notify_model(
+            db, p["user_id"], event_key, gid,
+            f"round:{round_['id']}:member:{p['user_id']}", **event_context,
+        )
 
     await db.close()
     return {

@@ -1568,6 +1568,8 @@ function PaymentsTab({ showToast, onGroupChange }) {
 // ── Main Admin page ────────────────────────────────────────────────────────
 const EMPTY_NOTIFICATION_RULE = {
   name: 'Low credit reminder',
+  trigger_type: 'condition',
+  event_key: 'new_round',
   condition_field: 'credit',
   operator: 'lt',
   threshold: '5',
@@ -1584,12 +1586,13 @@ const NOTIFICATION_OPERATOR_LABELS = {
 
 function NotificationsTab({ showToast }) {
   const [rules, setRules] = useState(null)
+  const [events, setEvents] = useState([])
   const [form, setForm] = useState({ ...EMPTY_NOTIFICATION_RULE })
   const [editingId, setEditingId] = useState(null)
   const [busy, setBusy] = useState({})
 
   const load = useCallback(() => api.admin.notificationRules()
-    .then(d => setRules(d.rules || []))
+    .then(d => { setRules(d.rules || []); setEvents(d.events || []) })
     .catch(e => { setRules([]); showToast(e.message, 'error') }), [showToast])
 
   useEffect(() => { load() }, [load])
@@ -1605,6 +1608,8 @@ function NotificationsTab({ showToast }) {
     setEditingId(rule.id)
     setForm({
       name: rule.name,
+      trigger_type: rule.trigger_type || 'condition',
+      event_key: rule.event_key || 'new_round',
       condition_field: rule.condition_field,
       operator: rule.operator,
       threshold: String(rule.threshold),
@@ -1617,13 +1622,18 @@ function NotificationsTab({ showToast }) {
   async function save() {
     const threshold = Number(form.threshold)
     if (!form.name.trim()) { showToast('Enter a rule name', 'error'); return }
-    if (!Number.isFinite(threshold) || threshold < 0) {
+    if (form.trigger_type === 'condition' && (!Number.isFinite(threshold) || threshold < 0)) {
       showToast('Enter a valid credit amount', 'error'); return
     }
     if (!form.message.trim()) { showToast('Enter notification text', 'error'); return }
     setB('save', true)
     try {
-      const payload = { ...form, name: form.name.trim(), message: form.message.trim(), threshold }
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        message: form.message.trim(),
+        threshold: form.trigger_type === 'condition' ? threshold : 0,
+      }
       const result = editingId
         ? await api.admin.updateNotificationRule(editingId, payload)
         : await api.admin.createNotificationRule(payload)
@@ -1667,6 +1677,36 @@ function NotificationsTab({ showToast }) {
     finally { setB(`delete-${rule.id}`, false) }
   }
 
+  const selectedEvent = events.find(event => event.value === form.event_key)
+  const placeholders = form.trigger_type === 'event'
+    ? (selectedEvent?.placeholders || ['name', 'group'])
+    : ['name', 'credit', 'threshold', 'group']
+
+  function selectTrigger(triggerType) {
+    if (triggerType === 'event') {
+      const model = selectedEvent || events[0]
+      setForm(p => ({
+        ...p,
+        trigger_type: 'event',
+        event_key: model?.value || 'new_round',
+        name: model?.label || 'Event notification',
+        message: model?.default_message || p.message,
+      }))
+    } else {
+      setForm({ ...EMPTY_NOTIFICATION_RULE })
+    }
+  }
+
+  function selectEvent(eventKey) {
+    const model = events.find(event => event.value === eventKey)
+    setForm(p => ({
+      ...p,
+      event_key: eventKey,
+      name: model?.label || p.name,
+      message: model?.default_message || p.message,
+    }))
+  }
+
   return (
     <div style={{ padding: '12px 16px 24px' }}>
       <div className="card col gap-10" style={{ marginBottom: 14 }}>
@@ -1683,25 +1723,42 @@ function NotificationsTab({ showToast }) {
             onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
         </FieldLabel>
 
+        <FieldLabel label="Trigger model">
+          <select className="input" value={form.trigger_type}
+            onChange={e => selectTrigger(e.target.value)}>
+            <option value="condition">Member condition</option>
+            <option value="event">System event</option>
+          </select>
+        </FieldLabel>
+
         <div style={{ borderRadius: 12, padding: 12, background: 'rgba(46,166,255,.08)', border: '.5px solid rgba(46,166,255,.22)' }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: 'var(--tg)', marginBottom: 8 }}>WHEN</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <select className="input" value={form.condition_field} disabled>
-              <option value="credit">Member credit</option>
+          {form.trigger_type === 'condition' ? <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <select className="input" value={form.condition_field} disabled>
+                <option value="credit">Member credit</option>
+              </select>
+              <select className="input" value={form.operator}
+                onChange={e => setForm(p => ({ ...p, operator: e.target.value }))}>
+                {Object.entries(NOTIFICATION_OPERATOR_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ position: 'relative', marginTop: 8 }}>
+              <span className="mono" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--tx-3)' }}>$</span>
+              <input className="input mono" type="number" min="0" step="0.01" value={form.threshold}
+                onChange={e => setForm(p => ({ ...p, threshold: e.target.value }))}
+                style={{ paddingLeft: 25 }} />
+            </div>
+          </> : <>
+            <select className="input" value={form.event_key} onChange={e => selectEvent(e.target.value)}>
+              {events.map(event => <option key={event.value} value={event.value}>{event.label}</option>)}
             </select>
-            <select className="input" value={form.operator}
-              onChange={e => setForm(p => ({ ...p, operator: e.target.value }))}>
-              {Object.entries(NOTIFICATION_OPERATOR_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
-              ))}
-            </select>
-          </div>
-          <div style={{ position: 'relative', marginTop: 8 }}>
-            <span className="mono" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--tx-3)' }}>$</span>
-            <input className="input mono" type="number" min="0" step="0.01" value={form.threshold}
-              onChange={e => setForm(p => ({ ...p, threshold: e.target.value }))}
-              style={{ paddingLeft: 25 }} />
-          </div>
+            {selectedEvent && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--tx-3)', lineHeight: 1.5 }}>
+              {selectedEvent.description}<br /><b>Recipients:</b> {selectedEvent.recipient}
+            </div>}
+          </>}
         </div>
 
         <div style={{ borderRadius: 12, padding: 12, background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.22)' }}>
@@ -1710,7 +1767,7 @@ function NotificationsTab({ showToast }) {
             onChange={e => setForm(p => ({ ...p, message: e.target.value }))}
             style={{ resize: 'vertical', lineHeight: 1.5 }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-            {['name', 'credit', 'threshold', 'group'].map(key => (
+            {placeholders.map(key => (
               <button key={key} type="button" className="chip" style={{ cursor: 'pointer' }}
                 onClick={() => setForm(p => ({ ...p, message: `${p.message}{${key}}` }))}>
                 {`{${key}}`}
@@ -1725,7 +1782,9 @@ function NotificationsTab({ showToast }) {
             onChange={e => setForm(p => ({ ...p, enabled: e.target.checked }))} />
         </label>
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--tx-3)' }}>
-          A member is notified once when the condition becomes true. The rule resets after their credit no longer matches.
+          {form.trigger_type === 'condition'
+            ? 'A member is notified once when the condition becomes true. The rule resets after their credit no longer matches.'
+            : 'This message replaces the built-in message when the selected event occurs. Existing member notification preferences still apply.'}
         </p>
         <button className="btn btn-primary btn-block" disabled={busy.save} onClick={save}>
           {busy.save ? 'Saving…' : editingId ? 'Save changes' : 'Create rule'}
@@ -1746,7 +1805,10 @@ function NotificationsTab({ showToast }) {
             <span className={rule.enabled ? 'chip chip-gold' : 'chip'}>{rule.enabled ? 'ACTIVE' : 'PAUSED'}</span>
           </div>
           <div style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
-            <b>WHEN</b> member credit {NOTIFICATION_OPERATOR_LABELS[rule.operator]} <span className="mono">{fmtCAD(rule.threshold)}</span>
+            <b>WHEN</b>{' '}
+            {(rule.trigger_type || 'condition') === 'event'
+              ? (events.find(event => event.value === rule.event_key)?.label || rule.event_key)
+              : <>member credit {NOTIFICATION_OPERATOR_LABELS[rule.operator]} <span className="mono">{fmtCAD(rule.threshold)}</span></>}
           </div>
           <div style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
             <b>THEN</b> {rule.message}

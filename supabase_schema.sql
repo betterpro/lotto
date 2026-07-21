@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS notification_rules (
     id              BIGSERIAL PRIMARY KEY,
     group_id        BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
+    trigger_type    TEXT NOT NULL DEFAULT 'condition'
+                    CHECK (trigger_type IN ('condition', 'event')),
+    event_key       TEXT,
     condition_field TEXT NOT NULL DEFAULT 'credit' CHECK (condition_field = 'credit'),
     operator        TEXT NOT NULL DEFAULT 'lt' CHECK (operator IN ('lt', 'lte', 'gt', 'gte')),
     threshold       FLOAT8 NOT NULL CHECK (threshold >= 0),
@@ -66,11 +69,16 @@ CREATE TABLE IF NOT EXISTS notification_rules (
     created_at      TEXT NOT NULL
                     DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
     updated_at      TEXT NOT NULL
-                    DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                    DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+    CHECK (trigger_type = 'condition' OR event_key IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_rules_group_enabled
     ON notification_rules (group_id, enabled);
+
+CREATE INDEX IF NOT EXISTS idx_notification_rules_group_event
+    ON notification_rules (group_id, event_key)
+    WHERE enabled = 1 AND trigger_type = 'event';
 
 CREATE TABLE IF NOT EXISTS notification_rule_states (
     rule_id           BIGINT NOT NULL REFERENCES notification_rules(id) ON DELETE CASCADE,
@@ -89,14 +97,23 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
     group_id       BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     user_id        BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     match_cycle    BIGINT NOT NULL,
+    event_key      TEXT,
+    delivery_key   TEXT,
     status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
     rendered_text  TEXT NOT NULL,
     error          TEXT,
     created_at     TEXT NOT NULL
                    DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
-    sent_at        TEXT,
-    UNIQUE (rule_id, user_id, match_cycle)
+    sent_at        TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_deliveries_condition_unique
+    ON notification_deliveries (rule_id, user_id, match_cycle)
+    WHERE delivery_key IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_deliveries_event_unique
+    ON notification_deliveries (rule_id, user_id, delivery_key)
+    WHERE delivery_key IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_group_created
     ON notification_deliveries (group_id, created_at DESC);
