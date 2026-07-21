@@ -1,9 +1,10 @@
-"""Editable Telegram notification templates.
+"""Built-in Telegram notification templates.
 
 Each message the bot sends is a named template with {placeholders}. Defaults are
-defined here (stylish copy); a super-admin can override the text per key (stored
-in the notif_templates table). Optional content is passed as whole '_line' vars
-so empty ones collapse away cleanly.
+defined here for operational lottery events. Group admins create separate
+WHEN/THEN notification rules; these built-in messages are not editable.
+Optional content is passed as whole '_line' vars so empty ones collapse away
+cleanly.
 """
 
 import re

@@ -14,7 +14,6 @@ import {
 } from '../lottery.js'
 import LotteryLogo from '../components/LotteryLogo.jsx'
 import CameraCapture from '../components/CameraCapture.jsx'
-import NotifTemplates from '../components/NotifTemplates.jsx'
 import { scanTicketImage } from '../ticketOcr.js'
 import {
   UsersIcon, WalletIcon, TicketIcon, TrophyIcon, ShieldIcon,
@@ -1562,27 +1561,217 @@ function PaymentsTab({ showToast, onGroupChange }) {
         {busy ? 'Saving…' : 'Save settings'}
       </button>
 
-      <div className="card col" style={{ gap: 6, margin: '16px 0 8px', padding: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700 }}>Telegram messages</div>
-        <p style={{ margin: 0, fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
-          Customize the automatic messages your group receives — new round, closing reminders,
-          results and more. Leave any as-is to use the platform default. Each is saved on its own.
-        </p>
-      </div>
-      <NotifTemplates
-        load={() => api.admin.notifTemplates()}
-        save={(key, text, reset) => api.admin.saveNotifTemplate(key, text, reset)}
-        test={(key, text) => api.admin.testNotifTemplate(key, text)}
-        intro={<>Customize how your group’s Telegram messages read. Keep the{' '}
-          <span className="mono">{'{placeholders}'}</span> for live values (see “Dynamic data” under each)
-          and use <span className="mono">&lt;b&gt;…&lt;/b&gt;</span> for bold. Reset returns a message to the
-          platform default. “Send test” delivers a sample to your Telegram.</>}
-      />
     </div>
   )
 }
 
 // ── Main Admin page ────────────────────────────────────────────────────────
+const EMPTY_NOTIFICATION_RULE = {
+  name: 'Low credit reminder',
+  condition_field: 'credit',
+  operator: 'lt',
+  threshold: '5',
+  message: 'Hi {name}, your credit is ${credit}. Please increase your credit.',
+  enabled: true,
+}
+
+const NOTIFICATION_OPERATOR_LABELS = {
+  lt: 'is less than',
+  lte: 'is at most',
+  gt: 'is greater than',
+  gte: 'is at least',
+}
+
+function NotificationsTab({ showToast }) {
+  const [rules, setRules] = useState(null)
+  const [form, setForm] = useState({ ...EMPTY_NOTIFICATION_RULE })
+  const [editingId, setEditingId] = useState(null)
+  const [busy, setBusy] = useState({})
+
+  const load = useCallback(() => api.admin.notificationRules()
+    .then(d => setRules(d.rules || []))
+    .catch(e => { setRules([]); showToast(e.message, 'error') }), [showToast])
+
+  useEffect(() => { load() }, [load])
+
+  function setB(key, value) { setBusy(p => ({ ...p, [key]: value })) }
+
+  function resetForm() {
+    setEditingId(null)
+    setForm({ ...EMPTY_NOTIFICATION_RULE })
+  }
+
+  function editRule(rule) {
+    setEditingId(rule.id)
+    setForm({
+      name: rule.name,
+      condition_field: rule.condition_field,
+      operator: rule.operator,
+      threshold: String(rule.threshold),
+      message: rule.message,
+      enabled: !!rule.enabled,
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  async function save() {
+    const threshold = Number(form.threshold)
+    if (!form.name.trim()) { showToast('Enter a rule name', 'error'); return }
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      showToast('Enter a valid credit amount', 'error'); return
+    }
+    if (!form.message.trim()) { showToast('Enter notification text', 'error'); return }
+    setB('save', true)
+    try {
+      const payload = { ...form, name: form.name.trim(), message: form.message.trim(), threshold }
+      const result = editingId
+        ? await api.admin.updateNotificationRule(editingId, payload)
+        : await api.admin.createNotificationRule(payload)
+      const sent = result.evaluation?.sent || 0
+      showToast(sent ? `Rule saved · ${sent} notification${sent === 1 ? '' : 's'} sent` : 'Rule saved', 'success')
+      resetForm()
+      await load()
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setB('save', false) }
+  }
+
+  async function toggle(rule) {
+    setB(`toggle-${rule.id}`, true)
+    try {
+      const result = await api.admin.updateNotificationRule(rule.id, { enabled: !rule.enabled })
+      const sent = result.evaluation?.sent || 0
+      showToast(sent ? `Enabled · ${sent} notification${sent === 1 ? '' : 's'} sent` : (!rule.enabled ? 'Rule enabled' : 'Rule paused'), 'success')
+      await load()
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setB(`toggle-${rule.id}`, false) }
+  }
+
+  async function test(rule) {
+    setB(`test-${rule.id}`, true)
+    try {
+      await api.admin.testNotificationRule(rule.id)
+      showToast('Test sent to your Telegram', 'success')
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setB(`test-${rule.id}`, false) }
+  }
+
+  async function remove(rule) {
+    if (!window.confirm(`Delete “${rule.name}”? Delivery history for this rule will also be removed.`)) return
+    setB(`delete-${rule.id}`, true)
+    try {
+      await api.admin.deleteNotificationRule(rule.id)
+      if (editingId === rule.id) resetForm()
+      showToast('Rule deleted', 'success')
+      await load()
+    } catch (e) { showToast(e.message, 'error') }
+    finally { setB(`delete-${rule.id}`, false) }
+  }
+
+  return (
+    <div style={{ padding: '12px 16px 24px' }}>
+      <div className="card col gap-10" style={{ marginBottom: 14 }}>
+        <div className="row between" style={{ alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{editingId ? 'Edit automation' : 'Create automation'}</div>
+            <div style={{ marginTop: 3, fontSize: 12, color: 'var(--tx-3)' }}>Build a group-specific WHEN / THEN rule</div>
+          </div>
+          {editingId && <button type="button" className="btn btn-ghost btn-sm" onClick={resetForm}>Cancel</button>}
+        </div>
+
+        <FieldLabel label="Rule name">
+          <input className="input" maxLength={80} value={form.name}
+            onChange={e => setForm(p => ({ ...p, name: e.target.value }))} />
+        </FieldLabel>
+
+        <div style={{ borderRadius: 12, padding: 12, background: 'rgba(46,166,255,.08)', border: '.5px solid rgba(46,166,255,.22)' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: 'var(--tg)', marginBottom: 8 }}>WHEN</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <select className="input" value={form.condition_field} disabled>
+              <option value="credit">Member credit</option>
+            </select>
+            <select className="input" value={form.operator}
+              onChange={e => setForm(p => ({ ...p, operator: e.target.value }))}>
+              {Object.entries(NOTIFICATION_OPERATOR_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ position: 'relative', marginTop: 8 }}>
+            <span className="mono" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--tx-3)' }}>$</span>
+            <input className="input mono" type="number" min="0" step="0.01" value={form.threshold}
+              onChange={e => setForm(p => ({ ...p, threshold: e.target.value }))}
+              style={{ paddingLeft: 25 }} />
+          </div>
+        </div>
+
+        <div style={{ borderRadius: 12, padding: 12, background: 'rgba(78,208,122,.08)', border: '.5px solid rgba(78,208,122,.22)' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: 'var(--money)', marginBottom: 8 }}>THEN · SEND TELEGRAM MESSAGE</div>
+          <textarea className="input" rows={4} maxLength={3500} value={form.message}
+            onChange={e => setForm(p => ({ ...p, message: e.target.value }))}
+            style={{ resize: 'vertical', lineHeight: 1.5 }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {['name', 'credit', 'threshold', 'group'].map(key => (
+              <button key={key} type="button" className="chip" style={{ cursor: 'pointer' }}
+                onClick={() => setForm(p => ({ ...p, message: `${p.message}{${key}}` }))}>
+                {`{${key}}`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="row between" style={{ cursor: 'pointer', padding: '2px 0' }}>
+          <span style={{ fontSize: 14 }}>Enable immediately</span>
+          <input type="checkbox" checked={form.enabled}
+            onChange={e => setForm(p => ({ ...p, enabled: e.target.checked }))} />
+        </label>
+        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: 'var(--tx-3)' }}>
+          A member is notified once when the condition becomes true. The rule resets after their credit no longer matches.
+        </p>
+        <button className="btn btn-primary btn-block" disabled={busy.save} onClick={save}>
+          {busy.save ? 'Saving…' : editingId ? 'Save changes' : 'Create rule'}
+        </button>
+      </div>
+
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tx-3)', textTransform: 'uppercase', letterSpacing: '.5px', margin: '0 2px 8px' }}>
+        Group rules
+      </div>
+      {rules === null ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
+      ) : rules.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', color: 'var(--tx-2)', fontSize: 14 }}>No notification rules yet.</div>
+      ) : rules.map(rule => (
+        <div key={rule.id} className="card col gap-8" style={{ marginBottom: 10, opacity: rule.enabled ? 1 : .68 }}>
+          <div className="row between" style={{ alignItems: 'center' }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{rule.name}</div>
+            <span className={rule.enabled ? 'chip chip-gold' : 'chip'}>{rule.enabled ? 'ACTIVE' : 'PAUSED'}</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5 }}>
+            <b>WHEN</b> member credit {NOTIFICATION_OPERATOR_LABELS[rule.operator]} <span className="mono">{fmtCAD(rule.threshold)}</span>
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--tx-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+            <b>THEN</b> {rule.message}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--tx-3)' }}>
+            Sent {Number(rule.sent_count || 0)} time{Number(rule.sent_count || 0) === 1 ? '' : 's'}
+            {rule.last_sent_at ? ` · last ${rule.last_sent_at}` : ''}
+          </div>
+          <div className="row gap-8" style={{ flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => editRule(rule)}>Edit</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy[`test-${rule.id}`]} onClick={() => test(rule)}>
+              {busy[`test-${rule.id}`] ? 'Sending…' : 'Send test'}
+            </button>
+            <button className="btn btn-ghost btn-sm" disabled={busy[`toggle-${rule.id}`]} onClick={() => toggle(rule)}>
+              {rule.enabled ? 'Pause' : 'Enable'}
+            </button>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }}
+              disabled={busy[`delete-${rule.id}`]} onClick={() => remove(rule)}>Delete</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function Admin({ user }) {
   const [tab,      setTab]      = useState('round')
   const [rounds,   setRounds]   = useState(undefined)
@@ -1721,16 +1910,17 @@ export default function Admin({ user }) {
       </div>
 
       {/* Tab strip */}
-      <div style={{ padding: '10px 16px 0', display: 'flex', gap: 8 }}>
+      <div style={{ padding: '10px 16px 0', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {[
           { id: 'round',    label: 'Round'   },
           { id: 'deposits', label: pendingCount ? `Deposits (${pendingCount})` : 'Deposits' },
           { id: 'members',  label: 'Members' },
+          { id: 'notifications', label: 'Notifications' },
           { id: 'payments', label: 'Settings' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{
-              flex: 1, padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
+              flex: '1 1 92px', padding: '7px 0', borderRadius: 10, border: 'none', cursor: 'pointer',
               fontSize: 13, fontWeight: 600,
               background: tab === t.id ? 'var(--tg)' : 'var(--surface-2)',
               color: tab === t.id ? '#fff' : 'var(--tx-2)',
@@ -2073,6 +2263,10 @@ export default function Admin({ user }) {
 
       {tab === 'payments' && (
         <PaymentsTab showToast={showToast} onGroupChange={refreshGroupLock} />
+      )}
+
+      {tab === 'notifications' && (
+        <NotificationsTab showToast={showToast} />
       )}
 
       {/* ── Members tab ── */}

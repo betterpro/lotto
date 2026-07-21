@@ -3,9 +3,8 @@ import { api } from '../api.js'
 import { useToast } from '../components/Toast.jsx'
 import { Sheet } from '../components/Sheet.jsx'
 import TelegramAvatar from '../components/TelegramAvatar.jsx'
-import NotifTemplates from '../components/NotifTemplates.jsx'
 
-const TABS = ['overview', 'applications', 'groups', 'users', 'rounds', 'messages']
+const TABS = ['overview', 'applications', 'groups', 'users', 'rounds']
 
 function fmtCAD(n) {
   return '$' + Number(n || 0).toFixed(2)
@@ -348,20 +347,6 @@ function RoundAdminRow({ r, onChanged }) {
   )
 }
 
-function MessagesTab() {
-  return (
-    <NotifTemplates
-      load={() => api.platform.notifTemplates()}
-      save={(key, text, reset) => api.platform.saveNotifTemplate(key, text, reset)}
-      test={(key, text) => api.platform.testNotifTemplate(key, text)}
-      intro={<>These are the platform-wide defaults for every group’s Telegram messages. Keep the{' '}
-        <span className="mono">{'{placeholders}'}</span> for dynamic values and use{' '}
-        <span className="mono">&lt;b&gt;…&lt;/b&gt;</span> for bold. Group trustees can override any of these for their
-        own group. “Send test” delivers a sample to your own Telegram.</>}
-    />
-  )
-}
-
 export default function PlatformAdmin() {
   const showToast = useToast()
   const botUsername = import.meta.env.VITE_BOT_USERNAME ?? ''
@@ -557,8 +542,6 @@ export default function PlatformAdmin() {
             ))}
           </div>
         </>
-      ) : tab === 'messages' ? (
-        <MessagesTab />
       ) : (
         <div className="stack">
           {rounds.length === 0 ? (

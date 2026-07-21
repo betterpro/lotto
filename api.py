@@ -12,9 +12,11 @@ import html
 import imaplib
 import json
 import logging
+import math
 import os
 import random
 import re
+from string import Formatter
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
@@ -65,7 +67,7 @@ from lottery_draws import (
     suggest_new_round,
 )
 from lottery_prizes import calculate_line_prizes, supports_prize_calc
-from notif_templates import NOTIF_TEMPLATES, describe_vars, render_template
+from notif_templates import NOTIF_TEMPLATES, render_template
 from free_tickets import (
     apply_pending_free_tickets,
     distribute_integer_shares,
@@ -369,37 +371,9 @@ def _open_app_markup() -> InlineKeyboardMarkup | None:
     ]])
 
 
-# Overrides keyed by (group_id, key). group_id 0 = platform default (super-admin);
-# group_id>0 = per-group override (trustee). Lookup precedence: group → platform → code.
-_NOTIF_OVERRIDES: dict[tuple, str] = {}
-
-
-async def _load_notif_overrides(db=None):
-    """Cache notification-template overrides (call at startup + on edit)."""
-    own = db is None
-    if own:
-        db = await get_db()
-    try:
-        cur = await db.execute("SELECT group_id, key, text FROM notif_templates")
-        rows = await cur.fetchall()
-        _NOTIF_OVERRIDES.clear()
-        for r in rows:
-            _NOTIF_OVERRIDES[(int(r["group_id"] or 0), r["key"])] = r["text"]
-    except Exception:
-        pass
-    finally:
-        if own:
-            await db.close()
-
-
-def render_notif(key: str, group_id=0, **vars) -> str:
-    """Render a notification: group override → platform override → code default."""
-    gid = int(group_id or 0)
-    tmpl = (
-        _NOTIF_OVERRIDES.get((gid, key))
-        or _NOTIF_OVERRIDES.get((0, key))
-        or NOTIF_TEMPLATES.get(key, {}).get("default", "")
-    )
+def render_notif(key: str, **vars) -> str:
+    """Render a built-in operational notification."""
+    tmpl = NOTIF_TEMPLATES.get(key, {}).get("default", "")
     return render_template(tmpl, vars)
 
 
@@ -416,6 +390,193 @@ async def _notify(telegram_id: int, text: str):
         )
     except Exception as e:
         log.debug("Notification to %s skipped: %s", telegram_id, e)
+
+
+_RULE_OPERATORS = {
+    "lt": lambda value, threshold: value < threshold,
+    "lte": lambda value, threshold: value <= threshold,
+    "gt": lambda value, threshold: value > threshold,
+    "gte": lambda value, threshold: value >= threshold,
+}
+_RULE_PLACEHOLDERS = {"name", "credit", "threshold", "group"}
+
+
+def _validate_rule_message(message: str) -> str:
+    message = str(message or "").strip()
+    if not message:
+        raise HTTPException(400, "Notification text is required")
+    if len(message) > 3500:
+        raise HTTPException(400, "Notification text must be 3,500 characters or fewer")
+    try:
+        for _literal, field, format_spec, conversion in Formatter().parse(message):
+            if field and field not in _RULE_PLACEHOLDERS:
+                raise HTTPException(400, f"Unknown placeholder: {{{field}}}")
+            if format_spec or conversion:
+                raise HTTPException(400, "Placeholder formatting is not supported")
+    except ValueError:
+        raise HTTPException(400, "Notification text contains unmatched braces")
+    return message
+
+
+def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
+    data = dict(current or {})
+    for key in ("name", "condition_field", "operator", "threshold", "message", "enabled"):
+        if key in body:
+            data[key] = body[key]
+
+    name = str(data.get("name") or "").strip()
+    if not name or len(name) > 80:
+        raise HTTPException(400, "Rule name must be between 1 and 80 characters")
+    condition_field = str(data.get("condition_field") or "credit")
+    if condition_field != "credit":
+        raise HTTPException(400, "Only member credit rules are currently supported")
+    operator = str(data.get("operator") or "lt")
+    if operator not in _RULE_OPERATORS:
+        raise HTTPException(400, "Invalid comparison operator")
+    try:
+        threshold = float(data.get("threshold"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "A valid credit threshold is required")
+    if not math.isfinite(threshold) or threshold < 0 or threshold > 1_000_000_000:
+        raise HTTPException(400, "Credit threshold is outside the allowed range")
+    enabled_value = data.get("enabled", True)
+    if not isinstance(enabled_value, (bool, int)):
+        raise HTTPException(400, "enabled must be true or false")
+    return {
+        "name": name,
+        "condition_field": condition_field,
+        "operator": operator,
+        "threshold": threshold,
+        "message": _validate_rule_message(data.get("message")),
+        "enabled": int(bool(enabled_value)),
+    }
+
+
+def _render_rule_message(rule: dict, member: dict) -> str:
+    values = {
+        "name": html.escape(str(member.get("full_name") or member.get("username") or "member")),
+        "credit": f"{float(member.get('credit') or 0):.2f}",
+        "threshold": f"{float(rule.get('threshold') or 0):.2f}",
+        "group": html.escape(str(rule.get("group_name") or "your group")),
+    }
+    return str(rule["message"]).format_map(values)
+
+
+async def _evaluate_notification_rules(db, group_id: int | None = None,
+                                       rule_id: int | None = None,
+                                       user_id: int | None = None) -> dict:
+    """Evaluate enabled group rules and send only on false-to-true transitions."""
+    sql = """
+        SELECT r.*, g.name AS group_name
+        FROM notification_rules r
+        JOIN groups g ON g.id = r.group_id
+        WHERE r.enabled = 1
+    """
+    params: list = []
+    if group_id is not None:
+        sql += " AND r.group_id = ?"
+        params.append(group_id)
+    if rule_id is not None:
+        sql += " AND r.id = ?"
+        params.append(rule_id)
+    cur = await db.execute(sql, tuple(params))
+    rules = [dict(row) for row in await cur.fetchall()]
+    stats = {"rules": len(rules), "evaluated": 0, "sent": 0, "failed": 0}
+
+    for rule in rules:
+        compare = _RULE_OPERATORS.get(rule["operator"])
+        if compare is None or rule.get("condition_field") != "credit":
+            continue
+        members_sql = """SELECT u.telegram_id, u.username, u.full_name, u.credit
+                         FROM users u
+                         JOIN group_members gm ON gm.user_id = u.telegram_id
+                         WHERE gm.group_id = ?"""
+        member_params: list = [rule["group_id"]]
+        if user_id is not None:
+            members_sql += " AND u.telegram_id = ?"
+            member_params.append(user_id)
+        members_cur = await db.execute(members_sql, tuple(member_params))
+        for member_row in await members_cur.fetchall():
+            member = dict(member_row)
+            value = float(member.get("credit") or 0)
+            matches = bool(compare(value, float(rule["threshold"])))
+            state_cur = await db.execute(
+                "SELECT is_matching, match_cycle FROM notification_rule_states WHERE rule_id=? AND user_id=?",
+                (rule["id"], member["telegram_id"]),
+            )
+            state = await state_cur.fetchone()
+            was_matching = bool(state and state["is_matching"])
+            cycle = int((state or {}).get("match_cycle") or 0)
+            stats["evaluated"] += 1
+
+            if not matches:
+                await db.execute(
+                    """INSERT INTO notification_rule_states
+                       (rule_id, user_id, is_matching, match_cycle, last_value, last_evaluated_at)
+                       VALUES (?,?,0,?,?,datetime('now'))
+                       ON CONFLICT (rule_id, user_id) DO UPDATE SET
+                         is_matching=0, last_value=excluded.last_value,
+                         last_evaluated_at=excluded.last_evaluated_at""",
+                    (rule["id"], member["telegram_id"], cycle, value),
+                )
+                continue
+
+            if not was_matching:
+                cycle += 1
+            await db.execute(
+                """INSERT INTO notification_rule_states
+                   (rule_id, user_id, is_matching, match_cycle, last_value, last_evaluated_at)
+                   VALUES (?,?,1,?,?,datetime('now'))
+                   ON CONFLICT (rule_id, user_id) DO UPDATE SET
+                     is_matching=1, match_cycle=excluded.match_cycle,
+                     last_value=excluded.last_value,
+                     last_evaluated_at=excluded.last_evaluated_at""",
+                (rule["id"], member["telegram_id"], cycle, value),
+            )
+            if was_matching:
+                continue
+
+            rendered = _render_rule_message(rule, member)
+            delivery_cur = await db.execute(
+                """INSERT INTO notification_deliveries
+                   (rule_id, group_id, user_id, match_cycle, status, rendered_text)
+                   VALUES (?,?,?,?,?,?)
+                   ON CONFLICT (rule_id, user_id, match_cycle) DO NOTHING
+                   RETURNING id""",
+                (rule["id"], rule["group_id"], member["telegram_id"], cycle,
+                 "pending", rendered),
+            )
+            delivery = await delivery_cur.fetchone()
+            if not delivery:
+                continue
+            sent = await _notify(member["telegram_id"], rendered)
+            if sent:
+                await db.execute(
+                    "UPDATE notification_deliveries SET status='sent', sent_at=datetime('now') WHERE id=?",
+                    (delivery["id"],),
+                )
+                await db.execute(
+                    "UPDATE notification_rule_states SET last_sent_at=datetime('now') WHERE rule_id=? AND user_id=?",
+                    (rule["id"], member["telegram_id"]),
+                )
+                stats["sent"] += 1
+            else:
+                await db.execute(
+                    """UPDATE notification_deliveries
+                       SET status='failed', error=? WHERE id=?""",
+                    ("Telegram delivery failed or account is not linked", delivery["id"]),
+                )
+                stats["failed"] += 1
+    await db.commit()
+    return stats
+
+
+async def _evaluate_rules_for_user_safely(db, user_id: int) -> None:
+    """Evaluate immediately after credit changes; the background scan is fallback."""
+    try:
+        await _evaluate_notification_rules(db, user_id=int(user_id))
+    except Exception:
+        log.exception("Immediate notification-rule evaluation failed for user %s", user_id)
 
 
 async def _bg_fetch_photo(telegram_id: int):
@@ -709,6 +870,7 @@ async def _auto_join_round(db, round_id: int, price_per_share: float, group_id: 
             (u["telegram_id"], "participate", -amount, f"Auto-join Round #{rseq}", round_id)
         )
         await db.commit()
+        await _evaluate_rules_for_user_safely(db, u["telegram_id"])
         bal = u["credit"] - amount
         await _notify(u["telegram_id"], render_notif(
             "auto_joined", group_id=group_id, rid=rseq, shares=shares,
@@ -909,6 +1071,7 @@ async def _approve_etransfer_deposit(db, dep: dict, receipt: dict) -> bool:
         (dep["user_id"], "deposit", dep["amount"], f"E-transfer deposit #{dep['id']}"),
     )
     await db.commit()
+    await _evaluate_rules_for_user_safely(db, dep["user_id"])
     await _notify(dep["user_id"], render_notif("etransfer_received",
                   group_id=dep.get("group_id"), amount=f"{dep['amount']:.2f}"))
     return True
@@ -1033,10 +1196,12 @@ _ptb_app: Application | None = None
 _bot_username: str | None = None
 _etransfer_task: asyncio.Task | None = None
 _round_task: asyncio.Task | None = None
+_notification_task: asyncio.Task | None = None
 
 # How often to close due rounds and send pre-close reminders. Reminders are
 # day-granular, so a half-hour cadence is plenty and stays cheap.
 ROUND_MAINTENANCE_INTERVAL_SECONDS = 1800
+NOTIFICATION_RULE_INTERVAL_SECONDS = 60
 
 
 async def _notify_round_results(db, rd, numbers, bonus, m):
@@ -1133,18 +1298,29 @@ async def _etransfer_poll_loop():
         await asyncio.sleep(max(30, config.ETRANSFER_CHECK_INTERVAL_SECONDS))
 
 
+async def _notification_rules_loop():
+    while True:
+        try:
+            db = await get_db()
+            try:
+                await _evaluate_notification_rules(db)
+            finally:
+                await db.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Background notification-rule evaluation failed")
+        await asyncio.sleep(NOTIFICATION_RULE_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _ptb_app, _bot_username, _etransfer_task, _round_task
+    global _ptb_app, _bot_username, _etransfer_task, _round_task, _notification_task
     try:
         await ensure_schema()
         log.info("Database schema verified")
     except Exception:
         log.exception("Schema bootstrap failed — run migrations in Supabase SQL Editor")
-    try:
-        await _load_notif_overrides()
-    except Exception:
-        log.exception("Notification template load failed")
     render_url = os.environ.get("RENDER_EXTERNAL_URL")
     if render_url and not config.MINI_APP_URL:
         os.environ["MINI_APP_URL"] = render_url
@@ -1163,8 +1339,10 @@ async def lifespan(app: FastAPI):
         log.info("Background e-transfer checker started")
     _round_task = asyncio.create_task(_round_maintenance_loop())
     log.info("Background round maintenance started")
+    _notification_task = asyncio.create_task(_notification_rules_loop())
+    log.info("Background notification-rule evaluator started")
     yield
-    for _task in (_etransfer_task, _round_task):
+    for _task in (_etransfer_task, _round_task, _notification_task):
         if _task:
             _task.cancel()
             try:
@@ -2300,6 +2478,7 @@ async def api_participate(request: Request):
          f"Round #{round_.get('group_seq') or round_['id']}", gid, round_["id"]),
     )
     await db.commit()
+    await _evaluate_rules_for_user_safely(db, user["telegram_id"])
     cur = await db.execute("SELECT pool FROM rounds WHERE id=?", (round_["id"],))
     row = await cur.fetchone()
     pool = row["pool"] if row else amount
@@ -2730,6 +2909,151 @@ async def api_trustee_application_subscription_create(request: Request):
 # ---------------------------------------------------------------------------
 # Admin endpoints (group trustee)
 # ---------------------------------------------------------------------------
+
+async def _group_notification_rule(db, group_id: int, rule_id: int) -> dict | None:
+    cur = await db.execute(
+        """SELECT r.*,
+                  (SELECT COUNT(*) FROM notification_deliveries d
+                   WHERE d.rule_id=r.id AND d.status='sent') AS sent_count,
+                  (SELECT MAX(d.sent_at) FROM notification_deliveries d
+                   WHERE d.rule_id=r.id AND d.status='sent') AS last_sent_at
+           FROM notification_rules r
+           WHERE r.id=? AND r.group_id=?""",
+        (rule_id, group_id),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+@app.get("/api/admin/notification-rules")
+async def admin_notification_rules(request: Request):
+    _user, db, group = await _require_group_trustee(request)
+    cur = await db.execute(
+        """SELECT r.*,
+                  (SELECT COUNT(*) FROM notification_deliveries d
+                   WHERE d.rule_id=r.id AND d.status='sent') AS sent_count,
+                  (SELECT MAX(d.sent_at) FROM notification_deliveries d
+                   WHERE d.rule_id=r.id AND d.status='sent') AS last_sent_at
+           FROM notification_rules r
+           WHERE r.group_id=?
+           ORDER BY r.created_at DESC, r.id DESC""",
+        (group["id"],),
+    )
+    rules = [dict(row) for row in await cur.fetchall()]
+    await db.close()
+    return {
+        "rules": rules,
+        "fields": [{"value": "credit", "label": "Member credit"}],
+        "operators": [
+            {"value": "lt", "label": "is less than"},
+            {"value": "lte", "label": "is at most"},
+            {"value": "gt", "label": "is greater than"},
+            {"value": "gte", "label": "is at least"},
+        ],
+        "placeholders": sorted(_RULE_PLACEHOLDERS),
+    }
+
+
+@app.post("/api/admin/notification-rules")
+async def admin_create_notification_rule(request: Request):
+    user, db, group = await _require_group_trustee(request)
+    try:
+        body = await request.json()
+        data = _normalise_rule_payload(body)
+        cur = await db.execute(
+            """INSERT INTO notification_rules
+               (group_id, name, condition_field, operator, threshold, message,
+                enabled, created_by)
+               VALUES (?,?,?,?,?,?,?,?) RETURNING id""",
+            (group["id"], data["name"], data["condition_field"], data["operator"],
+             data["threshold"], data["message"], data["enabled"], user["telegram_id"]),
+        )
+        created = await cur.fetchone()
+        await db.commit()
+        evaluation = {"rules": 0, "evaluated": 0, "sent": 0, "failed": 0}
+        if data["enabled"]:
+            evaluation = await _evaluate_notification_rules(
+                db, group_id=group["id"], rule_id=created["id"]
+            )
+        rule = await _group_notification_rule(db, group["id"], created["id"])
+        return {"ok": True, "rule": rule, "evaluation": evaluation}
+    finally:
+        await db.close()
+
+
+@app.patch("/api/admin/notification-rules/{rule_id}")
+async def admin_update_notification_rule(rule_id: int, request: Request):
+    _user, db, group = await _require_group_trustee(request)
+    try:
+        current = await _group_notification_rule(db, group["id"], rule_id)
+        if not current:
+            raise HTTPException(404, "Notification rule not found")
+        body = await request.json()
+        data = _normalise_rule_payload(body, current)
+        condition_changed = any(
+            data[key] != current[key]
+            for key in ("condition_field", "operator", "threshold")
+        )
+        enabled_now = bool(data["enabled"])
+        newly_enabled = enabled_now and not bool(current["enabled"])
+        await db.execute(
+            """UPDATE notification_rules SET
+                 name=?, condition_field=?, operator=?, threshold=?, message=?,
+                 enabled=?, updated_at=datetime('now')
+               WHERE id=? AND group_id=?""",
+            (data["name"], data["condition_field"], data["operator"], data["threshold"],
+             data["message"], data["enabled"], rule_id, group["id"]),
+        )
+        if condition_changed or newly_enabled:
+            await db.execute(
+                "UPDATE notification_rule_states SET is_matching=0 WHERE rule_id=?",
+                (rule_id,),
+            )
+        await db.commit()
+        evaluation = {"rules": 0, "evaluated": 0, "sent": 0, "failed": 0}
+        if enabled_now and (condition_changed or newly_enabled):
+            evaluation = await _evaluate_notification_rules(
+                db, group_id=group["id"], rule_id=rule_id
+            )
+        rule = await _group_notification_rule(db, group["id"], rule_id)
+        return {"ok": True, "rule": rule, "evaluation": evaluation}
+    finally:
+        await db.close()
+
+
+@app.delete("/api/admin/notification-rules/{rule_id}")
+async def admin_delete_notification_rule(rule_id: int, request: Request):
+    _user, db, group = await _require_group_trustee(request)
+    try:
+        rule = await _group_notification_rule(db, group["id"], rule_id)
+        if not rule:
+            raise HTTPException(404, "Notification rule not found")
+        await db.execute(
+            "DELETE FROM notification_rules WHERE id=? AND group_id=?",
+            (rule_id, group["id"]),
+        )
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@app.post("/api/admin/notification-rules/{rule_id}/test")
+async def admin_test_notification_rule(rule_id: int, request: Request):
+    user, db, group = await _require_group_trustee(request)
+    try:
+        rule = await _group_notification_rule(db, group["id"], rule_id)
+        if not rule:
+            raise HTTPException(404, "Notification rule not found")
+        rule["group_name"] = group["name"]
+        rendered = _render_rule_message(rule, user)
+    finally:
+        await db.close()
+    sent = await _notify(user["telegram_id"], rendered)
+    if not sent:
+        raise HTTPException(502, "Test could not be delivered to your Telegram account")
+    return {"ok": True, "preview": rendered}
+
 
 @app.get("/api/admin/group")
 async def admin_get_group(request: Request):
@@ -3910,6 +4234,12 @@ async def admin_enter_results(request: Request):
     )
     await db.commit()
 
+    changed_credit_users = {p["user_id"] for p in parts if prize_by_user.get(p["user_id"], 0) > 0}
+    if free_ticket_cash_total > 0:
+        changed_credit_users.add(group["trustee_user_id"])
+    for changed_user_id in changed_credit_users:
+        await _evaluate_rules_for_user_safely(db, changed_user_id)
+
     win_str = "  ".join(f"<b>{n}</b>" for n in winning_numbers)
     if bonus_number:
         win_str += f"  +<b>{bonus_number}</b> (bonus)"
@@ -3998,6 +4328,7 @@ async def admin_draw(request: Request):
         (winner_id, "win", pool_val, f"Won round #{round_.get('group_seq') or round_['id']}", round_["id"]),
     )
     await db.commit()
+    await _evaluate_rules_for_user_safely(db, winner_id)
     await db.close()
     return {"ok": True, "winner_name": winner_name, "pool": pool_val,
             "winner_pct": winner_pct, "round_id": round_["id"]}
@@ -4067,6 +4398,8 @@ async def admin_resolve_deposit(
     else:
         raise HTTPException(400, "action must be approve or reject")
     await db.commit()
+    if action == "approve":
+        await _evaluate_rules_for_user_safely(db, dep["user_id"])
     await db.close()
     return {"ok": True}
 
@@ -4506,120 +4839,6 @@ async def platform_delete_round(round_id: int, request: Request):
     return {"ok": True}
 
 
-def _notif_template_list(gid: int) -> list:
-    """Templates for a scope (gid=0 platform, gid>0 group) with the guide + effective text."""
-    out = []
-    for key, t in NOTIF_TEMPLATES.items():
-        default = t["default"]
-        platform_text = _NOTIF_OVERRIDES.get((0, key)) or default
-        if gid:
-            effective = _NOTIF_OVERRIDES.get((gid, key)) or platform_text
-            overridden = (gid, key) in _NOTIF_OVERRIDES
-        else:
-            effective = _NOTIF_OVERRIDES.get((0, key)) or default
-            overridden = (0, key) in _NOTIF_OVERRIDES
-        out.append({
-            "key": key,
-            "label": t["label"],
-            "desc": t.get("desc", ""),
-            "default": default,
-            "inherited": platform_text,
-            "text": effective,
-            "overridden": overridden,
-            "vars": describe_vars(effective or default),
-        })
-    return out
-
-
-async def _set_notif_override(db, gid: int, key: str, text: str) -> bool:
-    reset = text.strip() == "" or text.strip() == NOTIF_TEMPLATES[key]["default"].strip()
-    await db.execute("DELETE FROM notif_templates WHERE group_id=? AND key=?", (gid, key))
-    if not reset:
-        await db.execute(
-            "INSERT INTO notif_templates (group_id, key, text, updated_at) VALUES (?,?,?,datetime('now'))",
-            (gid, key, text),
-        )
-    return reset
-
-
-@app.get("/api/platform/notif-templates")
-async def platform_notif_templates(request: Request):
-    admin, db = await _require_platform_admin(request)
-    await _load_notif_overrides(db)
-    await db.close()
-    return {"templates": _notif_template_list(0)}
-
-
-@app.patch("/api/platform/notif-templates/{key}")
-async def platform_update_notif_template(key: str, request: Request):
-    admin, db = await _require_platform_admin(request)
-    if key not in NOTIF_TEMPLATES:
-        await db.close()
-        raise HTTPException(404, "Unknown template")
-    body = await request.json()
-    text = "" if body.get("reset") else str(body.get("text") or "")
-    reset = await _set_notif_override(db, 0, key, text)
-    await db.commit()
-    await _load_notif_overrides(db)
-    await db.close()
-    return {"ok": True, "reset": reset}
-
-
-@app.post("/api/platform/notif-templates/{key}/test")
-async def platform_test_notif_template(key: str, request: Request):
-    """Send a sample of the message to the admin's own Telegram chat."""
-    admin, db = await _require_platform_admin(request)
-    await db.close()
-    if key not in NOTIF_TEMPLATES:
-        raise HTTPException(404, "Unknown template")
-    body = await request.json()
-    sample = NOTIF_TEMPLATES[key].get("sample", {})
-    text = body.get("text")
-    rendered = render_template(str(text), sample) if text else render_notif(key, **sample)
-    await _notify(admin["telegram_id"], rendered)
-    return {"ok": True, "sent_to": admin["telegram_id"], "preview": rendered}
-
-
-# --- Trustee (group-admin) notification templates -----------------------------
-@app.get("/api/admin/notif-templates")
-async def admin_notif_templates(request: Request):
-    user, db, group = await _require_group_trustee(request)
-    await _load_notif_overrides(db)
-    await db.close()
-    return {"templates": _notif_template_list(group["id"])}
-
-
-@app.patch("/api/admin/notif-templates/{key}")
-async def admin_update_notif_template(key: str, request: Request):
-    user, db, group = await _require_group_trustee(request)
-    if key not in NOTIF_TEMPLATES:
-        await db.close()
-        raise HTTPException(404, "Unknown template")
-    body = await request.json()
-    text = "" if body.get("reset") else str(body.get("text") or "")
-    reset = await _set_notif_override(db, group["id"], key, text)
-    await db.commit()
-    await _load_notif_overrides(db)
-    await db.close()
-    return {"ok": True, "reset": reset}
-
-
-@app.post("/api/admin/notif-templates/{key}/test")
-async def admin_test_notif_template(key: str, request: Request):
-    """Send a sample of this group's message to the trustee's own Telegram."""
-    user, db, group = await _require_group_trustee(request)
-    gid = group["id"]
-    await db.close()
-    if key not in NOTIF_TEMPLATES:
-        raise HTTPException(404, "Unknown template")
-    body = await request.json()
-    sample = NOTIF_TEMPLATES[key].get("sample", {})
-    text = body.get("text")
-    rendered = render_template(str(text), sample) if text else render_notif(key, group_id=gid, **sample)
-    await _notify(user["telegram_id"], rendered)
-    return {"ok": True, "sent_to": user["telegram_id"], "preview": rendered}
-
-
 @app.patch("/api/platform/users/{telegram_id}")
 async def platform_patch_user(
     telegram_id: int,
@@ -4668,6 +4887,8 @@ async def platform_patch_user(
         )
 
     await db.commit()
+    if "credit" in body and body["credit"] is not None:
+        await _evaluate_rules_for_user_safely(db, telegram_id)
     cur = await db.execute("""
         SELECT u.*, g.name AS group_name, g.slug AS group_slug
         FROM users u
@@ -5141,6 +5362,7 @@ async def stripe_webhook(request: Request):
                 (user_id, "deposit", amount, note, group_id),
             )
             await db.commit()
+            await _evaluate_rules_for_user_safely(db, user_id)
 
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
@@ -5216,6 +5438,7 @@ async def stripe_webhook(request: Request):
                     (user_id, "deposit", amount, "Stripe subscription billing"),
                 )
                 await db.commit()
+                await _evaluate_rules_for_user_safely(db, user_id)
 
     elif event["type"] == "customer.subscription.deleted":
         sub_id = event["data"]["object"]["id"]
