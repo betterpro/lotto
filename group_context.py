@@ -217,10 +217,24 @@ async def add_group_member(
     return await cur.fetchone() is not None
 
 
+async def group_notifications_enabled(db, user_id: int, group_id: int | None) -> bool:
+    """Return the member's single notification preference for a group."""
+    if group_id is None:
+        return True
+    cur = await db.execute(
+        """SELECT COALESCE(notifications_enabled, 1) AS enabled
+           FROM group_members WHERE group_id=? AND user_id=?""",
+        (group_id, user_id),
+    )
+    row = await cur.fetchone()
+    return bool(row and row["enabled"])
+
+
 async def get_user_groups(db, user_id: int) -> list[dict]:
     cur = await db.execute(
         """SELECT g.id, g.name, g.slug, g.status, g.trustee_user_id,
-                  gm.role, gm.joined_at
+                  gm.role, gm.joined_at,
+                  COALESCE(gm.notifications_enabled, 1) AS notifications_enabled
            FROM group_members gm
            JOIN groups g ON g.id = gm.group_id
            WHERE gm.user_id = ?
@@ -243,6 +257,7 @@ def member_group_public(row: dict) -> dict:
         "status": row["status"],
         "role": row.get("role"),
         "is_trustee": bool(row.get("is_trustee")),
+        "notifications_enabled": bool(row.get("notifications_enabled", 1)),
     }
 
 

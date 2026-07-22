@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS group_members (
     group_id   BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     user_id    BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
     invited_by_user_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
+    notifications_enabled INTEGER NOT NULL DEFAULT 1
+                          CHECK (notifications_enabled IN (0, 1)),
     role       TEXT   NOT NULL DEFAULT 'member',
     joined_at  TEXT   NOT NULL
                DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
@@ -55,6 +57,8 @@ CREATE TABLE IF NOT EXISTS group_members (
 CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_group_inviter
     ON group_members(group_id, invited_by_user_id) WHERE invited_by_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_group_members_notifications
+    ON group_members(user_id, group_id, notifications_enabled);
 
 CREATE TABLE IF NOT EXISTS notification_rules (
     id              BIGSERIAL PRIMARY KEY,

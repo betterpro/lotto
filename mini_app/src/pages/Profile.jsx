@@ -106,9 +106,7 @@ const DEFAULTS = {
   auto_participate: false, shares_per_round: 1,
   max_rounds_per_month: 4, preferred_day: null,
   lottery_preference: 'both',
-  notif_new_round: true, notif_reminder: true,
-  notif_ticket: true, notif_results: true,
-  notif_contribution: true, notif_round_closed: true,
+  notification_groups: [],
 }
 
 function initialProfileEmail(user) {
@@ -143,6 +141,15 @@ export default function Profile({ user, onUserUpdate }) {
 
   const set = useCallback((key, val) =>
     setSettings(prev => ({ ...prev, [key]: val })), [])
+
+  const setGroupNotifications = useCallback((groupId, enabled) => {
+    setSettings(prev => ({
+      ...prev,
+      notification_groups: (prev.notification_groups || []).map(group =>
+        group.group_id === groupId ? { ...group, enabled } : group
+      ),
+    }))
+  }, [])
 
   async function saveEmail() {
     const trimmed = email.trim().toLowerCase()
@@ -434,53 +441,39 @@ export default function Profile({ user, onUserUpdate }) {
             {/* ── Notifications ── */}
             <SectionHead icon={BellIcon} label="Notifications" />
 
+            <p style={{
+              fontSize: 13, color: 'var(--tx-3)', lineHeight: 1.5,
+              margin: '-2px 2px 10px',
+            }}>
+              Control all Telegram notifications from each group, including round updates,
+              reminders, results, and admin automations.
+            </p>
+
             <div style={{
               background: 'var(--surface)', border: '.5px solid var(--hairline-2)',
               borderRadius: 14, overflow: 'hidden',
             }}>
-              {[
-                {
-                  key: 'notif_new_round', icon: '🎟',
-                  label: 'New round opened',
-                  sub: 'Alert when admin starts a new draw',
-                },
-                {
-                  key: 'notif_contribution', icon: '💸',
-                  label: 'Pool activity',
-                  sub: 'When another member adds to a round you joined',
-                },
-                {
-                  key: 'notif_reminder', icon: '⏰',
-                  label: 'Closing reminders',
-                  sub: '48h & 24h before a round closes to entries',
-                },
-                {
-                  key: 'notif_ticket', icon: '✅',
-                  label: 'Ticket purchased',
-                  sub: 'Confirmation when ticket is bought',
-                },
-                {
-                  key: 'notif_results', icon: '🏆',
-                  label: 'Results & prizes',
-                  sub: 'Your winnings when results are entered',
-                },
-                ...(user?.is_group_trustee ? [{
-                  key: 'notif_round_closed', icon: '🎫',
-                  label: 'Round closed — buy ticket',
-                  sub: 'Alert you when a round closes so you can buy the ticket',
-                }] : []),
-              ].map(({ key, icon, label, sub }, i, arr) => (
-                <div key={key} style={{
+              {(settings.notification_groups || []).length === 0 ? (
+                <div style={{ padding: '14px', fontSize: 14, color: 'var(--tx-3)' }}>
+                  Join a group to manage notifications.
+                </div>
+              ) : (settings.notification_groups || []).map((group, i, groups) => (
+                <div key={group.group_id} style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 14px',
-                  borderBottom: i < arr.length - 1 ? '.5px solid var(--hairline)' : 'none',
+                  borderBottom: i < groups.length - 1 ? '.5px solid var(--hairline)' : 'none',
                 }}>
-                  <span style={{ fontSize: 23, flexShrink: 0 }}>{icon}</span>
+                  <span style={{ fontSize: 23, flexShrink: 0 }}>🔔</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 500 }}>{label}</div>
-                    <div style={{ fontSize: 13, color: 'var(--tx-3)', marginTop: 1 }}>{sub}</div>
+                    <div style={{ fontSize: 15, fontWeight: 500 }}>{group.group_name}</div>
+                    <div style={{ fontSize: 13, color: 'var(--tx-3)', marginTop: 1 }}>
+                      All group notifications
+                    </div>
                   </div>
-                  <Toggle on={settings[key]} onChange={v => set(key, v)} />
+                  <Toggle
+                    on={group.enabled}
+                    onChange={enabled => setGroupNotifications(group.group_id, enabled)}
+                  />
                 </div>
               ))}
             </div>

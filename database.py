@@ -237,6 +237,20 @@ _SCHEMA_STATEMENTS = [
     # Attributed invitations + richer member notification conditions.
     "ALTER TABLE group_members ADD COLUMN IF NOT EXISTS invited_by_user_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL",
     "CREATE INDEX IF NOT EXISTS idx_group_members_group_inviter ON group_members (group_id, invited_by_user_id) WHERE invited_by_user_id IS NOT NULL",
+    """DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema='public' AND table_name='group_members'
+                          AND column_name='notifications_enabled') THEN
+           ALTER TABLE group_members ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1
+             CHECK (notifications_enabled IN (0,1));
+           UPDATE group_members gm SET notifications_enabled=0 FROM user_settings s
+            WHERE s.user_id=gm.user_id
+              AND COALESCE(s.notif_new_round,1)=0 AND COALESCE(s.notif_reminder,1)=0
+              AND COALESCE(s.notif_ticket,1)=0 AND COALESCE(s.notif_results,1)=0
+              AND COALESCE(s.notif_contribution,1)=0 AND COALESCE(s.notif_round_closed,1)=0;
+         END IF;
+       END $$""",
+    "CREATE INDEX IF NOT EXISTS idx_group_members_notifications ON group_members (user_id, group_id, notifications_enabled)",
     # Group-scoped WHEN/THEN notification rules. These tables are backend-only;
     # anon/authenticated Data API roles receive no grants.
     "DROP TABLE IF EXISTS notif_templates",

@@ -90,6 +90,7 @@ from group_context import (
     get_trustee_user,
     get_user_groups,
     group_allows_payment,
+    group_notifications_enabled,
     group_public,
     invite_start_param,
     join_group_by_code,
@@ -911,6 +912,7 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
         open_round = await round_cur.fetchone()
         open_round_id = open_round["id"] if open_round else None
         members_sql = """SELECT u.telegram_id, u.username, u.full_name, u.credit,
+                                COALESCE(gm.notifications_enabled, 1) AS notifications_enabled,
                                 COALESCE(p.shares, 0) AS current_round_shares,
                                 CASE WHEN p.user_id IS NULL THEN 0 ELSE 1 END AS current_round_joined,
                                 (SELECT COUNT(*) FROM group_members invited
@@ -927,6 +929,7 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
         members_cur = await db.execute(members_sql, tuple(member_params))
         for member_row in await members_cur.fetchall():
             member = dict(member_row)
+            notifications_on = bool(member.get("notifications_enabled", 1))
             member["current_round_seq"] = (
                 (open_round.get("group_seq") or open_round["id"]) if open_round else None
             )
@@ -945,7 +948,8 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
             value = float(member.get(condition_field) or 0)
             needs_round = condition_field in {"current_round_joined", "current_round_shares"}
             matches = bool(
-                (open_round is not None or not needs_round)
+                notifications_on
+                and (open_round is not None or not needs_round)
                 and compare(value, float(rule["threshold"]))
             )
             state_cur = await db.execute(
@@ -1024,6 +1028,8 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
 async def _notify_model(db, telegram_id: int, event_key: str, group_id: int | None,
                         event_ref: str, **context) -> bool:
     """Deliver a built-in model or its group-authored event automation(s)."""
+    if not await group_notifications_enabled(db, telegram_id, group_id):
+        return False
     default_text = render_notif(event_key, group_id=group_id, **context)
     if group_id is None or event_key not in _NOTIFICATION_EVENT_KEYS:
         return await _notify(telegram_id, default_text)
@@ -1104,8 +1110,7 @@ async def _notify_new_group_membership(db, group: dict, member_id: int) -> None:
     recipients_cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id=u.telegram_id AND gm.group_id=?
-           LEFT JOIN user_settings s ON s.user_id=u.telegram_id
-           WHERE u.telegram_id != ? AND COALESCE(s.notif_contribution, 1)=1""",
+           WHERE u.telegram_id != ? AND COALESCE(gm.notifications_enabled, 1)=1""",
         (gid, member_id),
     )
     for recipient in await recipients_cur.fetchall():
@@ -1213,34 +1218,18 @@ async def _upload_ticket_to_storage(
     return f"{config.SUPABASE_URL}/storage/v1/object/public/tickets/{path}"
 
 
-async def _notify_all(db, text: str, setting_col: str | None = None,
-                      group_id: int | None = None, event_key: str | None = None,
+async def _notify_all(db, text: str, group_id: int | None = None, event_key: str | None = None,
                       event_ref: str | None = None, event_context: dict | None = None):
-    """Notify users in a group, optionally filtering by a user_settings boolean column."""
-    if setting_col:
-        if group_id is not None:
-            cur = await db.execute(f"""
-                SELECT u.telegram_id FROM users u
-                JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
-                LEFT JOIN user_settings s ON s.user_id = u.telegram_id
-                WHERE COALESCE(s.{setting_col}, 1) = 1
-            """, (group_id,))
-        else:
-            cur = await db.execute(f"""
-                SELECT u.telegram_id FROM users u
-                LEFT JOIN user_settings s ON s.user_id = u.telegram_id
-                WHERE COALESCE(s.{setting_col}, 1) = 1
-            """)
+    """Notify the members who enabled all notifications for this group."""
+    if group_id is not None:
+        cur = await db.execute(
+            """SELECT u.telegram_id FROM users u
+               JOIN group_members gm ON gm.user_id = u.telegram_id
+               WHERE gm.group_id = ? AND COALESCE(gm.notifications_enabled, 1) = 1""",
+            (group_id,),
+        )
     else:
-        if group_id is not None:
-            cur = await db.execute(
-                """SELECT u.telegram_id FROM users u
-                   JOIN group_members gm ON gm.user_id = u.telegram_id
-                   WHERE gm.group_id = ?""",
-                (group_id,),
-            )
-        else:
-            cur = await db.execute("SELECT telegram_id FROM users")
+        cur = await db.execute("SELECT telegram_id FROM users")
     for row in await cur.fetchall():
         if event_key and event_ref:
             await _notify_model(db, row["telegram_id"], event_key, group_id,
@@ -1262,9 +1251,7 @@ async def _notify_round_contribution(
     }
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
-           LEFT JOIN user_settings s ON s.user_id = p.user_id
-           WHERE p.round_id = ? AND p.user_id != ?
-             AND COALESCE(s.notif_contribution, 1) = 1""",
+           WHERE p.round_id = ? AND p.user_id != ?""",
         (round_d["id"], contributor["telegram_id"]),
     )
     for row in await cur.fetchall():
@@ -1289,8 +1276,7 @@ async def _notify_round_contribution(
     members_cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id=u.telegram_id AND gm.group_id=?
-           LEFT JOIN user_settings s ON s.user_id=u.telegram_id
-           WHERE COALESCE(s.notif_contribution, 1)=1
+           WHERE COALESCE(gm.notifications_enabled, 1)=1
              AND NOT EXISTS (
                  SELECT 1 FROM participations p
                  WHERE p.round_id=? AND p.user_id=u.telegram_id
@@ -1319,13 +1305,6 @@ async def _notify_round_closed(db, round_id: int):
     if not grow or not grow["trustee_user_id"]:
         return
     trustee_id = grow["trustee_user_id"]
-    cur = await db.execute(
-        "SELECT COALESCE(notif_round_closed, 1) AS enabled FROM user_settings WHERE user_id=?",
-        (trustee_id,),
-    )
-    srow = await cur.fetchone()
-    if srow is not None and not srow["enabled"]:
-        return
     tickets = await _round_tickets_required(db, round_d)
     pool = float(round_d.get("pool") or 0)
     draw = round_d.get("draw_date")
@@ -1350,13 +1329,12 @@ async def _remind_non_contributors(db, round_d: dict, hours: int):
     cur = await db.execute(
         """SELECT u.telegram_id FROM users u
            JOIN group_members gm ON gm.user_id = u.telegram_id AND gm.group_id = ?
-           LEFT JOIN user_settings s ON s.user_id = u.telegram_id
-           WHERE COALESCE(s.notif_reminder, 1) = 1
+           WHERE COALESCE(gm.notifications_enabled, 1) = 1
              AND NOT EXISTS (
                  SELECT 1 FROM participations p
                  WHERE p.round_id = ? AND p.user_id = u.telegram_id
              )""",
-        (gid, rid),
+        (gid, round_d["id"]),
     )
     for row in await cur.fetchall():
         await _notify_model(
@@ -1830,8 +1808,7 @@ async def _notify_round_results(db, rd, numbers, bonus, m):
     key = "results_auto_win" if m["any_win"] else "results_auto_nowin"
     cur = await db.execute(
         """SELECT p.user_id FROM participations p
-           LEFT JOIN user_settings s ON s.user_id = p.user_id
-           WHERE p.round_id=? AND COALESCE(s.notif_results, 1) = 1""",
+           WHERE p.round_id=?""",
         (rd["id"],),
     )
     for r in await cur.fetchall():
@@ -3163,8 +3140,7 @@ async def api_deposit(request: Request):
 _SETTING_DEFAULTS = dict(
     auto_participate=False, shares_per_round=1, max_rounds_per_month=4,
     preferred_day=None, lottery_preference="both",
-    notif_new_round=True, notif_reminder=True, notif_ticket=True, notif_results=True,
-    notif_contribution=True, notif_round_closed=True,
+    notification_groups=[],
 )
 
 _LOTTERY_SHARE_PRICE = LOTTERY_PREFERENCE_PRICES
@@ -3188,12 +3164,7 @@ def _row_to_settings(row) -> dict:
         "max_rounds_per_month": row["max_rounds_per_month"],
         "preferred_day":        row["preferred_day"],
         "lottery_preference":   row["lottery_preference"] or "both",
-        "notif_new_round":      bool(row["notif_new_round"]),
-        "notif_reminder":       bool(row["notif_reminder"]),
-        "notif_ticket":         bool(row["notif_ticket"]),
-        "notif_results":        bool(row["notif_results"]),
-        "notif_contribution":   bool(_row_get(row, "notif_contribution", 1)),
-        "notif_round_closed":   bool(_row_get(row, "notif_round_closed", 1)),
+        "notification_groups":  [],
     }
 
 
@@ -3202,8 +3173,18 @@ async def get_settings(request: Request):
     user, db = await _auth(request)
     cur = await db.execute("SELECT * FROM user_settings WHERE user_id=?", (user["telegram_id"],))
     row = await cur.fetchone()
+    settings = _row_to_settings(row)
+    memberships = await get_user_groups(db, user["telegram_id"])
+    settings["notification_groups"] = [
+        {
+            "group_id": membership["id"],
+            "group_name": membership["name"],
+            "enabled": bool(membership.get("notifications_enabled", 1)),
+        }
+        for membership in memberships
+    ]
     await db.close()
-    return _row_to_settings(row)
+    return settings
 
 
 @app.put("/api/settings")
@@ -3216,22 +3197,14 @@ async def put_settings(request: Request):
     await db.execute("""
         INSERT INTO user_settings
             (user_id, auto_participate, shares_per_round, max_rounds_per_month,
-             preferred_day, lottery_preference,
-             notif_new_round, notif_reminder, notif_ticket, notif_results,
-             notif_contribution, notif_round_closed, updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+             preferred_day, lottery_preference, updated_at)
+        VALUES (?,?,?,?,?,?,datetime('now'))
         ON CONFLICT(user_id) DO UPDATE SET
             auto_participate=excluded.auto_participate,
             shares_per_round=excluded.shares_per_round,
             max_rounds_per_month=excluded.max_rounds_per_month,
             preferred_day=excluded.preferred_day,
             lottery_preference=excluded.lottery_preference,
-            notif_new_round=excluded.notif_new_round,
-            notif_reminder=excluded.notif_reminder,
-            notif_ticket=excluded.notif_ticket,
-            notif_results=excluded.notif_results,
-            notif_contribution=excluded.notif_contribution,
-            notif_round_closed=excluded.notif_round_closed,
             updated_at=excluded.updated_at
     """, (
         user["telegram_id"],
@@ -3240,13 +3213,22 @@ async def put_settings(request: Request):
         max(1, int(b.get("max_rounds_per_month", 4))),
         b.get("preferred_day"),
         lottery_pref,
-        int(bool(b.get("notif_new_round",  True))),
-        int(bool(b.get("notif_reminder",   True))),
-        int(bool(b.get("notif_ticket",     True))),
-        int(bool(b.get("notif_results",    True))),
-        int(bool(b.get("notif_contribution", True))),
-        int(bool(b.get("notif_round_closed", True))),
     ))
+    notification_groups = b.get("notification_groups")
+    if isinstance(notification_groups, list):
+        for preference in notification_groups:
+            if not isinstance(preference, dict):
+                continue
+            try:
+                group_id = int(preference.get("group_id"))
+            except (TypeError, ValueError):
+                continue
+            await db.execute(
+                """UPDATE group_members SET notifications_enabled=?
+                   WHERE group_id=? AND user_id=?""",
+                (int(bool(preference.get("enabled", True))),
+                 group_id, user["telegram_id"]),
+            )
     await db.commit()
     await db.close()
     return {"ok": True}
@@ -4005,7 +3987,6 @@ async def admin_new_round(request: Request):
     }
     await _notify_all(db,
         render_notif("new_round", group_id=gid, **new_round_context),
-        setting_col="notif_new_round",
         group_id=gid,
         event_key="new_round",
         event_ref=f"round:{round_id}",
@@ -4471,25 +4452,17 @@ async def admin_upload_ticket(request: Request):
     )
     participant_ids = [r["user_id"] for r in await cur.fetchall()]
     for uid in participant_ids:
-        setting = await db.execute(
-            "SELECT notif_ticket, notif_reminder FROM user_settings WHERE user_id=?", (uid,)
+        await _notify_model(
+            db, uid, "ticket_purchased", round_.get("group_id"),
+            f"round:{round_['id']}", rid=round_.get("group_seq") or round_["id"],
+            numbers=nums_str,
+            lotto_name=lottery_label(round_.get("lottery_type") or "lotto_max"),
         )
-        s = await setting.fetchone()
-        notif_ticket   = s["notif_ticket"]   if s else 1
-        notif_reminder = s["notif_reminder"] if s else 1
-        if notif_ticket:
-            await _notify_model(
-                db, uid, "ticket_purchased", round_.get("group_id"),
-                f"round:{round_['id']}", rid=round_.get("group_seq") or round_["id"],
-                numbers=nums_str,
-                lotto_name=lottery_label(round_.get("lottery_type") or "lotto_max"),
-            )
-        if notif_reminder:
-            await _notify_model(
-                db, uid, "draw_reminder", round_.get("group_id"),
-                f"round:{round_['id']}", draw=draw_date_str,
-                lotto_name=lottery_label(round_.get("lottery_type") or "lotto_max"),
-            )
+        await _notify_model(
+            db, uid, "draw_reminder", round_.get("group_id"),
+            f"round:{round_['id']}", draw=draw_date_str,
+            lotto_name=lottery_label(round_.get("lottery_type") or "lotto_max"),
+        )
 
     # Email the round agreement, group play form + ticket photos to participants.
     if email_enabled():
@@ -4979,12 +4952,6 @@ async def admin_enter_results(request: Request):
     # counts as a win. If the total result is nothing, everyone gets "no win".
     round_won = total_prize > 0 or free_tickets > 0
     for p in parts:
-        setting = await db.execute(
-            "SELECT notif_results FROM user_settings WHERE user_id=?", (p["user_id"],)
-        )
-        s = await setting.fetchone()
-        if s and not s["notif_results"]:
-            continue
         prize = prize_by_user.get(p["user_id"], 0)
         share_pct = round(p["amount"] / pool * 100, 1) if pool else 0
         fv = free_value_by_user.get(p["user_id"], 0)  # next-round free stake ($), proportional
@@ -5721,7 +5688,11 @@ async def admin_broadcast(request: Request):
     message = message[:2000]
     text = render_notif("broadcast", group_id=group["id"],
                         group=html.escape(group["name"]), message=html.escape(message))
-    cur = await db.execute("SELECT COUNT(*) AS n FROM group_members WHERE group_id=?", (group["id"],))
+    cur = await db.execute(
+        """SELECT COUNT(*) AS n FROM group_members
+           WHERE group_id=? AND COALESCE(notifications_enabled, 1)=1""",
+        (group["id"],),
+    )
     n = int((await cur.fetchone())["n"] or 0)
     await _notify_all(db, text, group_id=group["id"])
     await db.close()
