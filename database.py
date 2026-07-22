@@ -234,6 +234,9 @@ _SCHEMA_STATEMENTS = [
     # Per-group reminder lead times (hours before the draw). 0 disables a slot.
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS reminder_hours_1 INTEGER NOT NULL DEFAULT 48",
     "ALTER TABLE groups ADD COLUMN IF NOT EXISTS reminder_hours_2 INTEGER NOT NULL DEFAULT 24",
+    # Attributed invitations + richer member notification conditions.
+    "ALTER TABLE group_members ADD COLUMN IF NOT EXISTS invited_by_user_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL",
+    "CREATE INDEX IF NOT EXISTS idx_group_members_group_inviter ON group_members (group_id, invited_by_user_id) WHERE invited_by_user_id IS NOT NULL",
     # Group-scoped WHEN/THEN notification rules. These tables are backend-only;
     # anon/authenticated Data API roles receive no grants.
     "DROP TABLE IF EXISTS notif_templates",
@@ -255,6 +258,10 @@ _SCHEMA_STATEMENTS = [
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS event_key TEXT",
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS text_direction TEXT NOT NULL DEFAULT 'auto'",
     "ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'en'",
+    "ALTER TABLE notification_rules DROP CONSTRAINT IF EXISTS notification_rules_condition_field_check",
+    "ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_condition_field_check CHECK (condition_field IN ('credit','current_round_joined','current_round_shares','successful_invites'))",
+    "ALTER TABLE notification_rules DROP CONSTRAINT IF EXISTS notification_rules_operator_check",
+    "ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_operator_check CHECK (operator IN ('lt','lte','gt','gte','eq','neq'))",
     """DO $$ BEGIN
          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='notification_rules_trigger_type_check') THEN
            ALTER TABLE notification_rules ADD CONSTRAINT notification_rules_trigger_type_check
@@ -416,6 +423,7 @@ async def create_web_user(db, full_name, *, auth_email=None, password_hash=None,
 _USER_FK_REPOINTS = [
     ("groups", "trustee_user_id"),
     ("users", "invited_by"),
+    ("group_members", "invited_by_user_id"),
     ("trustee_applications", "applicant_user_id"),
     ("trustee_applications", "reviewed_by"),
     ("rounds", "winner_id"),

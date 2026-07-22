@@ -29,18 +29,19 @@ export function pathToPage(pathname) {
 }
 
 export const INVITE_SLUG_KEY = 'lottoo_pending_invite_slug'
+const withoutInviteReferrer = value => value?.replace(/_r[0-9a-z]+$/i, '') || null
 
 /** Resolve invite slug from Telegram start_param, URL path, or query. */
 export function parseInviteSlug(pathname = '', search = '') {
   const sp = window.Telegram?.WebApp?.initDataUnsafe?.start_param
   if (sp) {
-    if (sp.startsWith('join_')) return sp.slice(5)
-    if (sp.startsWith('g_')) return sp.slice(2)
+    if (sp.startsWith('join_')) return withoutInviteReferrer(sp.slice(5))
+    if (sp.startsWith('g_')) return withoutInviteReferrer(sp.slice(2))
   }
   const joinMatch = pathname.match(/^\/join\/([^/]+)/)
-  if (joinMatch) return decodeURIComponent(joinMatch[1])
+  if (joinMatch) return withoutInviteReferrer(decodeURIComponent(joinMatch[1]))
   const params = new URLSearchParams(search)
   const q = params.get('join') || params.get('invite')
-  if (q) return q
-  return localStorage.getItem(INVITE_SLUG_KEY) || null
+  if (q) return withoutInviteReferrer(q)
+  return withoutInviteReferrer(localStorage.getItem(INVITE_SLUG_KEY))
 }

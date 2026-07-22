@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 
 import database as db
 from config import CURRENCY, PLATFORM_ADMIN_IDS
-from group_context import join_group_by_slug, parse_invite_slug
+from group_context import join_group_by_slug, parse_invite_context
 from keyboards import main_menu, admin_menu
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     group_id = None
     group_name = None
     slug = None
+    invite_referrer = None
     if ctx.args:
         arg = ctx.args[0]
         if arg.startswith("ref_"):
@@ -49,7 +50,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 invited_by = int(arg[4:])
             except ValueError:
                 pass
-        slug = parse_invite_slug(arg) if arg.startswith(("g_", "join_")) else None
+        if arg.startswith(("g_", "join_")):
+            slug, invite_referrer = parse_invite_context(arg)
         if slug:
             g = await db.get_group_by_slug(conn, slug)
             if g and g["status"] == "active":
@@ -71,7 +73,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             is_platform_admin=is_platform,
         )
         if slug:
-            err, joined_group, membership_created = await join_group_by_slug(conn, user.id, slug)
+            err, joined_group, membership_created = await join_group_by_slug(
+                conn, user.id, slug, invite_referrer,
+            )
             notify_join = ctx.bot_data.get("notify_new_group_membership")
             if not err and joined_group and membership_created and notify_join:
                 await notify_join(conn, dict(joined_group), user.id)
@@ -90,7 +94,9 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         welcome = f"👋 Welcome back, *{user.first_name}*!"
         if slug:
-            err, joined_group, membership_created = await join_group_by_slug(conn, user.id, slug)
+            err, joined_group, membership_created = await join_group_by_slug(
+                conn, user.id, slug, invite_referrer,
+            )
             if not err and joined_group:
                 welcome = f"👋 Welcome! You've joined *{joined_group['name']}*."
                 notify_join = ctx.bot_data.get("notify_new_group_membership")

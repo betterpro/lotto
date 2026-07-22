@@ -18,15 +18,51 @@ def normalize_join_code(code: str | None) -> str:
     return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
 
 
-def parse_invite_slug(start_param: str | None) -> str | None:
+def _base36(value: int) -> str:
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    original = int(value)
+    value = abs(original)
+    if value == 0:
+        return "0"
+    out = ""
+    while value:
+        value, digit = divmod(value, 36)
+        out = alphabet[digit] + out
+    return ("n" + out) if original < 0 else out
+
+
+def invite_start_param(slug: str, inviter_id: int | None = None) -> str:
+    """Build a Telegram-safe start parameter, optionally attributing the inviter."""
+    base = f"join_{slug}"
+    return f"{base}_r{_base36(inviter_id)}" if inviter_id else base
+
+
+def parse_invite_context(start_param: str | None) -> tuple[str | None, int | None]:
     if not start_param:
-        return None
+        return None, None
     sp = start_param.strip()
     if sp.startswith("join_"):
-        return sp[5:].lower().strip() or None
-    if sp.startswith("g_"):
-        return sp[2:].lower().strip() or None
-    return None
+        value = sp[5:].lower().strip()
+    elif sp.startswith("g_"):
+        value = sp[2:].lower().strip()
+    else:
+        return None, None
+    inviter_id = None
+    match = re.match(r"^(.*)_r([0-9a-z]+)$", value)
+    if match:
+        value = match.group(1)
+        try:
+            encoded = match.group(2)
+            inviter_id = (-1 if encoded.startswith("n") else 1) * int(
+                encoded[1:] if encoded.startswith("n") else encoded, 36
+            )
+        except ValueError:
+            inviter_id = None
+    return (value or None), inviter_id
+
+
+def parse_invite_slug(start_param: str | None) -> str | None:
+    return parse_invite_context(start_param)[0]
 
 
 def slugify(name: str) -> str:
@@ -157,14 +193,26 @@ async def user_in_group(db, user_id: int, group_id: int) -> bool:
     return await cur.fetchone() is not None
 
 
-async def add_group_member(db, group_id: int, user_id: int, role: str = "member") -> bool:
+async def add_group_member(
+    db, group_id: int, user_id: int, role: str = "member",
+    invited_by_user_id: int | None = None,
+) -> bool:
     """Add a membership and report whether this call created it."""
+    if invited_by_user_id == user_id:
+        invited_by_user_id = None
+    if invited_by_user_id is not None:
+        inviter_cur = await db.execute(
+            "SELECT 1 FROM group_members WHERE group_id=? AND user_id=?",
+            (group_id, invited_by_user_id),
+        )
+        if await inviter_cur.fetchone() is None:
+            invited_by_user_id = None
     cur = await db.execute(
-        """INSERT INTO group_members (group_id, user_id, role)
-           VALUES (?, ?, ?)
+        """INSERT INTO group_members (group_id, user_id, role, invited_by_user_id)
+           VALUES (?, ?, ?, ?)
            ON CONFLICT (group_id, user_id) DO NOTHING
            RETURNING user_id""",
-        (group_id, user_id, role),
+        (group_id, user_id, role, invited_by_user_id),
     )
     return await cur.fetchone() is not None
 
@@ -213,7 +261,9 @@ async def ensure_active_group_id(db, user: dict) -> int | None:
     return gid
 
 
-async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | None, dict | None, bool]:
+async def join_group_by_slug(
+    db, telegram_id: int, slug: str, invited_by_user_id: int | None = None,
+) -> tuple[str | None, dict | None, bool]:
     """Add membership; return (error, group row, membership_was_created)."""
     group = await get_group_by_slug(db, slug)
     if not group:
@@ -221,7 +271,9 @@ async def join_group_by_slug(db, telegram_id: int, slug: str) -> tuple[str | Non
     if group["status"] != "active":
         return "This group is not accepting members", None, False
     role = "trustee" if group["trustee_user_id"] == telegram_id else "member"
-    joined = await add_group_member(db, group["id"], telegram_id, role)
+    joined = await add_group_member(
+        db, group["id"], telegram_id, role, invited_by_user_id,
+    )
     cur = await db.execute("SELECT group_id FROM users WHERE telegram_id = ?", (telegram_id,))
     row = await cur.fetchone()
     if not row or not row["group_id"]:

@@ -91,11 +91,12 @@ from group_context import (
     get_user_groups,
     group_allows_payment,
     group_public,
+    invite_start_param,
     join_group_by_code,
     is_valid_card_deposit_amount,
     join_group_by_slug,
     member_group_public,
-    parse_invite_slug,
+    parse_invite_context,
     slugify,
     trustee_group_id,
     trustee_public,
@@ -274,15 +275,22 @@ def _init_start_param(params: dict) -> str | None:
     return params.get("start_param") or None
 
 
-async def _assign_group_from_slug(db, telegram_id: int, slug: str) -> str | None:
+async def _assign_group_from_slug(
+    db, telegram_id: int, slug: str, invited_by_user_id: int | None = None,
+) -> str | None:
     """Add group membership from invite slug. Returns error message or None on success."""
-    err, group, joined = await join_group_by_slug(db, telegram_id, slug)
+    err, group, joined = await join_group_by_slug(
+        db, telegram_id, slug, invited_by_user_id,
+    )
     if not err and group and joined:
         await _notify_new_group_membership(db, dict(group), telegram_id)
     return err
 
 
-async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
+async def _sync_user_from_tg(
+    db, tg: dict, invite_slug: str | None = None,
+    invite_referrer: int | None = None,
+):
     """Load or create user from Telegram user dict; optional invite slug join."""
     joined_group = None
     row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
@@ -312,7 +320,9 @@ async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
         )
         if group_id and invite_g:
             role = "trustee" if invite_g["trustee_user_id"] == tg["id"] else "member"
-            if await add_group_member(db, group_id, tg["id"], role):
+            if await add_group_member(
+                db, group_id, tg["id"], role, invite_referrer,
+            ):
                 joined_group = dict(invite_g)
         await db.commit()
         row = await db.execute("SELECT * FROM users WHERE telegram_id=?", (tg["id"],))
@@ -320,7 +330,9 @@ async def _sync_user_from_tg(db, tg: dict, invite_slug: str | None = None):
         if joined_group:
             await _notify_new_group_membership(db, joined_group, tg["id"])
     elif invite_slug:
-        err = await _assign_group_from_slug(db, tg["id"], invite_slug)
+        err = await _assign_group_from_slug(
+            db, tg["id"], invite_slug, invite_referrer,
+        )
         if err:
             user = dict(user)
             user["_invite_error"] = err
@@ -354,8 +366,8 @@ async def _get_user(init_data: str, db):
     if not user_json:
         raise HTTPException(401, "No user in initData")
     tg = json.loads(user_json)
-    invite_slug = parse_invite_slug(_init_start_param(params))
-    return await _sync_user_from_tg(db, tg, invite_slug)
+    invite_slug, invite_referrer = parse_invite_context(_init_start_param(params))
+    return await _sync_user_from_tg(db, tg, invite_slug, invite_referrer)
 
 
 async def _get_user_by_id(db, telegram_id: int):
@@ -406,8 +418,46 @@ _RULE_OPERATORS = {
     "lte": lambda value, threshold: value <= threshold,
     "gt": lambda value, threshold: value > threshold,
     "gte": lambda value, threshold: value >= threshold,
+    "eq": lambda value, threshold: value == threshold,
+    "neq": lambda value, threshold: value != threshold,
 }
-_RULE_PLACEHOLDERS = {"name", "credit", "threshold", "group"}
+_RULE_PLACEHOLDERS = {
+    "name", "credit", "threshold", "group", "shares", "invite_count",
+    "round", "lotto_name", "price", "invite_link",
+}
+_RULE_CONDITIONS = {
+    "credit": {
+        "label": "Member credit", "description": "The member's available credit balance.",
+        "kind": "money", "default_operator": "lt", "default_threshold": 5,
+        "default_name": "Low credit reminder",
+        "default_message": "Hi {name}, your credit is <b>${credit}</b>. Add credit when you're ready to join the next round.",
+        "placeholders": {"name", "credit", "threshold", "group"},
+    },
+    "current_round_joined": {
+        "label": "Has not joined current round",
+        "description": "Matches members with no shares in the current open round.",
+        "kind": "fixed", "default_operator": "eq", "default_threshold": 0,
+        "default_name": "Join the current round",
+        "default_message": "Hi {name}! You haven't joined <b>{lotto_name} Round #{round}</b> yet. Shares are <b>${price}</b> each if you'd like to join. 🍀",
+        "placeholders": {"name", "group", "round", "lotto_name", "price", "shares"},
+    },
+    "current_round_shares": {
+        "label": "Current-round shares",
+        "description": "The member's share count in the current open round.",
+        "kind": "number", "default_operator": "lt", "default_threshold": 2,
+        "default_name": "Share count reminder",
+        "default_message": "Hi {name}, you currently have <b>{shares}</b> share(s) in {lotto_name} Round #{round}. Add shares at <b>${price}</b> each when you're ready. 🙌",
+        "placeholders": {"name", "group", "round", "lotto_name", "price", "shares", "threshold"},
+    },
+    "successful_invites": {
+        "label": "Successful invites",
+        "description": "Friends who joined this group through the member's personal invite link.",
+        "kind": "number", "default_operator": "lt", "default_threshold": 1,
+        "default_name": "Invite friends reminder",
+        "default_message": "Hi {name}! Grow {group} with friends 🙌 You have <b>{invite_count}</b> successful invite(s) so far. Share your link:\n{invite_link}",
+        "placeholders": {"name", "group", "invite_count", "invite_link", "threshold"},
+    },
+}
 _RULE_DIRECTIONS = {"auto", "ltr", "rtl"}
 _RULE_LANGUAGES = {"en": "English", "fa": "Persian (Farsi)", "fr": "French"}
 _AI_NOTIFICATION_TONES = {
@@ -546,6 +596,25 @@ def _event_placeholders(event_key: str) -> set[str]:
     return placeholders
 
 
+def _condition_placeholders(condition_field: str) -> set[str]:
+    model = _RULE_CONDITIONS.get(condition_field) or _RULE_CONDITIONS["credit"]
+    return set(model["placeholders"])
+
+
+def _notification_condition_catalog() -> list[dict]:
+    return [
+        {
+            **{key: value for key, value in model.items() if key != "placeholders"},
+            "value": key,
+            "placeholders": sorted(model["placeholders"]),
+            "placeholder_help": {
+                item: VAR_HELP.get(item, "") for item in sorted(model["placeholders"])
+            },
+        }
+        for key, model in _RULE_CONDITIONS.items()
+    ]
+
+
 def _notification_event_catalog() -> list[dict]:
     return [
         {
@@ -596,19 +665,27 @@ def _normalise_notification_ai_request(body: dict) -> dict:
             "recipient": _EVENT_RECIPIENTS[event_key],
         }
     else:
+        condition_field = str(body.get("condition_field") or "credit")
+        condition = _RULE_CONDITIONS.get(condition_field)
+        if not condition:
+            raise HTTPException(400, "Select a valid member condition")
         operator = str(body.get("operator") or "lt")
         if operator not in _RULE_OPERATORS:
             raise HTTPException(400, "Invalid comparison operator")
         try:
             threshold = float(body.get("threshold"))
         except (TypeError, ValueError):
-            raise HTTPException(400, "A valid credit threshold is required")
+            raise HTTPException(400, "A valid condition value is required")
         if not math.isfinite(threshold) or threshold < 0:
-            raise HTTPException(400, "A valid credit threshold is required")
-        allowed = sorted(_RULE_PLACEHOLDERS)
+            raise HTTPException(400, "A valid condition value is required")
+        if condition["kind"] == "fixed":
+            operator = condition["default_operator"]
+            threshold = float(condition["default_threshold"])
+        allowed = sorted(_condition_placeholders(condition_field))
         trigger = {
             "type": "member_condition",
-            "condition": f"member credit {operator} {threshold:.2f}",
+            "condition": f"{condition['label']} {operator} {threshold:g}",
+            "description": condition["description"],
             "recipient": "Affected member",
         }
     return {
@@ -740,22 +817,27 @@ def _normalise_rule_payload(body: dict, current: dict | None = None) -> dict:
     if trigger_type == "condition":
         event_key = None
     condition_field = str(data.get("condition_field") or "credit")
-    if condition_field != "credit":
+    condition = _RULE_CONDITIONS.get(condition_field)
+    if not condition:
         raise HTTPException(400, "Invalid notification condition")
     operator = str(data.get("operator") or "lt")
     if operator not in _RULE_OPERATORS:
         raise HTTPException(400, "Invalid comparison operator")
+    if condition["kind"] == "fixed":
+        operator = condition["default_operator"]
+        data["threshold"] = condition["default_threshold"]
     try:
         threshold = float(data.get("threshold") if data.get("threshold") is not None
                           else (0 if trigger_type == "event" else None))
     except (TypeError, ValueError):
-        raise HTTPException(400, "A valid credit threshold is required")
+        raise HTTPException(400, "A valid condition value is required")
     if not math.isfinite(threshold) or threshold < 0 or threshold > 1_000_000_000:
-        raise HTTPException(400, "Credit threshold is outside the allowed range")
+        raise HTTPException(400, "Condition value is outside the allowed range")
     enabled_value = data.get("enabled", True)
     if not isinstance(enabled_value, (bool, int)):
         raise HTTPException(400, "enabled must be true or false")
-    allowed = _event_placeholders(event_key) if event_key else _RULE_PLACEHOLDERS
+    allowed = (_event_placeholders(event_key) if event_key
+               else _condition_placeholders(condition_field))
     text_direction = str(data.get("text_direction") or "auto").lower()
     if text_direction not in _RULE_DIRECTIONS:
         raise HTTPException(400, "Text direction must be auto, left-to-right, or right-to-left")
@@ -782,6 +864,12 @@ def _render_rule_message(rule: dict, member: dict, context: dict | None = None) 
         "credit": f"{float(member.get('credit') or 0):.2f}",
         "threshold": f"{float(rule.get('threshold') or 0):.2f}",
         "group": html.escape(str(rule.get("group_name") or "your group")),
+        "shares": int(member.get("current_round_shares") or 0),
+        "invite_count": int(member.get("successful_invites") or 0),
+        "round": member.get("current_round_seq") or "",
+        "lotto_name": html.escape(str(member.get("lotto_name") or "")),
+        "price": f"{float(member.get('price_per_share') or 0):.0f}",
+        "invite_link": html.escape(str(member.get("invite_link") or "")),
     }
     values.update(context or {})
     rendered = render_template(str(rule["message"]), values)
@@ -793,7 +881,7 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
                                        user_id: int | None = None) -> dict:
     """Evaluate enabled group rules and send only on false-to-true transitions."""
     sql = """
-        SELECT r.*, g.name AS group_name
+        SELECT r.*, g.name AS group_name, g.slug AS group_slug
         FROM notification_rules r
         JOIN groups g ON g.id = r.group_id
         WHERE r.enabled = 1 AND r.trigger_type = 'condition'
@@ -811,21 +899,55 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
 
     for rule in rules:
         compare = _RULE_OPERATORS.get(rule["operator"])
-        if compare is None or rule.get("condition_field") != "credit":
+        condition_field = rule.get("condition_field")
+        if compare is None or condition_field not in _RULE_CONDITIONS:
             continue
-        members_sql = """SELECT u.telegram_id, u.username, u.full_name, u.credit
+        round_cur = await db.execute(
+            f"""SELECT id, group_seq, lottery_type, price_per_share
+                FROM rounds WHERE group_id=? AND status='open'
+                ORDER BY {_OPEN_ROUNDS_ORDER} LIMIT 1""",
+            (rule["group_id"],),
+        )
+        open_round = await round_cur.fetchone()
+        open_round_id = open_round["id"] if open_round else None
+        members_sql = """SELECT u.telegram_id, u.username, u.full_name, u.credit,
+                                COALESCE(p.shares, 0) AS current_round_shares,
+                                CASE WHEN p.user_id IS NULL THEN 0 ELSE 1 END AS current_round_joined,
+                                (SELECT COUNT(*) FROM group_members invited
+                                  WHERE invited.group_id=gm.group_id
+                                    AND invited.invited_by_user_id=u.telegram_id) AS successful_invites
                          FROM users u
                          JOIN group_members gm ON gm.user_id = u.telegram_id
+                         LEFT JOIN participations p ON p.user_id=u.telegram_id AND p.round_id=?
                          WHERE gm.group_id = ?"""
-        member_params: list = [rule["group_id"]]
+        member_params: list = [open_round_id, rule["group_id"]]
         if user_id is not None:
             members_sql += " AND u.telegram_id = ?"
             member_params.append(user_id)
         members_cur = await db.execute(members_sql, tuple(member_params))
         for member_row in await members_cur.fetchall():
             member = dict(member_row)
-            value = float(member.get("credit") or 0)
-            matches = bool(compare(value, float(rule["threshold"])))
+            member["current_round_seq"] = (
+                (open_round.get("group_seq") or open_round["id"]) if open_round else None
+            )
+            member["lotto_name"] = (
+                lottery_label(open_round.get("lottery_type") or "lotto_max")
+                if open_round else ""
+            )
+            member["price_per_share"] = (
+                float(open_round.get("price_per_share") or 5) if open_round else 0
+            )
+            member["invite_link"] = (
+                f"https://t.me/{_bot_username}?startapp="
+                f"{invite_start_param(rule['group_slug'], member['telegram_id'])}"
+                if _bot_username else config.MINI_APP_URL
+            )
+            value = float(member.get(condition_field) or 0)
+            needs_round = condition_field in {"current_round_joined", "current_round_shares"}
+            matches = bool(
+                (open_round is not None or not needs_round)
+                and compare(value, float(rule["threshold"]))
+            )
             state_cur = await db.execute(
                 "SELECT is_matching, match_cycle FROM notification_rule_states WHERE rule_id=? AND user_id=?",
                 (rule["id"], member["telegram_id"]),
@@ -993,7 +1115,7 @@ async def _notify_new_group_membership(db, group: dict, member_id: int) -> None:
 
     join_code = await ensure_join_code(db, group)
     invite_link = (
-        f"https://t.me/{_bot_username}?startapp=join_{group['slug']}"
+        f"https://t.me/{_bot_username}?startapp={invite_start_param(group['slug'], member_id)}"
         if _bot_username else config.MINI_APP_URL
     )
     await _notify_model(
@@ -1001,6 +1123,13 @@ async def _notify_new_group_membership(db, group: dict, member_id: int) -> None:
         name=html.escape(name), group=html.escape(group_name),
         invite_link=html.escape(invite_link or ""), join_code=html.escape(join_code),
     )
+    inviter_cur = await db.execute(
+        "SELECT invited_by_user_id FROM group_members WHERE group_id=? AND user_id=?",
+        (gid, member_id),
+    )
+    membership = await inviter_cur.fetchone()
+    if membership and membership.get("invited_by_user_id"):
+        await _evaluate_rules_for_user_safely(db, membership["invited_by_user_id"])
 
 
 async def _evaluate_rules_for_user_safely(db, user_id: int) -> None:
@@ -2064,8 +2193,8 @@ async def api_groups_list(request: Request):
         groups.append({
             **member_group_public(m),
             "is_active": m["id"] == active_gid,
-            "link": f"https://t.me/{_bot_username}?startapp=join_{slug}",
-            "bot_link": f"https://t.me/{_bot_username}?start=g_{slug}",
+            "link": f"https://t.me/{_bot_username}?startapp={invite_start_param(slug, user['telegram_id'])}",
+            "bot_link": f"https://t.me/{_bot_username}?start={invite_start_param(slug, user['telegram_id'])}",
         })
     return {"groups": groups, "active_group_id": active_gid}
 
@@ -2113,8 +2242,9 @@ async def api_invite(request: Request, group_id: int | None = None):
     join_code = await ensure_join_code(db, group)
     await db.close()
     slug = group["slug"]
-    app_link = f"https://t.me/{_bot_username}?startapp=join_{slug}" if _bot_username else None
-    bot_link = f"https://t.me/{_bot_username}?start=g_{slug}" if _bot_username else None
+    start_param = invite_start_param(slug, user["telegram_id"])
+    app_link = f"https://t.me/{_bot_username}?startapp={start_param}" if _bot_username else None
+    bot_link = f"https://t.me/{_bot_username}?start={start_param}" if _bot_username else None
     return {
         "link": app_link,
         "app_link": app_link,
@@ -3441,7 +3571,7 @@ async def admin_notification_rules(request: Request):
             {"value": "condition", "label": "Member condition"},
             {"value": "event", "label": "System event"},
         ],
-        "fields": [{"value": "credit", "label": "Member credit"}],
+        "fields": _notification_condition_catalog(),
         "events": _notification_event_catalog(),
         "languages": [{"value": key, "label": label} for key, label in _RULE_LANGUAGES.items()],
         "operators": [
@@ -3449,6 +3579,8 @@ async def admin_notification_rules(request: Request):
             {"value": "lte", "label": "is at most"},
             {"value": "gt", "label": "is greater than"},
             {"value": "gte", "label": "is at least"},
+            {"value": "eq", "label": "is exactly"},
+            {"value": "neq", "label": "is not"},
         ],
         "placeholders": sorted(_RULE_PLACEHOLDERS),
     }

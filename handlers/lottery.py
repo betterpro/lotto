@@ -11,6 +11,7 @@ from telegram.ext import (
 
 import database as db
 from config import CURRENCY
+from group_context import invite_start_param
 from keyboards import main_menu
 
 AWAITING_STAKE = 10
@@ -229,7 +230,7 @@ async def show_invite(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _reply(update, "Join a group in the app before inviting friends.", keyboard=main_menu())
         return
     slug = group["slug"]
-    app_link = f"https://t.me/{bot_info.username}?startapp=join_{slug}"
+    app_link = f"https://t.me/{bot_info.username}?startapp={invite_start_param(slug, user.id)}"
     await _reply(
         update,
         f"🔗 *Invite a Friend*\n\n"

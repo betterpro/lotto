@@ -45,6 +45,7 @@ ALTER TABLE groups ADD CONSTRAINT groups_trustee_fk
 CREATE TABLE IF NOT EXISTS group_members (
     group_id   BIGINT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     user_id    BIGINT NOT NULL REFERENCES users(telegram_id) ON DELETE CASCADE,
+    invited_by_user_id BIGINT REFERENCES users(telegram_id) ON DELETE SET NULL,
     role       TEXT   NOT NULL DEFAULT 'member',
     joined_at  TEXT   NOT NULL
                DEFAULT to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
@@ -52,6 +53,8 @@ CREATE TABLE IF NOT EXISTS group_members (
 );
 
 CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_group_inviter
+    ON group_members(group_id, invited_by_user_id) WHERE invited_by_user_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS notification_rules (
     id              BIGSERIAL PRIMARY KEY,
@@ -64,8 +67,11 @@ CREATE TABLE IF NOT EXISTS notification_rules (
                     CHECK (text_direction IN ('auto', 'ltr', 'rtl')),
     language        TEXT NOT NULL DEFAULT 'en'
                     CHECK (language IN ('en', 'fa', 'fr')),
-    condition_field TEXT NOT NULL DEFAULT 'credit' CHECK (condition_field = 'credit'),
-    operator        TEXT NOT NULL DEFAULT 'lt' CHECK (operator IN ('lt', 'lte', 'gt', 'gte')),
+    condition_field TEXT NOT NULL DEFAULT 'credit'
+                    CHECK (condition_field IN ('credit', 'current_round_joined',
+                           'current_round_shares', 'successful_invites')),
+    operator        TEXT NOT NULL DEFAULT 'lt'
+                    CHECK (operator IN ('lt', 'lte', 'gt', 'gte', 'eq', 'neq')),
     threshold       FLOAT8 NOT NULL CHECK (threshold >= 0),
     message         TEXT NOT NULL CHECK (char_length(message) BETWEEN 1 AND 3500),
     enabled         INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
