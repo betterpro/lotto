@@ -989,7 +989,9 @@ async def _evaluate_notification_rules(db, group_id: int | None = None,
                 """INSERT INTO notification_deliveries
                    (rule_id, group_id, user_id, match_cycle, status, rendered_text)
                    VALUES (?,?,?,?,?,?)
-                   ON CONFLICT (rule_id, user_id, match_cycle) DO NOTHING
+                   ON CONFLICT (rule_id, user_id, match_cycle)
+                   WHERE delivery_key IS NULL
+                   DO NOTHING
                    RETURNING id""",
                 (rule["id"], rule["group_id"], member["telegram_id"], cycle,
                  "pending", rendered),
@@ -3669,9 +3671,19 @@ async def admin_create_notification_rule(request: Request):
         await db.commit()
         evaluation = {"rules": 0, "evaluated": 0, "sent": 0, "failed": 0}
         if data["enabled"] and data["trigger_type"] == "condition":
-            evaluation = await _evaluate_notification_rules(
-                db, group_id=group["id"], rule_id=created["id"]
-            )
+            try:
+                evaluation = await _evaluate_notification_rules(
+                    db, group_id=group["id"], rule_id=created["id"]
+                )
+            except Exception:
+                # Statements auto-commit in the database adapter. Remove the
+                # just-created rule (and cascaded state) if initial evaluation
+                # fails so a retry cannot leave hidden duplicate automations.
+                await db.execute(
+                    "DELETE FROM notification_rules WHERE id=? AND group_id=?",
+                    (created["id"], group["id"]),
+                )
+                raise
         rule = await _group_notification_rule(db, group["id"], created["id"])
         return {"ok": True, "rule": rule, "evaluation": evaluation}
     finally:
