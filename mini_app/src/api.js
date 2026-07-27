@@ -211,7 +211,7 @@ export const api = {
       amount != null ? { action, amount } : { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
-    broadcast:    (message)       => req('POST', '/api/admin/broadcast', { message }),
+    broadcast:    (message, image = null) => req('POST', '/api/admin/broadcast', { message, image }),
     notificationRules: ()        => req('GET', '/api/admin/notification-rules'),
     generateNotificationRule: (body) => req('POST', '/api/admin/notification-rules/generate', body),
     createNotificationRule: (body) => req('POST', '/api/admin/notification-rules', body),

@@ -1279,18 +1279,41 @@ function PaymentsTab({ showToast, onGroupChange }) {
   const [busy, setBusy] = useState(false)
   const [stripe, setStripe] = useState(null)   // { connected, charges_enabled, ... }
   const [bcast, setBcast] = useState('')
+  const [bcastImage, setBcastImage] = useState(null)
   const [bcastBusy, setBcastBusy] = useState(false)
+  const bcastImageRef = useRef(null)
 
   async function sendBroadcast() {
     const msg = bcast.trim()
     if (!msg) return
-    if (!window.confirm('Send this message to all members of your group?')) return
+    const imageNote = bcastImage ? ' with the attached image' : ''
+    if (!window.confirm(`Send this message${imageNote} to all members of your group?`)) return
     setBcastBusy(true)
     try {
-      const r = await api.admin.broadcast(msg)
+      const r = await api.admin.broadcast(msg, bcastImage)
       showToast(`Sent to ${r.sent} member${r.sent === 1 ? '' : 's'}`, 'success')
       setBcast('')
+      setBcastImage(null)
+      if (bcastImageRef.current) bcastImageRef.current.value = ''
     } catch (e) { showToast(e.message, 'error') } finally { setBcastBusy(false) }
+  }
+
+  async function selectBroadcastImage(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showToast('Please choose an image file', 'error')
+      event.target.value = ''
+      return
+    }
+    try {
+      const image = await compressImage(file, 1800, 0.86)
+      if (image.length > 12_000_000) throw new Error('Image is too large')
+      setBcastImage(image)
+    } catch (error) {
+      showToast(error.message || 'Could not prepare image', 'error')
+      event.target.value = ''
+    }
   }
   const [stripeBusy, setStripeBusy] = useState(false)
 
@@ -1429,6 +1452,29 @@ function PaymentsTab({ showToast, onGroupChange }) {
           placeholder="e.g. New round is up — join before Friday's draw! 🎉"
           value={bcast} onChange={e => setBcast(e.target.value)}
           style={{ resize: 'vertical', lineHeight: 1.5 }} />
+        <input ref={bcastImageRef} type="file" accept="image/jpeg,image/png"
+          onChange={selectBroadcastImage} style={{ display: 'none' }} />
+        {bcastImage ? (
+          <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden',
+            border: '.5px solid var(--hairline-2)', background: 'var(--bg-3)' }}>
+            <img src={bcastImage} alt="Broadcast preview"
+              style={{ display: 'block', width: '100%', maxHeight: 240, objectFit: 'cover' }} />
+            <button type="button" onClick={() => {
+              setBcastImage(null)
+              if (bcastImageRef.current) bcastImageRef.current.value = ''
+            }} aria-label="Remove image" style={{
+              position: 'absolute', top: 8, right: 8, width: 34, height: 34,
+              border: 0, borderRadius: 17, color: '#fff', background: 'rgba(0,0,0,.68)',
+              fontSize: 20, cursor: 'pointer',
+            }}>×</button>
+          </div>
+        ) : (
+          <button type="button" className="btn btn-block"
+            onClick={() => bcastImageRef.current?.click()}
+            style={{ background: 'var(--surface-2)' }}>
+            <UploadIcon size={17} /> Add image
+          </button>
+        )}
         <button type="button" className="btn btn-primary btn-block"
           disabled={bcastBusy || !bcast.trim()} onClick={sendBroadcast}>
           {bcastBusy ? 'Sending…' : '📢 Send to all members'}

@@ -414,6 +414,58 @@ async def _notify(telegram_id: int, text: str) -> bool:
         return False
 
 
+async def _notify_with_photo(telegram_id: int, text: str, photo: bytes) -> tuple[bool, bool]:
+    """Send a broadcast photo with its caption, falling back to text if media fails."""
+    if _ptb_app is None:
+        return False, False
+    try:
+        if len(text) <= 1000:
+            await _ptb_app.bot.send_photo(
+                chat_id=telegram_id,
+                photo=photo,
+                filename="announcement.jpg",
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=_open_app_markup(),
+            )
+            return True, True
+        await _ptb_app.bot.send_photo(
+            chat_id=telegram_id,
+            photo=photo,
+            filename="announcement.jpg",
+        )
+        return await _notify(telegram_id, text), True
+    except Exception as exc:
+        log.debug("Broadcast photo to %s skipped: %s", telegram_id, exc)
+        return await _notify(telegram_id, text), False
+
+
+def _decode_broadcast_image(value: str | None) -> bytes | None:
+    if not value:
+        return None
+    match = re.fullmatch(
+        r"data:image/(?:jpeg|jpg|png);base64,([A-Za-z0-9+/=\r\n]+)",
+        str(value),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        raise HTTPException(400, "Image must be a JPEG or PNG file")
+    encoded = match.group(1)
+    if len(encoded) > 12_600_000:
+        raise HTTPException(400, "Image must be smaller than 9 MB")
+    try:
+        image = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Image data is invalid")
+    is_jpeg = image.startswith(b"\xff\xd8\xff")
+    is_png = image.startswith(b"\x89PNG\r\n\x1a\n")
+    if not (is_jpeg or is_png):
+        raise HTTPException(400, "Image must be a valid JPEG or PNG file")
+    if not image or len(image) > 9 * 1024 * 1024:
+        raise HTTPException(400, "Image must be smaller than 9 MB")
+    return image
+
+
 _RULE_OPERATORS = {
     "lt": lambda value, threshold: value < threshold,
     "lte": lambda value, threshold: value <= threshold,
@@ -724,7 +776,8 @@ def _notification_ai_prompt(spec: dict, group_name: str) -> str:
           "- Return only the finished notification text; no explanation, labels, quotes, or code fences.\n"
           "- Write entirely in the requested language.\n"
           "- Include at least one dynamic item exactly as provided, including its braces.\n"
-          "- Dynamic items are optional unless useful; do not force {group} into the message.\n"
+          "- Use only useful dynamic items, but at least one is required; do not force {group} "
+          "when another item fits better.\n"
           "- Never tell a member to buy/get a ticket. Members participate by buying shares. "
           "Only the trustee/group may buy the official lottery ticket.\n"
           "- Tokens whose meaning says 'may be empty' must be placed on their own line with "
@@ -744,6 +797,31 @@ def _clean_ai_notification(raw: str) -> str:
     text = re.sub(r"^```(?:html|text)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text).strip()
     return text
+
+
+def _fallback_ai_notification(spec: dict) -> str:
+    """Return an always-valid editable draft if the model repeatedly misses the contract."""
+    allowed = set(spec["allowed_placeholders"])
+    if "name" in allowed and "group" in allowed:
+        templates = {
+            "en": "Hi {name}! You have a new update from <b>{group}</b>.",
+            "fa": "سلام {name}! یک به‌روزرسانی جدید از گروه <b>{group}</b> دارید.",
+            "fr": "Bonjour {name} ! Vous avez une nouvelle mise à jour de <b>{group}</b>.",
+        }
+    elif "name" in allowed:
+        templates = {
+            "en": "Hi {name}! You have a new lottery-group update.",
+            "fa": "سلام {name}! یک به‌روزرسانی جدید از گروه لاتاری دارید.",
+            "fr": "Bonjour {name} ! Vous avez une nouvelle mise à jour de votre groupe de loterie.",
+        }
+    else:
+        token = sorted(allowed)[0]
+        templates = {
+            "en": f"Lottery-group update: {{{token}}}",
+            "fa": f"به‌روزرسانی گروه لاتاری: {{{token}}}",
+            "fr": f"Mise à jour du groupe de loterie : {{{token}}}",
+        }
+    return templates[spec["language"]]
 
 
 def _template_fields(message: str) -> set[str]:
@@ -3586,18 +3664,20 @@ async def admin_generate_notification_rule(request: Request):
     prompt = _notification_ai_prompt(spec, group_name)
     client = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
     last_error = "AI returned an invalid notification"
-    for attempt in range(2):
+    for attempt in range(3):
         attempt_prompt = prompt
         if attempt:
             attempt_prompt += (
                 "\n\nYour previous response was invalid: " + last_error
-                + ". Generate a corrected notification now."
+                + ". Generate a corrected notification now. Preserve placeholder names "
+                "character-for-character, include at least one allowed placeholder, and "
+                "return only the notification."
             )
         try:
             response = await client.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=500,
-                temperature=0.7,
+                temperature=0.7 if attempt == 0 else 0.3,
                 system=(
                     "You create concise lottery-group Telegram notifications. "
                     "Follow the requested language, tone, length, Telegram HTML subset, "
@@ -3630,7 +3710,15 @@ async def admin_generate_notification_rule(request: Request):
         except Exception as exc:
             log.exception("AI notification generation failed: %s", exc)
             raise HTTPException(502, "AI notification generation is temporarily unavailable")
-    raise HTTPException(502, "AI could not create a valid formatted notification; please try again")
+    generated = _fallback_ai_notification(spec)
+    generated = _validate_rule_message(generated, set(spec["allowed_placeholders"]))
+    return {
+        "ok": True,
+        "message": generated,
+        "language": spec["language"],
+        "text_direction": spec["text_direction"],
+        "fallback": True,
+    }
 
 
 @app.post("/api/admin/notification-rules")
@@ -5678,7 +5766,7 @@ async def admin_group_stripe_connect(request: Request):
 
 @app.post("/api/admin/broadcast")
 async def admin_broadcast(request: Request):
-    """Trustee sends a one-off message to every member of their group."""
+    """Trustee sends a one-off text or photo announcement to their group."""
     user, db, group = await _require_group_trustee(request)
     body = await request.json()
     message = (body.get("message") or "").strip()
@@ -5686,17 +5774,29 @@ async def admin_broadcast(request: Request):
         await db.close()
         raise HTTPException(400, "Message can't be empty")
     message = message[:2000]
+    try:
+        photo = _decode_broadcast_image(body.get("image"))
+    except HTTPException:
+        await db.close()
+        raise
     text = render_notif("broadcast", group_id=group["id"],
                         group=html.escape(group["name"]), message=html.escape(message))
     cur = await db.execute(
-        """SELECT COUNT(*) AS n FROM group_members
+        """SELECT user_id FROM group_members
            WHERE group_id=? AND COALESCE(notifications_enabled, 1)=1""",
         (group["id"],),
     )
-    n = int((await cur.fetchone())["n"] or 0)
-    await _notify_all(db, text, group_id=group["id"])
+    sent = 0
+    photo_sent = 0
+    for row in await cur.fetchall():
+        if photo:
+            ok, media_ok = await _notify_with_photo(row["user_id"], text, photo)
+            photo_sent += int(media_ok)
+        else:
+            ok = await _notify(row["user_id"], text)
+        sent += int(ok)
     await db.close()
-    return {"ok": True, "sent": n}
+    return {"ok": True, "sent": sent, "photo_sent": photo_sent}
 
 
 @app.get("/api/admin/group/stripe/status")
