@@ -210,6 +210,8 @@ export const api = {
     resolve:      (id, action, amount) => req('POST', `/api/admin/deposits/${id}`,
       amount != null ? { action, amount } : { action }),
     members:      ()              => req('GET',  '/api/admin/members'),
+    adjustMemberCredit: (telegram_id, amount, reason) =>
+      req('POST', `/api/admin/members/${telegram_id}/credit`, { amount, reason }),
     checkEtransfer: ()            => req('POST', '/api/admin/etransfer/check'),
     broadcast:    (message, image = null) => req('POST', '/api/admin/broadcast', { message, image }),
     notificationRules: ()        => req('GET', '/api/admin/notification-rules'),

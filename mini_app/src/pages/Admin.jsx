@@ -52,6 +52,70 @@ function fmtDate(s) {
   return d.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+function MemberCreditControls({ member, onAdjusted, showToast }) {
+  const [open, setOpen] = useState(false)
+  const [direction, setDirection] = useState('increase')
+  const [amount, setAmount] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(e) {
+    e.preventDefault()
+    const value = Number(amount)
+    if (!Number.isFinite(value) || value <= 0) {
+      showToast('Enter an amount greater than zero', 'error')
+      return
+    }
+    if (reason.trim().length < 3) {
+      showToast('Add a short reason', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      const result = await api.admin.adjustMemberCredit(
+        member.telegram_id,
+        direction === 'increase' ? value : -value,
+        reason.trim(),
+      )
+      onAdjusted(member.telegram_id, result.credit)
+      showToast(`Balance ${direction === 'increase' ? 'increased' : 'decreased'} by ${fmtCAD(value)}`, 'success')
+      setAmount('')
+      setReason('')
+      setOpen(false)
+    } catch (err) {
+      showToast(err.message || 'Could not adjust balance', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ width: '100%' }}>
+      <button className="btn btn-ghost btn-sm" style={{ width: '100%', marginTop: 8 }} onClick={() => setOpen(v => !v)}>
+        {open ? 'Cancel adjustment' : 'Adjust credit'}
+      </button>
+      {open && (
+        <form onSubmit={submit} className="col gap-8" style={{ marginTop: 10, paddingTop: 10, borderTop: '.5px solid var(--hairline)' }}>
+          <div className="row gap-8">
+            <select className="input" value={direction} onChange={e => setDirection(e.target.value)} style={{ flex: 1 }}>
+              <option value="increase">Increase</option>
+              <option value="decrease">Decrease</option>
+            </select>
+            <input className="input mono" type="number" min="0.01" max="100000" step="0.01"
+              inputMode="decimal" placeholder="Amount" value={amount}
+              onChange={e => setAmount(e.target.value)} style={{ flex: 1, minWidth: 0 }} />
+          </div>
+          <input className="input" maxLength={200} placeholder="Reason (shown in member history)"
+            value={reason} onChange={e => setReason(e.target.value)} />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>
+            {busy ? 'Saving…' : `${direction === 'increase' ? 'Add' : 'Remove'} credit`}
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
 function TicketNumbersView({ ticketNumbers, lotteryType, selectable, selectedMain = [], bonus, pickBonus, onPick }) {
   const layout = ticketLayout(lotteryType)
   const rows = parseTicketNumbers(ticketNumbers)
@@ -2248,6 +2312,11 @@ export default function Admin({ user }) {
     if (String(err.message || '').includes('GROUP_LOCKED')) { setGroupLocked(true); return }
     showToast(err.message || 'Could not load members', 'error')
   }), [showToast])
+  const updateMemberCredit = useCallback((telegramId, credit) => {
+    setMembers(current => current?.map(m =>
+      m.telegram_id === telegramId ? { ...m, credit } : m
+    ))
+  }, [])
 
   useEffect(() => { refreshGroupLock(); loadRounds(); loadDeposits(); loadMembers() },
     [refreshGroupLock, loadRounds, loadDeposits, loadMembers])
@@ -2704,7 +2773,7 @@ export default function Admin({ user }) {
             <div className="card" style={{ padding: 0 }}>
               {members.map((m, idx) => (
                 <div key={m.telegram_id} style={{
-                  display: 'flex', alignItems: 'center', gap: 12,
+                  display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
                   padding: '12px 14px',
                   borderBottom: idx < members.length - 1 ? '.5px solid var(--hairline)' : 'none',
                 }}>
@@ -2721,11 +2790,17 @@ export default function Admin({ user }) {
                       )}
                     </span>
                     {m.username && <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>@{m.username}</span>}
+                    {m.invited_by_user_id && (
+                      <span style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+                        Referred by {m.referred_by_name || (m.referred_by_username ? `@${m.referred_by_username}` : 'another member')}
+                      </span>
+                    )}
                   </div>
                   <div className="col" style={{ textAlign: 'right', gap: 2, flexShrink: 0 }}>
                     <span className="mono" style={{ fontSize: 15, fontWeight: 700 }}>{fmtCAD(m.credit)}</span>
                     <span style={{ fontSize: 12, color: 'var(--tx-3)' }}>balance</span>
                   </div>
+                  <MemberCreditControls member={m} onAdjusted={updateMemberCredit} showToast={showToast} />
                 </div>
               ))}
             </div>

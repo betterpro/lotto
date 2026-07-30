@@ -53,6 +53,7 @@ const TX_META = {
   refund:      { icon: ArrowDownIcon, color: 'var(--tg)',  sign: '+', label: 'Refund'          },
   participate: { icon: TicketIcon,  color: 'var(--tx-3)', sign: '−', label: 'Joined round'    },
   withdraw:    { icon: WalletIcon,  color: 'var(--danger)',sign: '−', label: 'Withdrawal'      },
+  admin_adjustment: { icon: WalletIcon, color: 'var(--tg)', sign: null, label: 'Admin adjustment' },
 }
 
 const FILTERS = [
@@ -105,8 +106,8 @@ export default function History() {
       ? txs.filter(t => t.type === 'win' || t.type === 'free_win')
       : txs.filter(t => t.type === filter)
 
-  const totalIn  = txs.filter(t => ['deposit','win','refund'].includes(t.type)).reduce((a, t) => a + (t.amount || 0), 0)
-  const totalOut = txs.filter(t => ['participate','withdraw'].includes(t.type)).reduce((a, t) => a + (t.amount || 0), 0)
+  const totalIn  = txs.filter(t => ['deposit','win','refund'].includes(t.type) || (t.type === 'admin_adjustment' && t.amount > 0)).reduce((a, t) => a + (t.amount || 0), 0)
+  const totalOut = txs.filter(t => ['participate','withdraw'].includes(t.type) || (t.type === 'admin_adjustment' && t.amount < 0)).reduce((a, t) => a + (t.amount || 0), 0)
   const totalWon = txs.filter(t => t.type === 'win').reduce((a, t) => a + (t.amount || 0), 0)
 
   const grouped = groupByDay(filtered)
@@ -162,7 +163,8 @@ export default function History() {
               {items.map((tx, idx) => {
                 const meta = TX_META[tx.type] ?? { icon: WalletIcon, color: 'var(--tx-3)', sign: '', label: tx.type }
                 const IconComp = meta.icon
-                const pos = meta.sign === '+'
+                const sign = tx.type === 'admin_adjustment' ? (tx.amount >= 0 ? '+' : '−') : meta.sign
+                const pos = sign === '+'
                 const highlight = pos || meta.free
                 return (
                   <div key={tx.id} className="act-row" style={idx < items.length - 1 ? { borderBottom: '.5px solid var(--hairline)' } : {}}>
@@ -176,7 +178,7 @@ export default function History() {
                       </span>
                     </div>
                     <span className="mono" style={{ fontSize: 15, fontWeight: 700, color: highlight ? meta.color : 'var(--tx-1)', flexShrink: 0 }}>
-                      {meta.sign}{fmtCAD(Math.abs(tx.amount))}{meta.free ? ' free' : ''}
+                      {sign}{fmtCAD(Math.abs(tx.amount))}{meta.free ? ' free' : ''}
                     </span>
                   </div>
                 )

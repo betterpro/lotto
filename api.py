@@ -5206,8 +5206,12 @@ async def admin_members(request: Request):
     user, db, group = await _require_group_trustee(request)
     gid = group["id"]
     cur = await db.execute(
-        """SELECT u.* FROM users u
+        """SELECT u.*, gm.invited_by_user_id,
+                  inviter.full_name AS referred_by_name,
+                  inviter.username AS referred_by_username
+           FROM users u
            JOIN group_members gm ON gm.user_id = u.telegram_id
+           LEFT JOIN users inviter ON inviter.telegram_id = gm.invited_by_user_id
            WHERE gm.group_id = ?
            ORDER BY gm.joined_at, u.created_at""",
         (gid,),
@@ -5219,6 +5223,70 @@ async def admin_members(request: Request):
         rows.append(d)
     await db.close()
     return {"members": rows}
+
+
+@app.post("/api/admin/members/{member_id}/credit")
+async def admin_adjust_member_credit(member_id: int, request: Request):
+    admin, db, group = await _require_group_trustee(request)
+    body = await request.json()
+    try:
+        amount = round(float(body.get("amount")), 2)
+    except (TypeError, ValueError):
+        await db.close()
+        raise HTTPException(400, "Enter a valid adjustment amount")
+    reason = " ".join(str(body.get("reason") or "").split())
+    if not math.isfinite(amount) or amount == 0:
+        await db.close()
+        raise HTTPException(400, "Adjustment amount cannot be zero")
+    if abs(amount) > 100000:
+        await db.close()
+        raise HTTPException(400, "Adjustment amount is too large")
+    if len(reason) < 3:
+        await db.close()
+        raise HTTPException(400, "Add a reason (at least 3 characters)")
+    if len(reason) > 200:
+        await db.close()
+        raise HTTPException(400, "Reason must be 200 characters or fewer")
+
+    admin_name = admin.get("full_name") or (
+        f"@{admin['username']}" if admin.get("username") else "Admin"
+    )
+    note = f"By admin {admin_name} — {reason}"
+    cur = await db.execute(
+        """WITH adjusted AS (
+               UPDATE users SET credit = credit + ?
+                WHERE telegram_id = ? AND credit + ? >= 0
+                  AND EXISTS (
+                      SELECT 1 FROM group_members
+                       WHERE group_id = ? AND user_id = ?
+                  )
+                RETURNING telegram_id, credit
+           ), logged AS (
+               INSERT INTO transactions (user_id, type, amount, note, group_id)
+               SELECT telegram_id, 'admin_adjustment', ?, ?, ? FROM adjusted
+               RETURNING id
+           )
+           SELECT adjusted.credit, logged.id AS transaction_id
+             FROM adjusted CROSS JOIN logged""",
+        (amount, member_id, amount, group["id"], member_id,
+         amount, note, group["id"]),
+    )
+    result = await cur.fetchone()
+    if result is None:
+        member_cur = await db.execute(
+            """SELECT u.credit FROM users u
+               JOIN group_members gm ON gm.user_id=u.telegram_id
+              WHERE gm.group_id=? AND u.telegram_id=?""",
+            (group["id"], member_id),
+        )
+        member = await member_cur.fetchone()
+        await db.close()
+        if member is None:
+            raise HTTPException(404, "Member not found in your group")
+        raise HTTPException(400, "Credit cannot be reduced below zero")
+    await db.close()
+    return {"ok": True, "credit": float(result["credit"]),
+            "transaction_id": result["transaction_id"]}
 
 
 @app.post("/api/admin/etransfer/check")
