@@ -809,10 +809,8 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const rLayout = ticketLayout(round?.lottery_type)
   const mainCount = isVariableRowLayout(rLayout) ? rLayout.repeatRow.count : (rLayout.rows[0]?.count ?? 7)
 
-  const [mainNums,   setMainNums]   = useState([])
   const [nums,       setNums]       = useState(() => Array(mainCount).fill(''))
   const [bonus,      setBonus]      = useState('')
-  const [pickBonus,  setPickBonus]  = useState(false)
   const [totalPrize, setTotalPrize] = useState('')
   const [freeTickets, setFreeTickets] = useState('')
   // Per-ticket outcome: 'none' (no win), 'free' (free ticket(s)), or 'cash' ($).
@@ -829,8 +827,8 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     try {
       const d = await api.admin.autoResults(round.id)
       const wn = (d.winning_numbers || []).map(Number)
-      setMainNums(wn)
-      if (d.bonus_number != null) setBonus(String(d.bonus_number))
+      setNums(Array.from({ length: mainCount }, (_, i) => wn[i] == null ? '' : String(wn[i])))
+      setBonus(d.bonus_number == null ? '' : String(d.bonus_number))
       const per = (d.tickets || []).map(t => {
         if (t.cash > 0) return { outcome: 'cash', prize: String(t.cash), free: String(t.free || 1) }
         if (t.free > 0) return { outcome: 'free', prize: '', free: String(t.free) }
@@ -867,42 +865,19 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     const c = [...nums]
     c[i] = v.replace(/\D/g, '').slice(0, 2)
     setNums(c)
+    setAutoInfo(null)
+    setAutoTickets(null)
     if (v.length >= 2 && i < mainCount - 1) {
       document.getElementById(`wn${i + 1}`)?.focus()
     }
   }
 
-  function pickFromTicket(n) {
-    const v = Number(n)
-    if (!Number.isFinite(v) || v < 1) return
+  const winningNumbers = nums.map(Number)
+  const mainSet = new Set(winningNumbers.filter(n => n > 0))
+  const mainMax = (rLayout.repeatRow || rLayout.rows[0]).max
+  const bonusMax = rLayout.rows?.[1]?.max ?? mainMax
+  const bonusLabel = rLayout.rows?.[1]?.label ?? 'Bonus number'
 
-    if (pickBonus) {
-      setBonus(String(v))
-      setPickBonus(false)
-      setMainNums(prev => prev.filter(x => x !== v))
-      return
-    }
-
-    if (mainNums.includes(v)) {
-      setMainNums(prev => prev.filter(x => x !== v))
-      return
-    }
-    if (Number(bonus) === v) {
-      setBonus('')
-      return
-    }
-    if (mainNums.length < mainCount) {
-      setMainNums(prev => [...prev, v])
-    }
-  }
-
-  function clearBonus() {
-    setBonus('')
-    setPickBonus(false)
-  }
-
-  const winningNumbers = hasTickets ? mainNums : nums.map(Number)
-  const mainSet = new Set(mainNums.map(Number))
   const bonusN = bonus ? Number(bonus) : null
 
   // Each ticket contributes its cash amount (outcome 'cash') or free tickets
@@ -914,10 +889,11 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
   const winningTicketCount = perTicket.filter(t => t.outcome !== 'none').length
   const cashPrize = hasTickets ? perTicketTotal : (totalPrize === '' ? 0 : Number(totalPrize))
   const freeTicketCount = hasTickets ? perTicketFree : (freeTickets === '' ? 0 : Number(freeTickets))
-  const numbersReady = hasTickets
-    ? mainNums.length === mainCount
-    : nums.every(n => n && Number(n) >= 1)
-  const valid = numbersReady && bonus && Number(bonus) >= 1 &&
+  const numbersReady = nums.every(n => n && Number(n) >= 1 && Number(n) <= mainMax) &&
+    mainSet.size === mainCount
+  const bonusReady = bonus && Number(bonus) >= 1 && Number(bonus) <= bonusMax &&
+    (round?.lottery_type === 'daily_grand' || !mainSet.has(Number(bonus)))
+  const valid = numbersReady && bonusReady && !autoBusy &&
     cashPrize >= 0 && freeTicketCount >= 0 &&
     // Per-ticket flow can finalize a losing round (all "No win"); the legacy
     // whole-round entry still requires a cash or free-ticket prize.
@@ -982,74 +958,33 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
             Winning numbers
           </div>
 
-          {hasTickets ? (
-            <>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
-                {Array.from({ length: mainCount }, (_, i) => {
-                  const n = mainNums[i]
-                  return n != null ? (
-                    <button key={i} type="button" onClick={() => pickFromTicket(n)}
-                      style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
-                      <span className="ball md match">{n}</span>
-                    </button>
-                  ) : (
-                    <span key={i} className="ball md def" style={{ opacity: 0.35 }}>—</span>
-                  )
-                })}
-                <span style={{ color: 'var(--tx-3)', fontSize: 19, fontWeight: 700 }}>+</span>
-                <button type="button" onClick={() => (bonus ? clearBonus() : setPickBonus(true))}
-                  style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}>
-                  <span className={`ball md ${bonus ? 'bonus' : 'def'}`}
-                    style={pickBonus ? { outline: '2px solid var(--gold)', outlineOffset: 2 } : undefined}>
-                    {bonus || '—'}
-                  </span>
-                </button>
-              </div>
-              {pickBonus && (
-                <p style={{ fontSize: 13, color: 'var(--gold)', marginBottom: 10 }}>
-                  Tap a ticket number for the bonus
-                </p>
-              )}
-
-              <div style={{ fontSize: 12, color: 'var(--tx-3)', fontWeight: 600, letterSpacing: '.3px',
-                            textTransform: 'uppercase', marginBottom: 8 }}>
-                Ticket numbers
-              </div>
-              <TicketNumbersView
-                ticketNumbers={ticketRows}
-                lotteryType={round.lottery_type}
-                selectable
-                selectedMain={mainNums}
-                bonus={bonus}
-                pickBonus={pickBonus}
-                onPick={pickFromTicket}
-              />
-            </>
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${mainCount}, 1fr)`, gap: 6, marginBottom: 12 }}>
-                {nums.map((v, i) => (
-                  <input key={i} id={`wn${i}`} value={v} placeholder="—" maxLength={2}
-                    inputMode="numeric"
-                    onChange={e => setNum(i, e.target.value)}
-                    className="input num-input"
-                    style={{ padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700, height: 44 }}
-                  />
-                ))}
-              </div>
-
-              <div style={{ fontSize: 12, color: 'var(--tx-2)', fontWeight: 600, letterSpacing: '.3px',
-                            textTransform: 'uppercase', marginBottom: 8 }}>
-                Bonus number
-              </div>
-              <input value={bonus} onChange={e => setBonus(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                placeholder="—" maxLength={2} inputMode="numeric"
+          <p style={{ fontSize: 13, color: 'var(--tx-3)', marginBottom: 10 }}>
+            Type {mainCount} different numbers from 1 to {mainMax}.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${mainCount}, 1fr)`, gap: 6, marginBottom: 12 }}>
+            {nums.map((v, i) => (
+              <input key={i} id={`wn${i}`} value={v} placeholder="—" maxLength={2}
+                aria-label={`Winning number ${i + 1}`} inputMode="numeric" disabled={autoBusy || busy}
+                onChange={e => setNum(i, e.target.value)}
                 className="input num-input"
-                style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700,
-                         height: 44, marginBottom: 16 }}
+                style={{ minWidth: 0, padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700, height: 44 }}
               />
-            </>
-          )}
+            ))}
+          </div>
+          <label htmlFor="result-bonus" style={{ display: 'block', fontSize: 12, color: 'var(--tx-2)',
+            fontWeight: 600, marginBottom: 8 }}>
+            {bonusLabel} (1–{bonusMax})
+          </label>
+          <input id="result-bonus" value={bonus} onChange={e => {
+              setBonus(e.target.value.replace(/\D/g, '').slice(0, 2))
+              setAutoInfo(null)
+              setAutoTickets(null)
+            }}
+            placeholder="—" maxLength={2} inputMode="numeric" disabled={autoBusy || busy}
+            className="input num-input"
+            style={{ width: 56, padding: 0, textAlign: 'center', fontSize: 17, fontWeight: 700,
+                     height: 44, marginBottom: 16 }}
+          />
 
           {hasTickets ? (
             <>

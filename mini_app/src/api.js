@@ -27,9 +27,9 @@ export function authFetch(path, options = {}) {
   })
 }
 
-async function req(method, path, body) {
+async function req(method, path, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
 
   let res
   try {
@@ -196,7 +196,7 @@ export const api = {
       req('POST', '/api/admin/round/ticket', { round_id, ticket_index, rows, image_b64, draw_date }),
     uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket',
       numbers != null ? { round_id, numbers } : { round_id }),
-    autoResults:  (round_id) => req('POST', '/api/admin/round/auto-results', { round_id }),
+    autoResults:  (round_id) => req('POST', '/api/admin/round/auto-results', { round_id }, 180000),
     results:      (round_id, winning_numbers, bonus_number, opts = {}) =>
                                      req('POST', '/api/admin/round/results', {
                                        round_id, winning_numbers, bonus_number,

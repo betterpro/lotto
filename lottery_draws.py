@@ -49,17 +49,10 @@ _BROWSER_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-# Result pages to try, in order, per game. WCLC covers the western provinces;
-# PlayNow (BCLC) is where BC players see the same national draw results.
+# Official dated winning-number pages for the national draws.
 RESULT_SOURCES = {
-    "lotto_max": [
-        "https://www.wclc.com/games/lotto-max.htm",
-        "https://www.playnow.com/lottery/lotto-max/",
-    ],
-    "649": [
-        "https://www.wclc.com/games/lotto-649.htm",
-        "https://www.playnow.com/lottery/lotto-649/",
-    ],
+    "lotto_max": ["https://www.wclc.com/winning-numbers/lotto-max-extra.htm"],
+    "649": ["https://www.wclc.com/winning-numbers/lotto-649-extra.htm"],
 }
 
 
@@ -146,17 +139,13 @@ async def fetch_estimated_jackpot(lottery_type: str) -> int | None:
 
 
 # --- Official winning numbers (auto-results) ---------------------------------
-# WCLC publishes the latest winning numbers on the game page. Parsing is
+# WCLC publishes dated draws on its winning-number pages. Parsing is
 # best-effort and conservative: it only returns a result when the page clearly
 # shows the requested draw date alongside exactly the expected count of numbers
 # in range. If anything is off it returns None (the trustee enters results
 # manually). The HTML structure should be verified against the live page.
-WCLC_WINNING_URL = {
-    "lotto_max": "https://www.wclc.com/games/lotto-max.htm",
-    "649": "https://www.wclc.com/games/lotto-649.htm",
-}
 # main-number count and inclusive max value per game
-_RESULT_SPEC = {"lotto_max": (7, 50), "649": (6, 49)}
+_RESULT_SPEC = {"lotto_max": (7, 52), "649": (6, 49)}
 
 _MONTHS = [
     "January", "February", "March", "April", "May", "June",
@@ -207,32 +196,35 @@ def draw_has_occurred(
 
 
 def _parse_wclc_results(html: str, draw: date, main_count: int, max_n: int) -> dict | None:
-    # Anchor on the draw date so we read the right draw, then pull ball numbers
-    # (element text content like ">7<") that follow it.
-    idx = -1
-    for s in _draw_date_strings(draw):
-        idx = html.find(s)
-        if idx >= 0:
-            idx += len(s)
-            break
-    if idx < 0:
-        return None
-    window = html[idx: idx + 1500]
-    seq = [int(m.group(1)) for m in re.finditer(r">\s*0*(\d{1,2})\s*<", window)
-           if 1 <= int(m.group(1)) <= max_n]
-    main: list[int] = []
-    for n in seq:
-        if n not in main:
-            main.append(n)
-        if len(main) == main_count:
-            break
-    if len(main) != main_count:
-        return None
-    bonus = next((n for n in seq if n not in main), None)
-    return {"numbers": main, "bonus": bonus, "draw_date": draw.isoformat()}
+    # Match only the dated main-draw list. Never consume EXTRA, MAXPLUS,
+    # MAXMILLIONS, prize amounts, or numbers from a neighbouring draw.
+    blocks = re.finditer(
+        r'<div\b[^>]*class="pastWinNumDate"[^>]*>(.*?)</div>\s*'
+        r'<ul\b[^>]*class="pastWinNumbers"[^>]*>(.*?)</ul>',
+        html, re.DOTALL | re.IGNORECASE,
+    )
+    for block in blocks:
+        if _to_iso_date(re.sub(r"<[^>]+>", "", block[1])) != draw.isoformat():
+            continue
+        main = [int(n) for n in re.findall(
+            r'<li\b[^>]*class="pastWinNumber"[^>]*>\s*(\d+)\s*</li>', block[2]
+        )]
+        bonus_match = re.search(
+            r'<li\b[^>]*class="pastWinNumberBonus"[^>]*>(.*?)</li>',
+            block[2], re.DOTALL,
+        )
+        bonus_text = re.sub(r"<[^>]+>", "", bonus_match[1]) if bonus_match else ""
+        bonus_numbers = re.findall(r"\d+", bonus_text)
+        if len(main) != main_count or len(set(main)) != main_count or len(bonus_numbers) != 1:
+            continue
+        bonus = int(bonus_numbers[0])
+        if not all(1 <= n <= max_n for n in main + [bonus]) or bonus in main:
+            continue
+        return {"numbers": main, "bonus": bonus, "draw_date": draw.isoformat()}
+    return None
 
 
-# --- Apify actor results source (preferred when configured) ------------------
+# --- Apify actor results source (fallback when configured) ------------------
 # The lottery sites block server requests (403); an Apify actor runs a real
 # browser and returns structured draws. Configure APIFY_TOKEN (+ optional actor
 # and input JSON). Field names vary between actors, so parsing is flexible.
@@ -401,7 +393,7 @@ async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
     """Fetch official winning numbers for a past draw, or None if unavailable.
 
     Returns {"numbers": [int...], "bonus": int|None, "draw_date": "YYYY-MM-DD"}.
-    Prefers the Apify actor (when configured), then falls back to WCLC / PlayNow.
+    Reads WCLC first, then uses the Apify actor when configured.
     """
     spec = _RESULT_SPEC.get(lottery_type)
     if not spec:
@@ -410,17 +402,12 @@ async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
         d = date.fromisoformat(draw_date) if isinstance(draw_date, str) else draw_date
     except Exception:
         return None
+    if not isinstance(d, date):
+        return None
     main_count, max_n = spec
 
-    # 1) Apify actor (structured, bypasses the sites' bot blocking).
-    apify = await fetch_draw_results_apify(lottery_type, d.isoformat(), main_count, max_n)
-    if apify:
-        return apify
-
-    # 2) Direct scrape of WCLC, then PlayNow. The parser anchors on the draw date
-    # and only returns a result when the exact expected count of in-range numbers
-    # is found, so a source without this draw is skipped rather than misread.
-    sources = RESULT_SOURCES.get(lottery_type) or [WCLC_WINNING_URL.get(lottery_type)]
+    # The official results page is fast and does not require an actor run.
+    sources = RESULT_SOURCES.get(lottery_type, [])
     for url in sources:
         if not url:
             continue
@@ -430,7 +417,8 @@ async def fetch_draw_results(lottery_type: str, draw_date) -> dict | None:
         parsed = _parse_wclc_results(html, d, main_count, max_n)
         if parsed:
             return parsed
-    return None
+    return await fetch_draw_results_apify(lottery_type, d.isoformat(), main_count, max_n)
+
 
 
 def is_valid_draw_date(
