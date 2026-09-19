@@ -21,10 +21,12 @@ import {
 } from '../components/Icon.jsx'
 
 function compressImage(file, maxPx = 1568, quality = 0.9) {
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader()
+    reader.onerror = () => reject(new Error('Could not read image.'))
     reader.onload = e => {
       const img = new Image()
+      img.onerror = () => reject(new Error('Could not open image. Choose a supported image or PDF.'))
       img.onload = () => {
         let { width: w, height: h } = img
         if (w > maxPx || h > maxPx) {
@@ -468,6 +470,8 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
 
   // Each collected ticket: { id, image, rows, drawDate, scanning, error }
   const [tickets, setTickets] = useState([])
+  const [importing, setImporting] = useState('')
+  const importingRef = useRef(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const idRef = useRef(0)
@@ -520,20 +524,38 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     }
   }
 
-  function addCapture(dataUrl) {
+  function addCapture(dataUrl, source = '') {
     if (!dataUrl) return
     const id = ++idRef.current
     setTickets(ts => [...ts, {
-      id, image: dataUrl, rows: emptyTicketRows(layout), drawDate: null, scanning: true,
+      id, image: dataUrl, source, rows: emptyTicketRows(layout), drawDate: null, scanning: true,
     }])
-    scanInto(id, dataUrl)
+    return scanInto(id, dataUrl)
   }
 
   async function handleFiles(fileList) {
+    if (importingRef.current || busy) return
     const files = Array.from(fileList || [])
-    for (const f of files) {
-      // eslint-disable-next-line no-await-in-loop
-      addCapture(await compressImage(f))
+    importingRef.current = true
+    setImporting('Opening files…')
+    try {
+      for (const f of files) {
+        try {
+          setImporting(`Reading ${f.name}…`)
+          if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) {
+            const { scanPdfPages } = await import('../ticketPdf.js')
+            await scanPdfPages(f, addCapture, (page, total) =>
+              setImporting(`${f.name} · Reading page ${page} of ${total}…`))
+          } else {
+            await addCapture(await compressImage(f), f.name)
+          }
+        } catch (error) {
+          showToast(`${f.name}: ${error.message || 'Could not read file'}`, 'error')
+        }
+      }
+    } finally {
+      importingRef.current = false
+      setImporting('')
     }
   }
 
@@ -567,14 +589,14 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   const readyTickets = tickets.filter(t => !t.scanning && !dups[t.id] && ticketRowsValid(t.rows, layout))
   const dupCount = Object.keys(dups).length
   const invalidCount = tickets.filter(t => !t.scanning && !dups[t.id] && !ticketRowsValid(t.rows, layout)).length
-  // Count whole tickets by printed lines (Lotto Max = 3 lines/ticket), not photos.
+  // Count whole tickets by printed lines using the shared game layout, not photos.
   const readyRows = readyTickets.reduce((a, t) => a + (t.rows?.length || 0), 0)
   const totalAfterSave = countTickets(savedRows + readyRows, round?.lottery_type)
   const mismatchDates = [...new Set(tickets.map(t => t.drawDate).filter(Boolean))]
     .filter(d => round?.draw_date && d !== round.draw_date)
 
   async function saveAll() {
-    if (busy || !readyTickets.length) return
+    if (busy || importingRef.current || anyScanning || !readyTickets.length) return
     setBusy(true)
     try {
       let idx = alreadySaved
@@ -619,13 +641,17 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
             {rpt > 1 && ` · each ${layout.repeatRow ? 'ticket' : 'play'} = ${rpt} lines — a photo can hold several tickets`}
           </div>
 
-          <input ref={galleryRef} type="file" accept="image/*" multiple
+          <input ref={galleryRef} type="file" accept="image/*,application/pdf,.pdf" multiple disabled={!!importing || busy}
             style={{ display: 'none' }}
             onChange={e => { handleFiles(e.target.files); e.target.value = '' }} />
           <input ref={cameraFileRef} type="file" accept="image/*" capture="environment"
             style={{ display: 'none' }}
             onChange={e => { handleFiles(e.target.files); e.target.value = '' }} />
 
+          <p style={{ fontSize: 12, color: 'var(--tx-2)' }}>
+            Upload images or PDFs (up to 25 MB and 50 pages). Each PDF page is scanned; review the extracted numbers before saving.
+          </p>
+          {importing && <p role="status" style={{ fontSize: 13, color: 'var(--tg)' }}>{importing}</p>}
           {cameraOpen && (
             <CameraCapture
               series
@@ -694,6 +720,8 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                           <img src={t.image} alt="" style={{ width: 44, height: 44, borderRadius: 8, objectFit: 'cover' }} />
                           <div className="col">
                             <span style={{ fontSize: 14, fontWeight: 700 }}>Ticket {i + 1}</span>
+                            {t.source && <span style={{ fontSize: 12, color: 'var(--tx-3)', overflowWrap: 'anywhere' }}>{t.source}</span>}
+                            {t.error && <span role="alert" style={{ fontSize: 12, color: 'var(--danger)' }}>{t.error}</span>}
                             <span style={{ fontSize: 12,
                               color: dup ? 'var(--warn)' : t.scanning ? 'var(--tx-3)' : valid ? 'var(--money)' : 'var(--danger)' }}>
                               {t.scanning ? 'Reading…' : dup ? (dup === 'saved' ? 'Already saved' : 'Duplicate') : valid ? 'Ready' : 'Check numbers'}
@@ -764,8 +792,12 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
                 <CameraIcon width={16} height={16} /> Scan more
               </button>
 
+              <button type="button" className="btn btn-secondary btn-block" style={{ marginBottom: 10 }}
+                disabled={busy || !!importing} onClick={() => galleryRef.current?.click()}>
+                <UploadIcon width={16} height={16} /> Upload more images or PDFs
+              </button>
               <button className="btn btn-primary btn-block"
-                disabled={busy || anyScanning || !readyTickets.length}
+                disabled={busy || !!importing || anyScanning || !readyTickets.length}
                 onClick={saveAll}>
                 <UploadIcon width={16} height={16} />
                 {busy ? 'Saving…'
@@ -900,13 +932,18 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
     (hasTickets || cashPrize > 0 || freeTicketCount > 0)
 
   async function submit() {
+    const accepted = window.confirm(
+      'Have you checked the winning numbers and every ticket result?\n\n' +
+      'Accepting will make these results final, distribute prizes, and notify all participants.'
+    )
+    if (!accepted) return
     setBusy(true)
     try {
       const opts = hasTickets
         ? { tickets: perTicket.map(t => ({ prize: ticketCash(t), free: ticketFree(t) })) }
         : { total_prize: cashPrize, free_tickets: freeTicketCount }
       await api.admin.results(round.id, winningNumbers, Number(bonus), opts)
-      showToast('Results entered — prizes distributed!', 'success')
+      showToast('Results finalized — participants notified!', 'success')
       onResults()
       onClose()
     } catch (err) { showToast(err.message, 'error') }
@@ -1138,7 +1175,7 @@ function ResultsSheet({ round, onClose, onResults, showToast }) {
 
           <button className="btn btn-primary btn-block" disabled={!valid || busy} onClick={submit}>
             <TrophyIcon width={16} height={16} />
-            {busy ? 'Processing…' : 'Stage results & distribute'}
+            {busy ? 'Finalizing…' : 'Accept as correct & notify participants'}
           </button>
         </div>
       </div>
