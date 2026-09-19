@@ -2,16 +2,25 @@ import { createWorker } from 'tesseract.js'
 import { ticketLayout, isVariableRowLayout } from './lottery.js'
 
 let workerPromise = null
+let progressCallback = null
 
 async function getWorker() {
   if (!workerPromise) {
     workerPromise = (async () => {
-      const worker = await createWorker('eng')
+      const worker = await createWorker('eng', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text') progressCallback?.(Math.round((m.progress || 0) * 100))
+        },
+      })
       await worker.setParameters({
-        tessedit_char_whitelist: '0123456789 \n/-.',
+        tessedit_pageseg_mode: '11',
+        preserve_interword_spaces: '1',
       })
       return worker
-    })()
+    })().catch(error => {
+      workerPromise = null
+      throw error
+    })
   }
   return workerPromise
 }
@@ -86,12 +95,11 @@ export function parseOcrText(text, lotteryType) {
 
 export async function scanTicketImage(dataUrl, lotteryType, onProgress) {
   const worker = await getWorker()
-  const { data: { text } } = await worker.recognize(dataUrl, {
-    logger: m => {
-      if (m.status === 'recognizing text' && onProgress) {
-        onProgress(Math.round((m.progress || 0) * 100))
-      }
-    },
-  })
-  return parseOcrText(text, lotteryType)
+  progressCallback = onProgress
+  try {
+    const { data: { text } } = await worker.recognize(dataUrl)
+    return parseOcrText(text, lotteryType)
+  } finally {
+    progressCallback = null
+  }
 }

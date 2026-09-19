@@ -471,6 +471,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
   // Each collected ticket: { id, image, rows, drawDate, scanning, error }
   const [tickets, setTickets] = useState([])
   const [importing, setImporting] = useState('')
+  const [importErrors, setImportErrors] = useState([])
   const importingRef = useRef(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -503,6 +504,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
       } catch {
         scanned = await scanTicketImage(dataUrl, round.lottery_type, () => {})
       }
+      if (!scanned.length) throw new Error('No ticket numbers found. Check the page image and enter numbers manually or upload a clearer scan.')
       const merged = scanned.length ? mergeScannedRows(scanned, layout) : emptyTicketRows(layout)
       let isDup = false
       setTickets(ts => {
@@ -537,6 +539,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
     if (importingRef.current || busy) return
     const files = Array.from(fileList || [])
     importingRef.current = true
+    setImportErrors([])
     setImporting('Opening files…')
     try {
       for (const f of files) {
@@ -550,7 +553,9 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
             await addCapture(await compressImage(f), f.name)
           }
         } catch (error) {
-          showToast(`${f.name}: ${error.message || 'Could not read file'}`, 'error')
+          const message = `${f.name}: ${error.message || 'Could not read file'}`
+          setImportErrors(errors => [...errors, message])
+          showToast(message, 'error')
         }
       }
     } finally {
@@ -652,6 +657,7 @@ function UploadTicketSheet({ round, onClose, onUploaded, showToast }) {
             Upload images or PDFs (up to 25 MB and 50 pages). Each PDF page is scanned; review the extracted numbers before saving.
           </p>
           {importing && <p role="status" style={{ fontSize: 13, color: 'var(--tg)' }}>{importing}</p>}
+          {importErrors.map((message, i) => <p key={i} role="alert" style={{ fontSize: 13, color: 'var(--danger)', overflowWrap: 'anywhere' }}>{message}</p>)}
           {cameraOpen && (
             <CameraCapture
               series

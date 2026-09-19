@@ -191,7 +191,7 @@ export const api = {
     scanTicket:   (round_id, image_b64, opts = {}) => req('POST', '/api/admin/round/scan-ticket', {
       round_id, image_b64, ticket_index: opts.ticket_index, rows: opts.rows,
       draw_date: opts.draw_date, preview: opts.preview,
-    }),
+    }, 120000),
     saveTicket:   (round_id, ticket_index, rows, image_b64, draw_date) =>
       req('POST', '/api/admin/round/ticket', { round_id, ticket_index, rows, image_b64, draw_date }),
     uploadTicket: (round_id, numbers) => req('POST', '/api/admin/round/upload-ticket',
